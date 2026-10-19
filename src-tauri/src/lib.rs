@@ -10,11 +10,14 @@
 //! (FASE 3), plugin runtime (FASE 5) and the React shell (FASE 4) plug into the
 //! modules declared here.
 
+pub mod artwork;
 pub mod audio;
 pub mod commands;
 pub mod db;
+pub mod discord;
 pub mod error;
 pub mod logging;
+pub mod metadata;
 pub mod state;
 
 use tauri::Manager;
@@ -90,6 +93,41 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             );
             app.manage(state);
 
+            // --- Rich presence bridge -----------------------------------------
+            // Presence follows the engine, not the React tree: minimising to
+            // the tray keeps Discord accurate.
+            if let Some(state) = app.try_state::<AppState>() {
+                let mut events = state.engine().subscribe();
+                let engine = std::sync::Arc::clone(state.engine());
+                let discord = std::sync::Arc::clone(state.discord());
+                tauri::async_runtime::spawn(async move {
+                    let mut last: Option<(String, bool)> = None;
+                    loop {
+                        match events.recv().await {
+                            Ok(audio::engine::EngineEvent::TrackChanged { .. })
+                            | Ok(audio::engine::EngineEvent::StateChanged { .. }) => {
+                                let status = engine.status();
+                                let fingerprint = status.track.as_ref().map(|track| {
+                                    (
+                                        track.track_id.clone(),
+                                        status.state == audio::engine::PlaybackState::Playing,
+                                    )
+                                });
+                                if fingerprint != last {
+                                    last = fingerprint;
+                                    discord.sync(&status).await;
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!(skipped, "presence subscriber lagged");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+            }
+
             // --- Audio engine event bridge ------------------------------------
             // The supervisor pushes transport events through a tokio
             // broadcast channel; this task forwards them to the webview as
@@ -128,6 +166,25 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
         })
         .invoke_handler(tauri::generate_handler![
             commands::library::get_library_stats,
+            commands::library::library_scan_start,
+            commands::library::library_scan_cancel,
+            commands::library::library_scan_status,
+            commands::library::library_scan_runs,
+            commands::library::library_scan_errors,
+            commands::library::library_roots,
+            commands::library::library_add_root,
+            commands::library::library_remove_root,
+            commands::library::library_set_root_enabled,
+            commands::library::library_search,
+            commands::library::library_albums,
+            commands::library::library_artists,
+            commands::library::library_facets,
+            commands::library::library_global_search,
+            commands::library::library_album_cover,
+            commands::library::library_track_cover,
+            commands::discord::discord_status,
+            commands::discord::discord_configure,
+            commands::discord::discord_clear,
             commands::system::get_app_info,
             commands::system::get_runtime_health,
             commands::system::open_log_folder,

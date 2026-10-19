@@ -7,9 +7,12 @@ use sqlx::SqlitePool;
 use tauri::Manager;
 use tauri::path::PathResolver;
 
+use crate::artwork::ArtworkService;
 use crate::audio::engine::{Engine, EngineConfig};
 use crate::db::{self, DATABASE_FILENAME};
+use crate::discord::{DiscordConfig, DiscordService};
 use crate::error::PrismError;
+use crate::metadata::Scanner;
 
 /// Canonical filesystem locations used by Prism.
 ///
@@ -68,6 +71,9 @@ pub struct AppState {
     paths: AppPaths,
     started_at: Instant,
     engine: std::sync::Arc<Engine>,
+    scanner: Scanner,
+    artwork: std::sync::Arc<ArtworkService>,
+    discord: std::sync::Arc<DiscordService>,
 }
 
 impl AppState {
@@ -86,11 +92,40 @@ impl AppState {
         let engine = Engine::new(EngineConfig::default())?;
         tracing::debug!("audio engine supervisor started");
 
+        // --- Library services --------------------------------------------
+        let scanner = Scanner::new(pool.clone());
+        let artwork = std::sync::Arc::new(ArtworkService::new(pool.clone(), paths.artwork_dir())?);
+        let discord = std::sync::Arc::new(DiscordService::new(std::sync::Arc::clone(&artwork)));
+
+        // Rich presence is opt-in; a stored configuration is applied only when
+        // it validates, so a broken client id cannot block startup.
+        let discord_config = DiscordConfig::load(&pool).await;
+        if discord_config.enabled {
+            match discord.configure(discord_config) {
+                Ok(status) => tracing::debug!(?status.state, "rich presence restored"),
+                Err(error) => tracing::warn!(%error, "stored rich presence configuration rejected"),
+            }
+        }
+
+        // Expired cover rows are swept in the background: a cache that is never
+        // pruned grows without bound on a large library.
+        let sweeper = std::sync::Arc::clone(&artwork);
+        tokio::spawn(async move {
+            match sweeper.sweep().await {
+                Ok(0) => {}
+                Ok(removed) => tracing::debug!(removed, "pruned expired cover cache rows"),
+                Err(error) => tracing::warn!(%error, "cover cache sweep failed"),
+            }
+        });
+
         Ok(Self {
             pool,
             paths,
             started_at: Instant::now(),
             engine,
+            scanner,
+            artwork,
+            discord,
         })
     }
 
@@ -102,6 +137,21 @@ impl AppState {
     #[must_use]
     pub fn engine(&self) -> &std::sync::Arc<Engine> {
         &self.engine
+    }
+
+    #[must_use]
+    pub const fn scanner(&self) -> &Scanner {
+        &self.scanner
+    }
+
+    #[must_use]
+    pub fn artwork(&self) -> &std::sync::Arc<ArtworkService> {
+        &self.artwork
+    }
+
+    #[must_use]
+    pub fn discord(&self) -> &std::sync::Arc<DiscordService> {
+        &self.discord
     }
 
     #[must_use]

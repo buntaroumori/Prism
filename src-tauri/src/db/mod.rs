@@ -25,6 +25,9 @@ use sqlx::{ConnectOptions, SqlitePool};
 
 use crate::error::PrismError;
 
+pub mod catalog;
+pub mod search;
+
 /// File name of the library database inside the application data directory.
 pub const DATABASE_FILENAME: &str = "prism.db";
 

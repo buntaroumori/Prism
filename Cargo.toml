@@ -38,7 +38,7 @@ thiserror = "2"
 anyhow = "1"
 
 # --- Async runtime & telemetry ----------------------------------------------
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "sync", "time", "io-util", "process"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "sync", "time", "io-util", "process", "net"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 tracing-appender = "0.2"

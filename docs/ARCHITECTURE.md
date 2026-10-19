@@ -9,16 +9,16 @@
 
 A single native process hosts everything; there is no sidecar binary to keep alive or supervise.
 
-| Thread              | Ownership                                              | Rules                                                                                     |
-| :------------------ | :----------------------------------------------------- | :---------------------------------------------------------------------------------------- |
-| **UI / event loop** | Tauri, WebView, window management                      | Never touches audio buffers; commands are `async` and return quickly                      |
-| **Command workers** | tokio multi-thread runtime                             | All SQL, filesystem and HTTP work; bounded by the pool                                    |
-| **Scanner**         | dedicated rayon pool                                   | `walkdir` producer → parallel metadata readers → single SQL writer                        |
-| **Supervisor**      | one thread, `prism` names it                           | Owns the decoder, the DSP chain, the playhead and the device handle; the only writer of the ring |
-| **Prefetch worker** | one thread (`prism-prefetch`)                          | Prepares track _N+1_ while track _N_ plays (gapless)                                      |
+| Thread              | Ownership                                              | Rules                                                                                              |
+| :------------------ | :----------------------------------------------------- | :------------------------------------------------------------------------------------------------- |
+| **UI / event loop** | Tauri, WebView, window management                      | Never touches audio buffers; commands are `async` and return quickly                               |
+| **Command workers** | tokio multi-thread runtime                             | All SQL, filesystem and HTTP work; bounded by the pool                                             |
+| **Scanner**         | dedicated rayon pool                                   | `walkdir` producer → parallel metadata readers → single SQL writer                                 |
+| **Supervisor**      | one thread, `prism` names it                           | Owns the decoder, the DSP chain, the playhead and the device handle; the only writer of the ring   |
+| **Prefetch worker** | one thread (`prism-prefetch`)                          | Prepares track _N+1_ while track _N_ plays (gapless)                                               |
 | **Audio callback**  | OS real-time thread owned by cpal/WASAPI/ASIO/PipeWire | **No allocation, no locks, no syscalls, no logging.** Only ring-buffer reads and format conversion |
-| **Discord RPC**     | tokio task                                             | Never blocks playback; failures are retried with exponential backoff                      |
-| **Plugin host**     | sandboxed Lua / wasmtime instance                      | Event-driven, CPU- and memory-budgeted, cannot touch the filesystem directly              |
+| **Discord RPC**     | tokio task                                             | Never blocks playback; failures are retried with exponential backoff                               |
+| **Plugin host**     | sandboxed Lua / wasmtime instance                      | Event-driven, CPU- and memory-budgeted, cannot touch the filesystem directly                       |
 
 The audio callback communicates with the rest of the system exclusively through a pre-allocated
 `ringbuf` (power-of-two, lock-free SPSC) and atomics. Any error inside the callback sets a flag and
@@ -29,17 +29,17 @@ a DAC disappeared.
 
 ### Backends
 
-| Platform | Backend | Mode | Implementation | Exclusive |
-| :------- | :------ | :--- | :------------- | :-------- |
-| Windows | `WasapiExclusive` | Exclusive | `windows` 0.58 COM: `IMMDeviceEnumerator` → `IAudioClient::Initialize` with `AUDCLNT_SHAREMODE_EXCLUSIVE`, event-driven (`hnsPeriodicity = 0`) | yes |
-| Windows | `WasapiShared` | Shared | cpal WASAPI host; the graph format is the device format | no |
-| Windows | `Asio` | Native | cpal ASIO host behind the opt-in `asio` feature (needs the Steinberg SDK) | yes |
-| Windows | `CpalShared` | Shared | System default host, last-resort fallback | no |
-| Linux | `AlsaHw` | Raw `hw:` | `alsa` 0.9 `snd_pcm_writei` loop on a dedicated thread; dmix and PulseAudio are bypassed | yes |
-| Linux | `PipeWire` | Native graph node | `pw_stream` with `RT_PROCESS`, format negotiation through the SPA pod | no |
-| Linux | `CpalShared` | Shared | cpal ALSA host on `default` | no |
+| Platform | Backend           | Mode              | Implementation                                                                                                                                 | Exclusive |
+| :------- | :---------------- | :---------------- | :--------------------------------------------------------------------------------------------------------------------------------------------- | :-------- |
+| Windows  | `WasapiExclusive` | Exclusive         | `windows` 0.58 COM: `IMMDeviceEnumerator` → `IAudioClient::Initialize` with `AUDCLNT_SHAREMODE_EXCLUSIVE`, event-driven (`hnsPeriodicity = 0`) | yes       |
+| Windows  | `WasapiShared`    | Shared            | cpal WASAPI host; the graph format is the device format                                                                                        | no        |
+| Windows  | `Asio`            | Native            | cpal ASIO host behind the opt-in `asio` feature (needs the Steinberg SDK)                                                                      | yes       |
+| Windows  | `CpalShared`      | Shared            | System default host, last-resort fallback                                                                                                      | no        |
+| Linux    | `AlsaHw`          | Raw `hw:`         | `alsa` 0.9 `snd_pcm_writei` loop on a dedicated thread; dmix and PulseAudio are bypassed                                                       | yes       |
+| Linux    | `PipeWire`        | Native graph node | `pw_stream` with `RT_PROCESS`, format negotiation through the SPA pod                                                                          | no        |
+| Linux    | `CpalShared`      | Shared            | cpal ALSA host on `default`                                                                                                                    | no        |
 
-`OutputMode` (`Auto`, `Exclusive`, `Shared`, `Asio`) is a *preference*, not a promise. `open_sink`
+`OutputMode` (`Auto`, `Exclusive`, `Shared`, `Asio`) is a _preference_, not a promise. `open_sink`
 walks the candidate backends in order and returns the first one that negotiates; `Auto` therefore
 degrades from exclusive to mixed output on its own, and a configuration error never leaves the user
 without sound. Selecting an endpoint pins its driver stack: an `alsa-hw:` id never silently opens
@@ -128,7 +128,7 @@ degrading the gapless guarantee.
 
 - **Chain compilation**: `DspChain::build` is called once per (settings, source, output) triple and
   compiles out inactive stages entirely — a bypassed chain returns the input buffer unchanged.
-- **Volume** is *not* part of the chain: the pump applies a per-block linear ramp so a slider drag
+- **Volume** is _not_ part of the chain: the pump applies a per-block linear ramp so a slider drag
   never rebuilds a filter graph and never clicks. `DspSettings::volume_db` therefore stays at 0 dB
   for chain consumers, and the engine owns the value.
 - **ReplayGain 2 / EBU R128**: track or album gain with a peak-aware guard; measured by
@@ -147,57 +147,111 @@ degrading the gapless guarantee.
 
 ```text
 library_roots
-   │ walkdir (streaming)
+   │ walkdir (single-threaded, filter_entry prunes VCS/cache dirs)
    ▼
-path filter (extensions, .cue detection, symlink policy)
-   │ rayon: parse tags + technical properties (lofty + symphonia probe)
-   ▼
-identity resolution (normalise path, SHA-free)
-   │ batch of N=512 rows
-   ▼
-single writer transaction: upsert artists → albums → tracks (+FTS triggers)
-   │
-   ▼
-scan_runs / scan_errors ledger, integrity flags, missing-file sweep
+extension filter ─┬─ *.cue ──▶ CueSheet::parse ──▶ virtual tracks + sheet row
+                  └─ audio  ──▶ fingerprint check (mtime+size) ──▶ skip
+                                     │ miss
+                                     ▼
+                     rayon chunk (512 files): lofty read → TrackTags → TrackRecord
+                                     │
+                                     ▼
+                     batch of 256 rows, one transaction:
+                     INSERT OR IGNORE artists → albums → tracks upsert (+FTS triggers)
+                                     │
+                                     ▼
+                     album counters refreshed → missing sweep → CUE↔album link
+                                     │
+                                     ▼
+                     scan_runs ledger, scan_errors rows, progress events (≤ 5 Hz)
 ```
 
-- **Resumability**: every scan is a `scan_runs` row with counters; a crash leaves a `running` row
-  that the next boot marks `failed` and resumes from dirty roots.
-- **Error isolation**: a corrupt FLAC header produces a `scan_errors` row and is skipped; the queue
-  and the rest of the scan proceed. Files are never deleted from the catalogue by a failed read —
-  only a successful enumeration marks `missing=0`.
-- **Identity**: the unique expression index folds both path separators and case. The scanner still
-  normalises before insert so that the same file cannot appear twice through differently-cased roots.
-- **CUE**: `.cue` files are parsed first; the referenced image is inserted once per physical file and
-  once per virtual track (with `source='cue'`, offsets, and the shared image path), all linked by
-  `cue_sheet_id`. Re-scanning a sheet replaces its virtual tracks transactionally.
-- **Targets**: 100k FLAC metadata reads in < 10 s on warm NVMe; SQLite writes are batched to keep the
-  WAL under its 64 MiB size limit.
+- **Deterministic ids.** Every row id is `prefix + 96 bits of SHA-256` over a canonical identity:
+  `ar:lower(name)`, `al:lower(title)|lower(album_artist)`,
+  `tr:lower(normalised_path)|source|cue_start_ms`, `cs:lower(sheet_path)`. Re-scanning, renaming a
+  library root or importing a friend's catalogue converges on the same rows, so playlists, ratings
+  and play history survive. The birthday bound at 500k tracks is below 1e-17.
+- **Incremental by default.** A scan reads `(path, mtime, size)` for every indexed file under the
+  roots and parses only what changed. `.cue` sheets are compared by SHA-256 of their bytes. A second
+  scan of an unchanged 100k library performs no tag reads and no track writes.
+- **Parallel parse, serial write.** `lofty` decoding is CPU-bound and runs on the rayon pool in
+  fixed-size chunks (bounded memory, natural progress ticks). `SQLite` serialises writers, so the
+  database side stays on the async thread with one transaction per 256 rows.
+- **Album aggregation** is recomputed for touched albums after every batch (`COUNT`, `SUM`,
+  `MAX(disc_no)` over the album index), and globally at the end of a full scan. The missing sweep
+  re-runs the recomputation for albums that lost a track, so the grid never advertises a track that
+  is no longer on disk.
+- **Missing ≠ deleted.** A file that disappears is flagged `missing=1`; the row, its rating and its
+  play history remain. An unreachable root (unplugged drive, unmounted share) is reported as
+  `root_offline` and marks _nothing_ missing. Pruning albums/artists without tracks is an explicit
+  opt-in on a full scan.
+- **CUE.** Sheets are expanded before audio files so every virtual track's `cue_sheet_id` foreign key
+  is satisfiable inside the same batch. The referenced image is indexed once as a sheet and N times
+  as virtual tracks (`source='cue'`, `cue_start_ms`/`cue_end_ms`, sample-accurate offsets) and is
+  excluded from the standalone-file index. Technical properties (rate, depth, DSD family) are read
+  from the image; per-track ReplayGain is deliberately left null because an album-wide gain does not
+  apply to a single movement.
+- **Error isolation.** A corrupt file produces one `scan_errors` row with a stable code (`io`,
+  `unsupported`, `malformed`, `cue`, `root_offline`) and the walk continues. The ledger is capped at
+  200 stored errors per run while the counter keeps counting.
+- **Cancellation** is cooperative: the flag is checked at every walk entry and every parse chunk.
+  Committed batches stay committed; the run is recorded as `cancelled`.
+- **Targets**: 100k FLAC metadata reads in < 10 s on warm NVMe. Parsing is I/O + CPU bound; the write
+  side is ~1.5k rows/s per commit on the reference laptop.
 
-## 7. Persistence
+## 7. Persistence and query surface
 
 - WAL, `synchronous=NORMAL`, `mmap_size=256 MiB`, 32 MiB page cache, 5 s busy timeout, 6 connections.
 - Migrations are embedded (`sqlx::migrate!`), applied at boot inside a transaction; the schema version
   is part of the health payload.
 - `tracks` is deliberately wide and denormalised: the library grid renders artist/album/quality
   directly, and triggers keep the copies coherent when an artist or album is renamed.
-- FTS5 uses external content (`content='tracks'`) with triggers; `integrity-check` runs in tests and
-  on demand in diagnostics.
+- **FTS5** is external content (`content='tracks'`) with insert/delete/update triggers, tokenised by
+  `unicode61 remove_diacritics 2` so "Beyonce" finds "Beyoncé".
+- **Query building.** User text is tokenised to runs of alphanumerics, each quoted as a phrase, with a
+  prefix operator on the final token (`beeth` → `"beeth"*`). FTS5 operators (`-`, `:`, `*`, `^`,
+  `NEAR`, `AND`/`OR`/`NOT`) can therefore never reach the grammar — `C++` is a search, not a syntax
+  error. Ranking is `bm25` with weights 10/6/4/3/2/1/1 over title, artist, album, album artist,
+  genre, comment, composer. Snippets use `U+0001`/`U+0002` as highlight markers so React can render
+  them through JSX without `dangerouslySetInnerHTML`.
+- **Browse** never touches the FTS index: it walks the covering indexes (`ix_tracks_title_sort`,
+  `ix_tracks_album`, …), and every `ORDER BY` comes from a closed enum with a primary-key tie-breaker
+  for stable offset pagination.
+- **Read models**: `library_search` (filters + sort + paging), `library_albums`, `library_artists`,
+  `library_facets` (genres/formats/decades) and `library_global_search` (tracks + albums + artists in
+  one round trip for the ⌘K overlay).
 - VectorClock-style conflict resolution is unnecessary (single user, single process); concurrent
   edits are serialised by SQLite.
 - Backup/export: a consistent copy is produced with `VACUUM INTO` under a read transaction; the same
   file format is the import format.
 
-## 8. Discord Rich Presence
+## 8. Cover art and Discord Rich Presence
 
-1. `SHA-256(trim(lower(artist)) + '\n' + trim(lower(album)))` is the cache key.
-2. `cover_cache` is consulted; hits carry the remote 512/1000 px URL used by Discord.
-3. On a miss, a worker queries iTunes Search API, then MusicBrainz + Cover Art Archive; results are
-   persisted with TTL and attempt counters.
-4. The RPC payload contains title, artist, album, elapsed/remaining timestamps, a Hi-Res badge and
-   `large_image` = cached URL.
-5. Offline or unmatched → the Developer Portal asset key is used; retries use 2ⁿ backoff capped at
-   five minutes and never run on the playback thread.
+**Cover cache.** The key is `SHA-256(lower(artist) + U+001F + lower(album))`, which is exactly the
+`cover_cache` primary key. The separator prevents `("AB","C")` and `("A","BC")` from colliding.
+
+1. Cache hit with a live TTL and an existing file → returned without touching a provider.
+2. Miss → provider chain: embedded picture of the first track (front cover preferred, largest by byte
+   size) → `cover.jpg`/`folder.png`/`front.*` in the album folder → iTunes Search API (fuzzy title and
+   artist match, 100 px URL upscaled to 600) → MusicBrainz release search (score ≥ 70, title match)
+   plus Cover Art Archive `front-500`.
+3. Every image is decoded, bounded to 1000 px on the longest edge and re-encoded as JPEG q88 before it
+   is written to `<cache>/artwork/<key>.jpg`. A 12 MP gatefold scan becomes a ~90 KB tile.
+4. Results live for 90 days; failures are cached as `provider='unknown'` for 24 h so a library of
+   bootlegs does not hammer iTunes on every scroll. Concurrent lookups for the same album are
+   collapsed by a per-key async mutex.
+5. MusicBrainz is rate-limited to one request per second with a descriptive `User-Agent`, as its terms
+   require. Offline mode skips network providers entirely.
+
+**Rich presence.** `DiscordService` subscribes to the engine broadcast channel (not to React), so
+minimising to the tray keeps Discord accurate. It publishes the textual activity immediately and the
+artwork as a second update once the cache answers, because Discord only accepts HTTPS URLs for
+external assets — a locally extracted cover therefore still leaves `large_image` on the bundled
+`prism` asset. The RPC client speaks the real IPC framing (`op:u32 LE, len:u32 LE, JSON`), probes
+`discord-ipc-0…9` across native, Flatpak and Snap runtime directories (named pipes on Windows),
+answers pings, and reconnects with 1.5× exponential backoff capped at 60 s plus jitter. Updates are
+coalesced to at most one every 2.5 s. The application id comes from `PRISM_DISCORD_CLIENT_ID` or from
+Settings; with no id the feature stays off rather than pretending to work.
 
 ## 9. Plugin runtime
 

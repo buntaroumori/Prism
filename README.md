@@ -36,8 +36,8 @@ implementation, not the ambition.
 | :---- | :---------------------------------------------------------------------------------------------- | :-------------- |
 | **1** | Repository, toolchain, SQLite schema + FTS5, Tauri shell, IPC contract, CI/CD, release pipeline | ✅ **Complete** |
 | **2** | Audio engine, device backends (WASAPI/ASIO/PipeWire/ALSA), gapless + RAM Play, DSP graph        | ✅ **Complete** |
-| **3** | Metadata scanner, tag editor, file organiser, SQLite domain layer, Discord Rich Presence        | 🟡 Next         |
-| **4** | React shell, virtualised library, PlayerBar, ambient canvas, modular layout system, lyrics      | ⬜ Planned      |
+| **3** | Metadata scanner + incremental indexing, FTS5 search & read models, cover art, Discord RPC      | ✅ **Complete** |
+| **4** | React shell, virtualised library, PlayerBar, ambient canvas, modular layout system, lyrics      | 🟡 Next         |
 | **5** | Plugin runtime (Lua 5.4 / WebAssembly), scrobbling, lyrics fetchers                             | ⬜ Planned      |
 | **6** | Stress, fuzzing, memory and latency audits, 120 FPS profiling                                   | ⬜ Planned      |
 | **7** | Repository hardening, documentation, signed public release                                      | ⬜ Planned      |
@@ -86,14 +86,18 @@ synthetic or mocked screenshot is shipped.
 
 ### Catalogue (FASE 3)
 
-- **Mass indexing** — `walkdir` + `rayon`, batched transactions, 100 000 FLAC files in under ten
-  seconds on NVMe, with a resumable scan ledger and per-file error isolation.
-- **Editable tags** — `lofty` across ID3v2.4, Vorbis Comments, APEv2 and MP4 atoms, including batch
-  edits and an `%albumartist%/[%year%] %album%/$num(%track%,2) - %title%` organiser.
-- **Instant search** — FTS5 with diacritic folding, prefix/boolean queries and quality filters
-  (bit depth, sample rate, format, year, genre).
-- **Discord Rich Presence** — SHA-256(artist+album) cache key, asynchronous artwork resolution via
-  iTunes / MusicBrainz / Cover Art Archive, exponential backoff and offline fallback.
+- **Mass indexing** — streaming `walkdir` + `rayon` parsing in 512-file chunks, 256-row transactions,
+  deterministic SHA-256 row identities, incremental `(mtime, size)` fingerprinting, CUE expansion into
+  sample-accurate virtual tracks, a resumable scan ledger and per-file error isolation that never
+  aborts a 100 000-file scan.
+- **Instant search** — FTS5 with diacritic folding, operator-safe query construction, `bm25` ranking
+  with per-column weights, highlight snippets, and quality filters (bit depth, sample rate, format,
+  year, genre, lossless-only).
+- **Cover art** — SHA-256(artist ⋈ album) cache key, provider chain embedded → folder → iTunes →
+  MusicBrainz + Cover Art Archive, 1000 px JPEG normalisation, 90-day success TTL, 24-hour negative
+  caching, per-key in-flight collapsing and offline mode.
+- **Discord Rich Presence** — full IPC transport over UNIX sockets / named pipes, engine-driven
+  presence, asynchronous artwork, 1.5× exponential backoff with jitter and offline fallback.
 
 ### Interface (FASE 4)
 
@@ -165,6 +169,9 @@ These are the acceptance gates for FASE 6, measured on the reference machine des
 | Library scroll            | **120 FPS sustained** | Chrome DevTools performance trace, 500k rows       |
 | Indexing 100k FLAC        | **< 10 s**            | Warm NVMe, metadata only, batched commits          |
 | Interaction latency       | **< 16 ms**           | React Profiler + Event Timing API                  |
+
+Measured in FASE 3, on the 2-vCPU benchmark container: 100 000 files indexed cold in **7.3 s** and
+rescanned incrementally in **1.6 s** (`cargo test --release --test scanner_bench -- --ignored`).
 
 ---
 

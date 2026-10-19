@@ -4,6 +4,7 @@
 //! `Result<T, PrismError>` so the frontend receives a typed `{ code, message }`
 //! failure instead of an opaque string.
 
+pub mod discord;
 pub mod library;
 pub mod player;
 pub mod system;

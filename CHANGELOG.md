@@ -59,4 +59,37 @@ All notable changes to Prism are documented here. The format follows
   device enumeration) plus a `player://event` push channel (state, track, position, format, device,
   underrun, error).
 
+### Library, search and rich presence (FASE 3)
+
+- Metadata reader (`metadata/tags.rs`): one normalised `TrackTags` per file across FLAC, Vorbis, Opus,
+  MP3/ID3v2, MP4 ilst, APEv2, RIFF INFO and AIFF, plus the technical properties the UI badges
+  (bit depth, sample rate, channels, DSD family) and ReplayGain 2 tags with unit-aware parsing.
+  Unknown tags are preserved as bounded JSON in `tracks.extra_tags`.
+- Scanner (`metadata/scanner.rs`): streaming walkdir with VCS/cache pruning, rayon parsing in
+  512-file chunks, 256-row transactions with a document-order column whitelist, deterministic
+  SHA-256 identities, incremental `(mtime, size)` fingerprinting, CUE-sheet expansion into virtual
+  tracks, album counter aggregation, missing-file sweep that never deletes rows, offline-root
+  protection, cooperative cancellation and ≤ 5 Hz progress events.
+- Catalogue writer (`db/catalog.rs`): `INSERT … ON CONFLICT(id) DO UPDATE` upserts, artist/album
+  resolution with case-insensitive identity, album metadata merging across discs, temp-table based
+  missing diff, full-scan reconciliation and opt-in orphan pruning.
+- Search and read models (`db/search.rs`): sanitised FTS5 `MATCH` construction (no operator can reach
+  the grammar), `bm25` ranking with per-column weights, control-character highlight markers,
+  whitelisted sort orders, offset pagination with a stable tie-breaker, and album/artist/facet
+  browsers plus a single-round-trip global search.
+- Cover art (`artwork/`): SHA-256(artist ⋈ album) cache key, provider chain embedded → folder →
+  iTunes → MusicBrainz + Cover Art Archive, 1000 px JPEG normalisation, 90-day success TTL, 24-hour
+  negative caching, per-key in-flight collapsing, MusicBrainz rate limiting and an offline mode.
+- Discord Rich Presence (`discord/`): full IPC framing and handshake over UNIX sockets and Windows
+  named pipes, ping/pong, 1.5× exponential backoff with jitter, 2.5 s update coalescing, activity
+  rendering with timestamps and quality badge, and a presence bridge driven by the audio engine
+  rather than the UI.
+- IPC: 17 new commands (`library_scan_*`, `library_roots`, `library_add_root`, `library_search`,
+  `library_albums`, `library_artists`, `library_facets`, `library_global_search`,
+  `library_album_cover`, `library_track_cover`, `discord_*`) plus `library://scan-progress` and
+  `library://scan-complete` events, mirrored by zod schemas and typed wrappers.
+- Tests: 150 unit tests and 14 new integration tests covering scanner idempotency, CUE offsets,
+  missing sweeps, FTS ranking, diacritic folding, hostile query input, artwork normalisation,
+  embedded-art precedence, negative caching and a real Discord IPC round trip.
+
 [0.1.0]: https://github.com/prism-audio/prism/releases/tag/v0.1.0

@@ -72,3 +72,285 @@ export interface SystemSnapshot {
   library: LibraryStats;
   capturedAt: Date;
 }
+
+/* ------------------------------------------------------------------------- */
+/* FASE 3 — library, search, scanning, artwork, rich presence                */
+/* ------------------------------------------------------------------------- */
+
+/** Sort orders accepted by `library_search` / `library_albums`. */
+export const TrackSortSchema = z.enum([
+  "relevance",
+  "title",
+  "artist",
+  "album",
+  "year",
+  "added",
+  "duration",
+  "bitrate",
+]);
+export type TrackSort = z.infer<typeof TrackSortSchema>;
+
+/** One row of the virtualized track list. */
+export const TrackRowSchema = z.object({
+  id: z.string().min(1),
+  path: z.string().min(1),
+  folder: z.string(),
+  filename: z.string(),
+  source: z.enum(["file", "cue"]),
+  title: z.string().min(1),
+  artistId: z.string().nullable(),
+  artist: z.string(),
+  albumId: z.string().nullable(),
+  album: z.string(),
+  albumArtist: z.string(),
+  composer: z.string(),
+  genre: z.string(),
+  year: z.number().int().nullable(),
+  trackNo: z.number().int().nullable(),
+  discNo: z.number().int().nullable(),
+  format: z.string().min(1),
+  codecProfile: z.string().nullable(),
+  bitDepth: z.number().int().nullable(),
+  sampleRate: z.number().int().nullable(),
+  channels: z.number().int().nullable(),
+  bitrateKbps: z.number().int().nullable(),
+  dsdRate: z.number().int().nullable(),
+  durationMs: z.number().int().nonnegative(),
+  quality: z.string().min(1),
+  lossless: z.boolean(),
+  hasEmbeddedArt: z.boolean(),
+  missing: z.boolean(),
+  rating: z.number().int().min(0).max(5),
+  playCount: z.number().int().nonnegative(),
+  addedAt: z.string().min(1),
+  cueStartMs: z.number().int().nullable(),
+  cueEndMs: z.number().int().nullable(),
+  coverId: z.string().nullable(),
+  coverPath: z.string().nullable(),
+  coverUrl: z.string().nullable(),
+  highlight: z.string().nullable(),
+});
+export type TrackRow = z.infer<typeof TrackRowSchema>;
+
+export const AlbumRowSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  sortTitle: z.string(),
+  year: z.number().int().nullable(),
+  albumArtist: z.string(),
+  isCompilation: z.boolean(),
+  discCount: z.number().int().nonnegative(),
+  trackCount: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+  releaseType: z.string().nullable(),
+  coverId: z.string().nullable(),
+  coverPath: z.string().nullable(),
+  coverUrl: z.string().nullable(),
+  availableTracks: z.number().int().nonnegative(),
+  maxSampleRate: z.number().int().nullable(),
+  maxBitDepth: z.number().int().nullable(),
+  format: z.string().nullable(),
+  quality: z.string().min(1),
+});
+export type AlbumRow = z.infer<typeof AlbumRowSchema>;
+
+export const ArtistRowSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  sortName: z.string(),
+  albumCount: z.number().int().nonnegative(),
+  trackCount: z.number().int().nonnegative(),
+  totalDurationMs: z.number().int().nonnegative(),
+  coverId: z.string().nullable(),
+  coverPath: z.string().nullable(),
+});
+export type ArtistRow = z.infer<typeof ArtistRowSchema>;
+
+/** Page envelope shared by every paged read model. */
+export function pageSchema<T extends z.ZodTypeAny>(item: T) {
+  return z.object({
+    items: z.array(item),
+    total: z.number().int().nonnegative(),
+    limit: z.number().int().positive(),
+    offset: z.number().int().nonnegative(),
+  });
+}
+export interface Page<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Input contract for `library_search` (all fields optional). */
+export const TrackQuerySchema = z.object({
+  text: z.string().nullable().optional(),
+  artistId: z.string().nullable().optional(),
+  albumId: z.string().nullable().optional(),
+  genre: z.string().nullable().optional(),
+  format: z.string().nullable().optional(),
+  yearFrom: z.number().int().nullable().optional(),
+  yearTo: z.number().int().nullable().optional(),
+  minSampleRate: z.number().int().nullable().optional(),
+  minBitDepth: z.number().int().nullable().optional(),
+  losslessOnly: z.boolean().optional(),
+  includeMissing: z.boolean().optional(),
+  sort: TrackSortSchema.optional(),
+  limit: z.number().int().positive().max(500).optional(),
+  offset: z.number().int().nonnegative().optional(),
+});
+export type TrackQuery = z.infer<typeof TrackQuerySchema>;
+
+export const FacetSchema = z.object({ value: z.string(), count: z.number().int().nonnegative() });
+export const FacetsSchema = z.object({
+  genres: z.array(FacetSchema),
+  formats: z.array(FacetSchema),
+  decades: z.array(FacetSchema),
+});
+export type Facets = z.infer<typeof FacetsSchema>;
+
+export const GlobalSearchSchema = z.object({
+  query: z.string(),
+  matchExpression: z.string().nullable(),
+  tracks: pageSchema(TrackRowSchema),
+  albums: z.array(AlbumRowSchema),
+  artists: z.array(ArtistRowSchema),
+  tookMs: z.number().int().nonnegative(),
+});
+export type GlobalSearch = z.infer<typeof GlobalSearchSchema>;
+
+export const ScanPhaseSchema = z.enum([
+  "walking",
+  "parsing",
+  "writing",
+  "finalising",
+  "completed",
+  "cancelled",
+  "failed",
+]);
+export const ScanProgressSchema = z.object({
+  runId: z.string().min(1),
+  phase: ScanPhaseSchema,
+  filesSeen: z.number().int().nonnegative(),
+  filesIndexed: z.number().int().nonnegative(),
+  filesSkipped: z.number().int().nonnegative(),
+  filesFailed: z.number().int().nonnegative(),
+  bytesRead: z.number().int().nonnegative(),
+  percent: z.number().min(0).max(1).nullable(),
+  currentPath: z.string().nullable(),
+});
+export type ScanProgress = z.infer<typeof ScanProgressSchema>;
+
+export const ScanOptionsSchema = z.object({
+  roots: z.array(z.string().min(1)).optional(),
+  full: z.boolean().optional(),
+  prune: z.boolean().optional(),
+});
+export type ScanOptions = z.infer<typeof ScanOptionsSchema>;
+
+export const ScanStartedSchema = z.object({
+  accepted: z.boolean(),
+  roots: z.number().int().nonnegative(),
+  full: z.boolean(),
+});
+
+export const ScanRunSchema = z.object({
+  id: z.string().min(1),
+  status: z.enum(["running", "completed", "failed", "cancelled"]),
+  trigger: z.enum(["startup", "manual", "watch", "scheduled", "cli"]),
+  filesSeen: z.number().int().nonnegative(),
+  filesIndexed: z.number().int().nonnegative(),
+  filesSkipped: z.number().int().nonnegative(),
+  filesFailed: z.number().int().nonnegative(),
+  tracksRemoved: z.number().int().nonnegative(),
+  bytesRead: z.number().int().nonnegative(),
+  startedAt: z.string().min(1),
+  finishedAt: z.string().nullable(),
+  durationMs: z.number().int().nonnegative().nullable(),
+  errorMessage: z.string().nullable(),
+  errors: z.number().int().nonnegative(),
+});
+export type ScanRun = z.infer<typeof ScanRunSchema>;
+
+export const ScanOutcomeSchema = z.object({
+  runId: z.string().min(1),
+  status: z.string().min(1),
+  filesSeen: z.number().int().nonnegative(),
+  filesIndexed: z.number().int().nonnegative(),
+  filesSkipped: z.number().int().nonnegative(),
+  filesFailed: z.number().int().nonnegative(),
+  tracksMissing: z.number().int().nonnegative(),
+  tracksPruned: z.number().int().nonnegative(),
+  bytesRead: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+});
+export type ScanOutcome = z.infer<typeof ScanOutcomeSchema>;
+
+export const ScanStatusSchema = z.object({
+  running: z.boolean(),
+  progress: ScanProgressSchema.nullable(),
+  lastRun: ScanRunSchema.nullable(),
+});
+export type ScanStatus = z.infer<typeof ScanStatusSchema>;
+
+export const ScanErrorSchema = z.object({
+  path: z.string().min(1),
+  errorCode: z.string().min(1),
+  message: z.string(),
+  occurredAt: z.string().min(1),
+});
+export type ScanError = z.infer<typeof ScanErrorSchema>;
+
+export const LibraryRootSchema = z.object({
+  id: z.string().min(1),
+  path: z.string().min(1),
+  name: z.string(),
+  enabled: z.boolean(),
+  recursive: z.boolean(),
+  watch: z.boolean(),
+  available: z.boolean(),
+  tracks: z.number().int().nonnegative(),
+});
+export type LibraryRoot = z.infer<typeof LibraryRootSchema>;
+
+export const CoverAssetSchema = z.object({
+  key: z.string().length(64),
+  provider: z.enum(["embedded", "folder", "itunes", "musicbrainz", "coverartarchive", "unknown"]),
+  localPath: z.string().nullable(),
+  remoteUrl: z.string().nullable(),
+  width: z.number().int().positive().nullable(),
+  height: z.number().int().positive().nullable(),
+});
+export type CoverAsset = z.infer<typeof CoverAssetSchema>;
+
+export const DiscordStateSchema = z.enum([
+  "disabled",
+  "connecting",
+  "connected",
+  "reconnecting",
+  "unavailable",
+  "stopped",
+]);
+
+export const DiscordConfigSchema = z.object({
+  enabled: z.boolean(),
+  clientId: z.string(),
+  showCover: z.boolean(),
+  showTimestamps: z.boolean(),
+  showQuality: z.boolean(),
+});
+export type DiscordConfig = z.infer<typeof DiscordConfigSchema>;
+
+export const DiscordStatusSchema = z.object({
+  enabled: z.boolean(),
+  configured: z.boolean(),
+  clientId: z.string(),
+  state: DiscordStateSchema,
+  attempts: z.number().int().nonnegative(),
+  lastError: z.string().nullable(),
+  lastUpdateAt: z.string().nullable(),
+  showCover: z.boolean(),
+  showTimestamps: z.boolean(),
+  showQuality: z.boolean(),
+});
+export type DiscordStatus = z.infer<typeof DiscordStatusSchema>;

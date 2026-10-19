@@ -84,6 +84,8 @@ libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+image.workspace = true
+lofty.workspace = true
 
 [features]
 default = []
