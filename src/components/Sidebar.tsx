@@ -2,6 +2,7 @@ import type { JSX } from "react";
 import {
   Compass,
   Disc3,
+  LibraryBig,
   PanelLeftClose,
   PanelLeftOpen,
   Settings2,
@@ -24,6 +25,7 @@ interface NavItem {
 
 const NAV_ITEMS: readonly NavItem[] = [
   { id: "home", label: "Home", icon: Compass, section: "primary" },
+  { id: "library", label: "Library", icon: LibraryBig, section: "primary" },
   { id: "now-playing", label: "Now Playing", icon: Disc3, section: "primary" },
   { id: "settings", label: "Settings", icon: Settings2, section: "secondary" },
   { id: "system", label: "System", icon: SlidersHorizontal, section: "secondary" },

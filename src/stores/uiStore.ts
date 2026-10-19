@@ -4,12 +4,11 @@ import { createJSONStorage, persist } from "zustand/middleware";
 /**
  * Top-level destinations.
  *
- * The library, album and artist browsers arrive in FASE 5 with the virtualised
- * grid, so they are not routes yet: a navigation entry that renders a "coming
- * soon" panel is exactly the placeholder this project forbids. Every route
- * declared here is fully implemented.
+ * Every route declared here is fully implemented. Album and artist detail
+ * browsers are not routes yet, because a navigation entry that renders a "coming
+ * soon" panel is exactly the placeholder this project forbids.
  */
-export type ShellRoute = "home" | "now-playing" | "settings" | "system";
+export type ShellRoute = "home" | "library" | "now-playing" | "settings" | "system";
 
 /** Ambient canvas intensity, persisted per user. */
 export type AmbientIntensity = "off" | "subtle" | "full";

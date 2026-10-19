@@ -17,6 +17,7 @@
 //! gain ramp. It never allocates, locks, logs or touches the filesystem. All
 //! decoding and DSP runs on the producer side, ahead of the callback.
 
+pub mod analysis;
 pub mod cue;
 pub mod decoder;
 pub mod dsd;

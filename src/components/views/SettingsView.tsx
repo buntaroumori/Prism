@@ -11,6 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 
+import { PluginsSection } from "@/components/settings/PluginsSection";
 import { Button } from "@/components/ui/Button";
 import { Segmented } from "@/components/ui/Segmented";
 import { StatusPill } from "@/components/ui/StatusPill";
@@ -44,6 +45,7 @@ export function SettingsView(): JSX.Element {
       <LibrarySection />
       <ScanSection />
       <PresenceSection />
+      <PluginsSection />
       <AppearanceSection />
     </div>
   );

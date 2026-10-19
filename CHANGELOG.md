@@ -126,4 +126,33 @@ All notable changes to Prism are documented here. The format follows
 - Tests: 189 Rust tests (157 unit + 32 integration across database, engine, library, artwork,
   Discord and palette).
 
+### Virtualised library, spectrum, lyrics and plugins (FASE 5)
+
+- Lyrics (`lyrics/`): embedded `USLT` → sidecar `.lrc` → empty resolution, a dialect-tolerant LRC
+  parser (1–3 fraction digits, `mm:ss:ff`, multi-timestamp lines, metadata tags, BOM/CRLF, unsorted
+  input, `[offset:]` in both signs), sort + de-duplication, 512 KiB body limit, and a
+  `lyrics_cache` policy where a miss is never stored and a sidecar row is re-validated against its
+  path on every read.
+- Spectrum analysis (`audio/analysis.rs`): 2 048-point Hann-windowed FFT on the audio supervisor's
+  producer thread, 31 log-spaced bands (20 Hz → 0.98 × Nyquist), −80 dBFS floor, peak-per-band
+  scaling, attack/release smoothing, 4 096-sample ring with sample-rate invalidation, and a
+  reference-counted `visualiser://frame` stream at 60 Hz (20 Hz while silent).
+- IPC: `lyrics_get`, `lyrics_clear`, `visualiser_set_enabled`, `visualiser_frame`, `plugins_list`,
+  `plugins_reload`, `plugins_set_enabled`, `plugins_set_config`, `plugins_open_folder`, plus the
+  two new event channels.
+- Plugin runtime (`plugins/`): directory discovery, strict `plugin.toml` validation (reverse-DNS ids,
+  semver, API revision, traversal-proof entry paths, self-validating defaults), capability-gated host
+  bridge (`log`, `notify`, `player:read`, `player:control`), Lua 5.4 sandbox (`mlua` vendored,
+  restricted stdlib, 16 MiB memory limit, 20 M-instruction budget enforced by a VM hook) and a
+  WebAssembly sandbox (`wasmtime`, fuel-metered, 64 MiB linear memory, import-list isolation, textual
+  `prism` ABI), session-scoped failure handling, persisted enable/disable and per-plugin settings.
+- Interface: `LibraryView` with debounced FTS search and sort, `VirtualTrackList` (52 px rows,
+  12-row overscan, `contain: strict`, keyboard selection), `useTrackWindow` (500-row pages, 12-page
+  bounded cache, generation-safe responses), `SpectrumVisualiser` (canvas, rAF interpolation, DPR
+  aware, reduced-motion static mode), `LyricsPanel` (karaoke cursor, auto-follow with manual-scroll
+  suspension), `useLayoutStore` + `NowPlayingDeck` (five modules, three presets, persisted order), and
+  a `PluginsSection` in Settings with typed controls and a live activity stream.
+- Tests: 34 new unit tests (9 lyrics, 9 analysis, 16 plugin manifest/runtime), 191 lib tests in the
+  default build and 198 with `--features lua-plugins`.
+
 [0.1.0]: https://github.com/prism-audio/prism/releases/tag/v0.1.0

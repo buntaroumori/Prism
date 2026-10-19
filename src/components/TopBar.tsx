@@ -9,6 +9,7 @@ import { useUiStore, type ShellRoute } from "@/stores/uiStore";
 
 const ROUTE_LABELS: Record<ShellRoute, string> = {
   home: "Home",
+  library: "Library",
   "now-playing": "Now Playing",
   settings: "Settings",
   system: "System",

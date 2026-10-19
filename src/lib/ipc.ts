@@ -9,6 +9,7 @@ import {
   OutputDeviceSchema,
   PlayerStatusSchema,
   PlayerTickSchema,
+  PluginMessageSchema,
   TrackRequestSchema,
   ArtistRowSchema,
   CoverAssetSchema,
@@ -17,12 +18,15 @@ import {
   GlobalSearchSchema,
   LibraryRootSchema,
   LibraryStatsSchema,
+  LyricsDocumentSchema,
+  PluginSnapshotSchema,
   PrismErrorPayloadSchema,
   RuntimeHealthSchema,
   ScanErrorSchema,
   ScanRunSchema,
   ScanStartedSchema,
   ScanStatusSchema,
+  SpectrumFrameSchema,
   TrackRowSchema,
   pageSchema,
   type AlbumRow,
@@ -37,16 +41,20 @@ import {
   type GlobalSearch,
   type LibraryRoot,
   type LibraryStats,
+  type LyricsDocument,
   type OutputDevice,
   type OutputMode,
   type PlayerStatus,
   type PlayerTick,
+  type PluginMessage,
+  type PluginSnapshot,
   type PrismErrorPayload,
   type RuntimeHealth,
   type ScanError,
   type ScanOptions,
   type ScanRun,
   type ScanStatus,
+  type SpectrumFrame,
   type TrackQuery,
   type TrackRequest,
   type TrackRow,
@@ -260,12 +268,50 @@ export const playerApi = {
     command("player_devices", z.array(OutputDeviceSchema), { mode }),
 };
 
+/**
+ * Lyrics for the now-playing panel.
+ *
+ * `refresh` bypasses the backend cache so a `.lrc` dropped next to the file is
+ * picked up without restarting the player.
+ */
+export const lyricsApi = {
+  get: (trackId: string, refresh = false): Promise<LyricsDocument> =>
+    command("lyrics_get", LyricsDocumentSchema, { trackId, refresh }),
+  clear: (trackId: string): Promise<boolean> => command("lyrics_clear", z.boolean(), { trackId }),
+};
+
+/**
+ * Spectrum analyser control.
+ *
+ * `setEnabled` is reference-counted by the frontend: the audio thread only
+ * copies samples while at least one visualiser is mounted.
+ */
+export const visualiserApi = {
+  setEnabled: (enabled: boolean): Promise<boolean> =>
+    command("visualiser_set_enabled", z.boolean(), { enabled }),
+  frame: (): Promise<SpectrumFrame | null> =>
+    command("visualiser_frame", SpectrumFrameSchema.nullable()),
+};
+
+/** Plugin discovery, enabling and configuration. */
+export const pluginsApi = {
+  list: (): Promise<PluginSnapshot> => command("plugins_list", PluginSnapshotSchema),
+  reload: (): Promise<PluginSnapshot> => command("plugins_reload", PluginSnapshotSchema),
+  setEnabled: (id: string, enabled: boolean): Promise<PluginSnapshot> =>
+    command("plugins_set_enabled", PluginSnapshotSchema, { id, enabled }),
+  setConfig: (id: string, key: string, value: string | number | boolean): Promise<PluginSnapshot> =>
+    command("plugins_set_config", PluginSnapshotSchema, { id, key, value }),
+  openFolder: (): Promise<void> => commandVoid("plugins_open_folder"),
+};
+
 /** Event channel names, mirrored from the Rust constants. */
 export const EVENT_CHANNELS = {
   scanProgress: "library://scan-progress",
   scanComplete: "library://scan-complete",
   playerEvent: "player://event",
   playerTick: "player://tick",
+  visualiserFrame: "visualiser://frame",
+  pluginMessage: "plugin://message",
 } as const;
 
 /** Parse an engine push event, returning `null` instead of throwing. */
@@ -277,5 +323,17 @@ export function parseEngineEvent(payload: unknown): EngineEvent | null {
 /** Parse a playhead tick. */
 export function parsePlayerTick(payload: unknown): PlayerTick | null {
   const parsed = PlayerTickSchema.safeParse(payload);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Parse a spectrum frame, returning `null` on contract drift. */
+export function parseSpectrumFrame(payload: unknown): SpectrumFrame | null {
+  const parsed = SpectrumFrameSchema.safeParse(payload);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Parse a plugin message, returning `null` on contract drift. */
+export function parsePluginMessage(payload: unknown): PluginMessage | null {
+  const parsed = PluginMessageSchema.safeParse(payload);
   return parsed.success ? parsed.data : null;
 }

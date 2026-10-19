@@ -7,6 +7,7 @@ import { PlayerBar } from "@/components/player/PlayerBar";
 import { Sidebar } from "@/components/Sidebar";
 import { TopBar } from "@/components/TopBar";
 import { HomeView } from "@/components/views/HomeView";
+import { LibraryView } from "@/components/views/LibraryView";
 import { NowPlayingView } from "@/components/views/NowPlayingView";
 import { SettingsView } from "@/components/views/SettingsView";
 import { SystemView } from "@/components/views/SystemView";
@@ -132,6 +133,7 @@ function PageTransition({ route }: { route: ShellRoute }): JSX.Element {
         className="h-full"
       >
         {route === "home" ? <HomeView /> : null}
+        {route === "library" ? <LibraryView /> : null}
         {route === "now-playing" ? <NowPlayingView /> : null}
         {route === "settings" ? <SettingsView /> : null}
         {route === "system" ? <SystemView /> : null}

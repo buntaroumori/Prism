@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 
 use crate::audio::AudioError;
+use crate::audio::analysis::Analyzer;
 use crate::audio::decoder::{GaplessPlayer, PlaybackConfig, TrackRequest, probe_format};
 use crate::audio::dsp::DspSettings;
 use crate::audio::engine::backend::{self, BackendKind, OpenedSink, OutputDevice, OutputMode};
@@ -242,6 +243,7 @@ pub struct Engine {
     volume_db: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
     events: broadcast::Sender<EngineEvent>,
+    analyzer: Arc<Analyzer>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -264,6 +266,7 @@ impl Engine {
         ));
         let muted = Arc::new(AtomicBool::new(false));
         let (events, _) = broadcast::channel::<EngineEvent>(256);
+        let analyzer = Arc::new(Analyzer::new());
 
         let supervisor = Supervisor {
             commands: receiver,
@@ -271,6 +274,7 @@ impl Engine {
             volume_db: Arc::clone(&volume_db),
             muted: Arc::clone(&muted),
             events: events.clone(),
+            analyzer: Arc::clone(&analyzer),
             config,
             player: None,
             output: None,
@@ -297,6 +301,7 @@ impl Engine {
             volume_db,
             muted,
             events,
+            analyzer,
             worker: Some(worker),
         }))
     }
@@ -305,6 +310,12 @@ impl Engine {
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<EngineEvent> {
         self.events.subscribe()
+    }
+
+    /// Spectrum tap. The visualiser panel enables it when it mounts.
+    #[must_use]
+    pub fn analyzer(&self) -> &Arc<Analyzer> {
+        &self.analyzer
     }
 
     #[must_use]
@@ -417,6 +428,7 @@ struct Supervisor {
     volume_db: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
     events: broadcast::Sender<EngineEvent>,
+    analyzer: Arc<Analyzer>,
     config: EngineConfig,
     player: Option<GaplessPlayer>,
     output: Option<OpenedSink>,
@@ -743,6 +755,19 @@ impl Supervisor {
     fn push(&mut self, samples: &mut [f32], channels: usize) -> usize {
         let target = self.target_gain();
         apply_gain(samples, channels, &mut self.gain, target);
+
+        // Spectrum tap: post-DSP, post-gain, pre-ring. A no-op unless the
+        // visualiser panel has asked for frames.
+        if self.analyzer.is_enabled()
+            && let Some(output) = self.output.as_ref()
+        {
+            self.analyzer.push(
+                samples,
+                channels,
+                output.negotiation.format.sample_rate,
+            );
+        }
+
         let Some(output) = self.output.as_mut() else {
             return 0;
         };

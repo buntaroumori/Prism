@@ -17,8 +17,10 @@ pub mod db;
 pub mod discord;
 pub mod error;
 pub mod logging;
+pub mod lyrics;
 pub mod metadata;
 pub mod palette;
+pub mod plugins;
 pub mod state;
 
 use tauri::Manager;
@@ -189,6 +191,67 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
 
+            // --- Plugin bridge ----------------------------------------------
+            // Two directions, one task each: playback events reach the plugins,
+            // and plugin log lines reach the UI. Neither is allowed to block
+            // the transport: dispatch is fuelled per call and failures disable
+            // the offending plugin for the session.
+            if let Some(state) = app.try_state::<AppState>() {
+                let plugins = std::sync::Arc::clone(state.plugins());
+                let mut events = state.engine().subscribe();
+                tauri::async_runtime::spawn(async move {
+                    loop {
+                        match events.recv().await {
+                            Ok(event) => {
+                                let kind = match &event {
+                                    audio::engine::EngineEvent::StateChanged { .. } => "state_changed",
+                                    audio::engine::EngineEvent::TrackChanged { .. } => "track_changed",
+                                    audio::engine::EngineEvent::DeviceChanged { .. } => "device_changed",
+                                    audio::engine::EngineEvent::OutputError { .. } => "output_error",
+                                    audio::engine::EngineEvent::Underrun { .. } => "underrun",
+                                };
+                                let payload = serde_json::to_value(&event)
+                                    .unwrap_or(serde_json::Value::Null);
+                                plugins
+                                    .dispatch(&plugins::PluginEvent::new(kind, payload))
+                                    .await;
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!(skipped, "plugin subscriber lagged");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+            }
+            let plugin_messages = app
+                .try_state::<AppState>()
+                .and_then(|state| state.take_plugin_messages());
+            if let Some(mut messages) = plugin_messages {
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    while let Some(message) = messages.recv().await {
+                        if let Err(error) =
+                            handle.emit(plugins::PLUGIN_MESSAGE_EVENT, &message)
+                        {
+                            tracing::trace!(%error, "cannot forward plugin message");
+                        }
+                    }
+                });
+            }
+
+            // --- Spectrum emitter -------------------------------------------
+            // Frames are produced here, not in React: the webview receives a
+            // 31-band snapshot and draws it. Nothing is emitted while the
+            // visualiser panel is unmounted.
+            if let Some(state) = app.try_state::<AppState>() {
+                commands::visualiser::spawn_emitter(
+                    handle.clone(),
+                    std::sync::Arc::clone(state.engine().analyzer()),
+                );
+            }
+
             // The window is created hidden (`visible = false`) to avoid the
             // white flash before React paints the OLED background.
             if let Some(window) = app.get_webview_window("main") {
@@ -238,6 +301,15 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::player::player_devices,
             commands::player::player_event_channel,
             commands::player::player_tick_channel,
+            commands::lyrics::lyrics_get,
+            commands::lyrics::lyrics_clear,
+            commands::visualiser::visualiser_set_enabled,
+            commands::visualiser::visualiser_frame,
+            commands::plugins::plugins_list,
+            commands::plugins::plugins_reload,
+            commands::plugins::plugins_set_enabled,
+            commands::plugins::plugins_set_config,
+            commands::plugins::plugins_open_folder,
         ])
         .run(tauri::generate_context!())?;
 

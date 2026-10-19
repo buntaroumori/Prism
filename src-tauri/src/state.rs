@@ -14,6 +14,7 @@ use crate::discord::{DiscordConfig, DiscordService};
 use crate::error::PrismError;
 use crate::metadata::Scanner;
 use crate::palette::PaletteService;
+use crate::plugins::PluginManager;
 
 /// Canonical filesystem locations used by Prism.
 ///
@@ -76,6 +77,10 @@ pub struct AppState {
     artwork: std::sync::Arc<ArtworkService>,
     discord: std::sync::Arc<DiscordService>,
     palette: std::sync::Arc<PaletteService>,
+    plugins: std::sync::Arc<PluginManager>,
+    plugin_messages: parking_lot::Mutex<
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::plugins::PluginMessage>>,
+    >,
 }
 
 impl AppState {
@@ -101,6 +106,18 @@ impl AppState {
         // Palettes are derived from the same files the artwork service writes,
         // so both share the directory and neither owns the other.
         let palette = std::sync::Arc::new(PaletteService::new(paths.artwork_dir()));
+
+        // --- Extensibility -------------------------------------------------
+        // Plugins are optional and never load-bearing: a broken plugin leaves
+        // the player fully functional, and the manager records why in its
+        // descriptor. The message stream is handed to the event bridge in
+        // `lib.rs`, which forwards it to the webview.
+        let (plugins, plugin_messages) = PluginManager::bootstrap(
+            paths.data_dir.join("plugins"),
+            pool.clone(),
+            std::sync::Arc::clone(&engine),
+        )
+        .await?;
 
         // Rich presence is opt-in; a stored configuration is applied only when
         // it validates, so a broken client id cannot block startup.
@@ -132,6 +149,8 @@ impl AppState {
             artwork,
             discord,
             palette,
+            plugins: std::sync::Arc::new(plugins),
+            plugin_messages: parking_lot::Mutex::new(Some(plugin_messages)),
         })
     }
 
@@ -163,6 +182,18 @@ impl AppState {
     #[must_use]
     pub fn palette(&self) -> &std::sync::Arc<PaletteService> {
         &self.palette
+    }
+
+    #[must_use]
+    pub fn plugins(&self) -> &std::sync::Arc<PluginManager> {
+        &self.plugins
+    }
+
+    /// Take the plugin message stream exactly once, at boot.
+    pub fn take_plugin_messages(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<crate::plugins::PluginMessage>> {
+        self.plugin_messages.lock().take()
     }
 
     #[must_use]

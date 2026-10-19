@@ -38,8 +38,8 @@ implementation, not the ambition.
 | **2** | Audio engine, device backends (WASAPI/ASIO/PipeWire/ALSA), gapless + RAM Play, DSP graph        | ✅ **Complete** |
 | **3** | Metadata scanner + incremental indexing, FTS5 search & read models, cover art, Discord RPC      | ✅ **Complete** |
 | **4** | React shell, PlayerBar, artwork palette engine, ambient canvas, IPC hooks and stores            | ✅ **Complete** |
-| **5** | Virtualised library views, FFT visualiser, synced lyrics, modular layouts, plugin runtime       | 🟡 Next         |
-| **6** | Stress, fuzzing, memory and latency audits, 120 FPS profiling                                   | ⬜ Planned      |
+| **5** | Virtualised library views, FFT visualiser, synced lyrics, modular layouts, plugin runtime       | ✅ **Complete** |
+| **6** | Stress, fuzzing, memory and latency audits, 120 FPS profiling                                   | 🟡 Next         |
 | **7** | Repository hardening, documentation, signed public release                                      | ⬜ Planned      |
 
 The current build ships a **working desktop player**: a native Rust engine that talks to WASAPI
@@ -116,17 +116,41 @@ synthetic or mocked screenshot is shipped.
   event channel, so scrolling a five-hundred-thousand-row library cannot be disturbed by the clock.
 - Framer Motion restricted to page cross-fades, the player-bar entrance and the segmented indicator.
 
-### Library interface (FASE 5)
+### Library and listening interface (FASE 5)
 
-- Virtualised 500k-row grid via `@tanstack/react-virtual`; atomic selectors per row.
-- Dockable, resizable panels (foobar2000-style layout editing) over an Apple-Music-grade preset.
-- Synced LRC lyrics with karaoke follow, waveform seekbar, 31-band FFT spectroscope.
+- **500 000 rows, 52 pixels each** — `@tanstack/react-virtual` renders 30–60 rows whatever the library
+  holds, and a windowed data layer (`useTrackWindow`) fetches the 500-row pages the viewport needs,
+  keeping twelve of them in a bounded, farthest-first-evicted cache. Loading rows are skeletons at the
+  exact row height, so a page arriving never moves the list.
+- **31-band spectrum analyser** — the FFT runs in Rust on the audio supervisor's producer thread, on
+  the block that was just decoded; the webview receives 31 normalised floats at 60 Hz and paints them
+  on a canvas with `requestAnimationFrame` interpolation. The tap is reference-counted: no visualiser
+  mounted, no cost on the audio thread.
+- **Synced lyrics** — embedded `USLT` → sidecar `.lrc` (case-insensitive) → empty, with a parser that
+  accepts 1–3 fraction digits, `mm:ss:ff`, multiple timestamps per line, metadata tags, BOM, CRLF,
+  unsorted input and `[offset:]` in both signs. The karaoke cursor is a binary search over the
+  timestamps; scrolling by hand suspends auto-follow for four seconds instead of fighting the user.
+- **Modular Now Playing deck** — artwork, lyrics, spectrum, signal path and queue are independent
+  modules with three presets (Editorial, Listening, Analysis), per-module visibility and ordering,
+  persisted layout, and the guarantee that one module always remains.
 
 ### Extensibility (FASE 5)
 
-- Embedded **Lua 5.4** (`mlua`, vendored) and **WebAssembly** (`wasmtime`) sandboxes.
-- Event API: `on_track_change`, `on_dsp_process`, `on_library_scan`, `on_ui_panel_render`.
-- Community DSP processors, visualisers, scrobblers (Last.fm, ListenBrainz) and metadata fetchers.
+- **Sandboxed plugin runtimes**, both opt-in at compile time: Lua 5.4 (`mlua`, vendored, no system
+  Lua) and WebAssembly (`wasmtime`, Cranelift, no WASI). The default binary compiles neither and says
+  so in Settings instead of failing at load time.
+- **Capability-gated host API** — `log`, `notify`, `player:read`, `player:control`, declared in the
+  manifest and enforced on every call. Lua plugins run with `io`, `os`, `package`, `debug` and
+  `load`/`loadfile`/`dofile` removed, a 16 MiB memory ceiling and a 20 M-instruction budget;
+  WebAssembly modules are limited to 64 MiB and 200 M fuel per call.
+- **Strict manifests** — `plugin.toml` validated to the character: reverse-DNS ids, semver, API
+  revision, relative entry paths that cannot escape the plugin directory, and setting defaults that
+  must satisfy their own schema.
+- **Configuration UI** — enable/disable, typed setting controls (string, number, integer, boolean,
+  select) rendered from the manifest, declared capabilities shown as chips, load errors surfaced
+  verbatim, and a live `plugin://message` activity stream.
+- A plugin that throws is **disabled for the session** with its error recorded; playback never depends
+  on one.
 
 ---
 

@@ -508,3 +508,102 @@ export const CoverPaletteSchema = z.object({
   swatches: z.array(SwatchSchema),
 });
 export type CoverPalette = z.infer<typeof CoverPaletteSchema>;
+
+/* ------------------------------------------------------------------------- */
+/* FASE 5 — lyrics, spectrum, plugins                                        */
+/* ------------------------------------------------------------------------- */
+
+/** One timed lyric line, in milliseconds from the start of the track. */
+export const LyricLineSchema = z.object({
+  timeMs: z.number().int().nonnegative(),
+  text: z.string(),
+});
+export type LyricLine = z.infer<typeof LyricLineSchema>;
+
+/**
+ * Resolved lyrics for a track.
+ *
+ * `provider` is `embedded`, `sidecar` or `none`. `synced` is true only when the
+ * timestamps are usable, which is what decides between a karaoke panel and a
+ * static lyric sheet. `offsetMs` is the file's global shift, already applied.
+ */
+export const LyricsDocumentSchema = z.object({
+  trackId: z.string().min(1),
+  provider: z.enum(["embedded", "sidecar", "none"]),
+  synced: z.boolean(),
+  language: z.string().nullable(),
+  offsetMs: z.number().int(),
+  lines: z.array(LyricLineSchema),
+  plainText: z.string(),
+  sourcePath: z.string().nullable(),
+  fetchedAt: z.string().nullable(),
+});
+export type LyricsDocument = z.infer<typeof LyricsDocumentSchema>;
+
+/** One 31-band frame from `visualiser://frame`. */
+export const SpectrumFrameSchema = z.object({
+  bands: z.array(z.number().min(0).max(1)),
+  level: z.number().min(0).max(1),
+  silent: z.boolean(),
+  sampleRate: z.number().int().nonnegative(),
+});
+export type SpectrumFrame = z.infer<typeof SpectrumFrameSchema>;
+
+/** Setting value types a plugin manifest may declare. */
+export const PluginSettingTypeSchema = z.enum(["string", "number", "integer", "boolean", "select"]);
+export type PluginSettingType = z.infer<typeof PluginSettingTypeSchema>;
+
+/** A plugin setting: schema plus the value currently stored. */
+export const PluginSettingSchema = z.object({
+  key: z.string().min(1),
+  label: z.string().min(1),
+  type: PluginSettingTypeSchema,
+  default: z.union([z.string(), z.number(), z.boolean()]),
+  min: z.number().nullable(),
+  max: z.number().nullable(),
+  options: z.array(z.string()),
+  help: z.string().nullable(),
+  value: z.union([z.string(), z.number(), z.boolean()]),
+});
+export type PluginSetting = z.infer<typeof PluginSettingSchema>;
+
+/** One installed plugin, as the configuration panel sees it. */
+export const PluginDescriptorSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  version: z.string().min(1),
+  api: z.number().int().nonnegative(),
+  description: z.string(),
+  author: z.string(),
+  homepage: z.string().nullable(),
+  runtime: z.enum(["lua", "wasm", "unknown"]),
+  capabilities: z.array(z.string()),
+  settings: z.array(PluginSettingSchema),
+  enabled: z.boolean(),
+  loaded: z.boolean(),
+  error: z.string().nullable(),
+  path: z.string().min(1),
+});
+export type PluginDescriptor = z.infer<typeof PluginDescriptorSchema>;
+
+/** Plugin list plus which runtimes this binary was built with. */
+export const PluginSnapshotSchema = z.object({
+  plugins: z.array(PluginDescriptorSchema),
+  runtimes: z.object({
+    lua: z.boolean(),
+    wasm: z.boolean(),
+    api: z.number().int().positive(),
+  }),
+  directory: z.string().min(1),
+});
+export type PluginSnapshot = z.infer<typeof PluginSnapshotSchema>;
+
+/** A log line or notification produced by a plugin. */
+export const PluginMessageSchema = z.object({
+  pluginId: z.string().min(1),
+  kind: z.enum(["log", "notification"]),
+  level: z.enum(["debug", "info", "warn", "error"]),
+  message: z.string(),
+  topic: z.string().nullable(),
+});
+export type PluginMessage = z.infer<typeof PluginMessageSchema>;

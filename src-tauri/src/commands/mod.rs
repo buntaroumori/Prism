@@ -6,5 +6,8 @@
 
 pub mod discord;
 pub mod library;
+pub mod lyrics;
 pub mod player;
+pub mod plugins;
 pub mod system;
+pub mod visualiser;

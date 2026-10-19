@@ -57,6 +57,9 @@ crossbeam-channel.workspace = true
 # --- Metadata (wired up in FASE 3) -----------------------------------------------
 lofty.workspace = true
 
+# --- Spectrum analysis (visualiser, FASE 5) ------------------------------------------
+realfft.workspace = true
+
 # --- Library scanning & artwork -----------------------------------------------------
 walkdir.workspace = true
 rayon.workspace = true
@@ -69,7 +72,8 @@ hex.workspace = true
 # --- Networking (Discord RPC artwork pipeline, FASE 3) -------------------------------
 reqwest.workspace = true
 
-# --- Extensibility (opt-in; the runtime lands in FASE 5) ------------------------------
+# --- Plugins (manifest parsing + opt-in runtimes, FASE 5) ------------------------------
+toml.workspace = true
 mlua = { workspace = true, optional = true }
 wasmtime = { workspace = true, optional = true }
 
