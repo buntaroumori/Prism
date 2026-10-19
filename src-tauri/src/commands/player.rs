@@ -4,16 +4,65 @@
 //! the supervisor thread owns the device, so the IPC handler never waits on
 //! audio I/O and the UI stays at 120 FPS even while a track is being opened.
 
+use serde::Serialize;
 use tauri::State;
 
 use crate::audio::decoder::TrackRequest;
 use crate::audio::dsp::DspSettings;
-use crate::audio::engine::{EngineStatus, OutputDevice, OutputMode};
+use crate::audio::engine::{EngineStatus, OutputDevice, OutputMode, PlaybackState};
 use crate::error::PrismError;
 use crate::state::AppState;
 
 /// Tauri event the frontend subscribes to for engine pushes.
 pub const PLAYER_EVENT_CHANNEL: &str = "player://event";
+
+/// Position update channel.
+///
+/// Deliberately separate from `player://event`: the playhead ticks at 8 Hz and
+/// carries two numbers, while transport events are rare and large. Mixing them
+/// would make every tick a full re-render trigger for whatever listens to the
+/// heavy channel.
+pub const PLAYER_TICK_CHANNEL: &str = "player://tick";
+
+/// How often the playhead is pushed while a track is playing or paused.
+pub const PLAYER_TICK_INTERVAL_MS: u64 = 125;
+
+/// Minimal position projection for the player bar and the seek slider.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerTick {
+    /// Position inside the current track, in seconds of the source rate.
+    pub position_ms: u64,
+    /// Track duration in milliseconds, when the container declares one.
+    pub duration_ms: Option<u64>,
+    /// True while the device clock is running.
+    pub playing: bool,
+}
+
+impl PlayerTick {
+    /// Project an engine snapshot onto the tick payload.
+    #[must_use]
+    pub fn from_status(status: &EngineStatus) -> Self {
+        let rate = status
+            .source_format
+            .map_or(0, |format| u64::from(format.sample_rate));
+        let to_ms = |frames: u64| {
+            if rate == 0 {
+                0
+            } else {
+                frames.saturating_mul(1_000) / rate
+            }
+        };
+        Self {
+            position_ms: to_ms(status.position_frames),
+            duration_ms: status.duration_frames.map(to_ms),
+            playing: matches!(
+                status.state,
+                PlaybackState::Playing | PlaybackState::Buffering
+            ),
+        }
+    }
+}
 
 /// Current transport snapshot (state, track, position, formats, counters).
 #[tauri::command]
@@ -141,4 +190,11 @@ pub fn player_devices(
 #[must_use]
 pub fn player_event_channel() -> &'static str {
     PLAYER_EVENT_CHANNEL
+}
+
+/// Name of the playhead tick channel.
+#[tauri::command]
+#[must_use]
+pub fn player_tick_channel() -> &'static str {
+    PLAYER_TICK_CHANNEL
 }

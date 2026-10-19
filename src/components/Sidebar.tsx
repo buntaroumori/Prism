@@ -1,72 +1,99 @@
 import type { JSX } from "react";
 import {
-  Activity,
-  Database,
-  Gauge,
-  LibraryBig,
+  Compass,
+  Disc3,
   PanelLeftClose,
   PanelLeftOpen,
-  type LucideIcon,
+  Settings2,
+  SlidersHorizontal,
 } from "lucide-react";
 
 import { AppLogo } from "@/components/AppLogo";
-import { StatusPill } from "@/components/ui/StatusPill";
+import { formatCount, formatLibraryDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useUiStore, type ShellSection } from "@/stores/uiStore";
-import type { AppInfo, RuntimeHealth } from "@/types/ipc";
+import { useLibraryStore } from "@/stores/libraryStore";
+import { usePlaybackStore } from "@/stores/playbackStore";
+import { useUiStore, type ShellRoute } from "@/stores/uiStore";
 
 interface NavItem {
-  id: ShellSection;
+  id: ShellRoute;
   label: string;
-  icon: LucideIcon;
+  icon: typeof Compass;
+  section: "primary" | "secondary";
 }
 
 const NAV_ITEMS: readonly NavItem[] = [
-  { id: "overview", label: "Overview", icon: Gauge },
-  { id: "library", label: "Library", icon: LibraryBig },
-  { id: "database", label: "Database", icon: Database },
-  { id: "runtime", label: "Runtime", icon: Activity },
+  { id: "home", label: "Home", icon: Compass, section: "primary" },
+  { id: "now-playing", label: "Now Playing", icon: Disc3, section: "primary" },
+  { id: "settings", label: "Settings", icon: Settings2, section: "secondary" },
+  { id: "system", label: "System", icon: SlidersHorizontal, section: "secondary" },
 ];
 
-interface SidebarProps {
-  appInfo: AppInfo | null;
-  healthStatus: RuntimeHealth["status"] | null;
-}
-
 /**
- * Persistent navigation rail.
+ * Navigation rail.
  *
- * Sections are in-page anchors: clicking one scrolls the main scroller and
- * records the active section in the persisted shell store. The rail collapses
- * to a 76 px icon strip; labels are hidden but remain available as `title`
- * tooltips and the accessible name never disappears.
+ * The counters under the logo are read from the library store, not from the
+ * playback store, so a track change never re-renders the sidebar. Collapsed
+ * mode keeps the icon hit-targets at 40 px and moves the accessible name into
+ * `title` + `aria-label`, so nothing becomes unreachable by keyboard.
  */
-export function Sidebar({ appInfo, healthStatus }: SidebarProps): JSX.Element {
+export function Sidebar(): JSX.Element {
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
-  const activeSection = useUiStore((state) => state.activeSection);
+  const route = useUiStore((state) => state.route);
   const toggleSidebar = useUiStore((state) => state.toggleSidebar);
-  const setActiveSection = useUiStore((state) => state.setActiveSection);
+  const setRoute = useUiStore((state) => state.setRoute);
+  const stats = useLibraryStore((state) => state.stats);
 
-  const handleNavigate = (section: ShellSection): void => {
-    setActiveSection(section);
-    const target = document.getElementById(section);
-    target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  const primary = NAV_ITEMS.filter((item) => item.section === "primary");
+  const secondary = NAV_ITEMS.filter((item) => item.section === "secondary");
+
+  const renderItem = (item: NavItem): JSX.Element => {
+    const isActive = route === item.id;
+    return (
+      <button
+        key={item.id}
+        type="button"
+        onClick={() => {
+          setRoute(item.id);
+        }}
+        aria-current={isActive ? "page" : undefined}
+        aria-label={item.label}
+        title={collapsed ? item.label : undefined}
+        className={cn(
+          "group relative flex h-10 items-center gap-3 rounded-xl px-3 text-[13px] font-medium transition-colors duration-150",
+          "focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
+          collapsed && "justify-center px-0",
+          isActive
+            ? "bg-white/[0.075] text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
+            : "text-white/45 hover:bg-white/[0.035] hover:text-white/75",
+        )}
+      >
+        <item.icon
+          className={cn(
+            "h-[18px] w-[18px] shrink-0",
+            isActive ? "accent-soft-text" : "text-white/40",
+          )}
+          aria-hidden="true"
+        />
+        {!collapsed ? <span className="truncate">{item.label}</span> : null}
+        {isActive && collapsed ? (
+          <span aria-hidden="true" className="accent-bg absolute left-0 h-5 w-[2px] rounded-full" />
+        ) : null}
+      </button>
+    );
   };
-
-  const statusTone =
-    healthStatus === "ok" ? "positive" : healthStatus === "degraded" ? "warning" : "neutral";
-  const statusLabel =
-    healthStatus === "ok" ? "Engine online" : healthStatus === "degraded" ? "Degraded" : "Starting";
 
   return (
     <aside
       className={cn(
-        "relative z-20 flex h-full shrink-0 flex-col border-r border-white/[0.07] bg-oled-900/50 backdrop-blur-3xl",
+        "relative z-20 flex h-full shrink-0 flex-col border-r border-white/[0.07] bg-oled-900/55 backdrop-blur-3xl",
         "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
-        collapsed ? "w-[76px]" : "w-[248px]",
+        collapsed ? "w-[76px]" : "w-[236px]",
       )}
     >
-      <div className={cn("flex items-center gap-3 px-5 pt-6", collapsed && "justify-center px-0")}>
+      <div
+        className={cn("flex items-center gap-3 px-5 pt-6 pb-5", collapsed && "justify-center px-0")}
+      >
         <AppLogo className="h-8 w-8" />
         {!collapsed ? (
           <div className="min-w-0">
@@ -78,76 +105,50 @@ export function Sidebar({ appInfo, healthStatus }: SidebarProps): JSX.Element {
         ) : null}
       </div>
 
-      <nav aria-label="Sections" className="mt-9 flex flex-col gap-1 px-3">
-        {NAV_ITEMS.map((item) => {
-          const isActive = activeSection === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => {
-                handleNavigate(item.id);
-              }}
-              aria-current={isActive ? "page" : undefined}
-              title={collapsed ? item.label : undefined}
-              className={cn(
-                "group relative flex h-10 items-center gap-3 rounded-xl px-3 text-[13px] font-medium transition-colors duration-150",
-                "focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
-                collapsed && "justify-center px-0",
-                isActive
-                  ? "bg-white/[0.075] text-white shadow-[inset_0_1px_0_rgb(255_255_255/0.06)]"
-                  : "text-white/45 hover:bg-white/[0.035] hover:text-white/75",
-              )}
-            >
-              <item.icon
-                className={cn(
-                  "h-[18px] w-[18px] shrink-0",
-                  isActive ? "text-accent-soft" : "text-white/40",
-                )}
-                aria-hidden="true"
-              />
-              {!collapsed ? <span className="truncate">{item.label}</span> : null}
-              {isActive && !collapsed ? (
-                <span
-                  aria-hidden="true"
-                  className="absolute top-1/2 right-3 h-1 w-1 -translate-y-1/2 rounded-full bg-accent"
-                />
-              ) : null}
-            </button>
-          );
-        })}
+      <nav aria-label="Primary" className="flex flex-col gap-1 px-3">
+        {primary.map(renderItem)}
       </nav>
 
-      <div className={cn("mt-auto space-y-4 px-4 pb-5", collapsed && "px-2")}>
+      <div className="mx-3 my-4 h-px bg-white/[0.06]" />
+
+      <nav aria-label="Configuration" className="flex flex-col gap-1 px-3">
+        {secondary.map(renderItem)}
+      </nav>
+
+      <div className={cn("mt-auto space-y-3 px-4 pb-5", collapsed && "px-2")}>
         {!collapsed ? (
           <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-3">
-            <StatusPill tone={statusTone} pulse={healthStatus === "ok"}>
-              {statusLabel}
-            </StatusPill>
-            <p
-              className="mt-2.5 truncate font-mono text-[10px] text-white/30"
-              title={appInfo?.databasePath ?? "Resolving library database…"}
-            >
-              {appInfo?.databasePath ?? "Resolving database…"}
+            <p className="text-[9.5px] font-semibold tracking-[0.18em] text-white/25 uppercase">
+              Library
             </p>
-            <p className="mt-1 text-[10px] text-white/25">
-              {appInfo !== null ? `v${appInfo.version} · ${appInfo.buildProfile}` : "v0.1.0"}
-            </p>
+            <div className="mt-2 space-y-1">
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] text-white/40">Tracks</span>
+                <span className="tabular text-[11.5px] text-white/75">
+                  {stats === null ? "—" : formatCount(stats.trackCount)}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] text-white/40">Albums</span>
+                <span className="tabular text-[11.5px] text-white/75">
+                  {stats === null ? "—" : formatCount(stats.albumCount)}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between">
+                <span className="text-[11px] text-white/40">Playtime</span>
+                <span className="tabular text-[11.5px] text-white/75">
+                  {stats === null ? "—" : formatLibraryDuration(stats.totalDurationMs)}
+                </span>
+              </div>
+            </div>
+            {stats !== null && stats.missingCount > 0 ? (
+              <p className="mt-2 border-t border-white/[0.06] pt-2 text-[10px] text-warning/80">
+                {formatCount(stats.missingCount)} missing
+              </p>
+            ) : null}
           </div>
         ) : (
-          <div className="flex justify-center">
-            <span
-              className={cn(
-                "h-2 w-2 rounded-full",
-                healthStatus === "ok"
-                  ? "bg-positive"
-                  : healthStatus === "degraded"
-                    ? "bg-warning"
-                    : "bg-white/30",
-              )}
-              aria-hidden="true"
-            />
-          </div>
+          <SidebarPulse />
         )}
 
         <button
@@ -172,5 +173,25 @@ export function Sidebar({ appInfo, healthStatus }: SidebarProps): JSX.Element {
         </button>
       </div>
     </aside>
+  );
+}
+
+/** Collapsed-state library indicator: a single dot that reflects the transport. */
+function SidebarPulse(): JSX.Element {
+  const playing = usePlaybackStore(
+    (state) => state.status?.state === "playing" || state.status?.state === "buffering",
+  );
+
+  return (
+    <div className="flex justify-center" title={playing ? "Playing" : "Idle"}>
+      <span
+        className={cn(
+          "h-1.5 w-1.5 rounded-full",
+          playing ? "accent-bg animate-pulse" : "bg-white/25",
+        )}
+        aria-hidden="true"
+      />
+      <span className="sr-only">{playing ? "Playing" : "Idle"}</span>
+    </div>
   );
 }

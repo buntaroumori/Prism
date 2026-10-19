@@ -87,3 +87,40 @@ export function formatSampleRate(hz: number | null): string {
 export function formatClock(date: Date): string {
   return dateTime.format(date);
 }
+
+/**
+ * Position inside a track: `3:42`, `1:02:03`.
+ *
+ * Fixed-width by construction — the playhead does not reflow when it crosses a
+ * minute boundary, which is what keeps the scrubber from shifting layout 700
+ * times per album.
+ */
+export function formatPosition(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) {
+    return "0:00";
+  }
+  const totalSeconds = Math.floor(ms / 1000);
+  const seconds = totalSeconds % 60;
+  const minutes = Math.floor(totalSeconds / 60) % 60;
+  const hours = Math.floor(totalSeconds / 3600);
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return hours > 0
+    ? `${String(hours)}:${pad(minutes)}:${pad(seconds)}`
+    : `${String(minutes)}:${pad(seconds)}`;
+}
+
+/** Driver latency: `8.0 ms`. */
+export function formatLatency(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return "—";
+  }
+  return `${ms < 10 ? ms.toFixed(1) : ms.toFixed(0)} ms`;
+}
+
+/** Decibels: `0.0 dB`, `-12.5 dB`. */
+export function formatDecibels(db: number): string {
+  if (!Number.isFinite(db)) {
+    return "—";
+  }
+  return `${db <= -60 ? "−∞" : db.toFixed(1)} dB`;
+}

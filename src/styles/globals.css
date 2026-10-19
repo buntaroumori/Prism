@@ -15,7 +15,19 @@
 @layer base {
   :root {
     color-scheme: dark;
-    --prism-accent: 124 140 255;
+    /*
+     * Palette tokens. Every value is replaced at runtime from the artwork
+     * currently on screen (Rust palette extraction); these defaults are the
+     * neutral shell accent so the first paint is never a flash of unstyled
+     * colour. Expressed as complete colours (not channels) so they compose with
+     * `color-mix()` without a second conversion step.
+     */
+    --prism-accent: #7c8cff;
+    --prism-accent-soft: #a7b2ff;
+    --prism-surface: #12131c;
+    --prism-background: #08080a;
+    --prism-highlight: #ff6b9a;
+    --prism-highlight-alt: #6bd5ff;
   }
 
   html,
@@ -108,6 +120,46 @@
     font-feature-settings: "tnum" 1;
   }
 
+  /* Palette-driven surfaces. Kept as utilities so components read as prose
+     (`accent-text`) instead of 40-character arbitrary values. */
+  .accent-text {
+    color: var(--prism-accent);
+  }
+
+  .accent-soft-text {
+    color: var(--prism-accent-soft);
+  }
+
+  .accent-bg {
+    background-color: var(--prism-accent);
+  }
+
+  .accent-border {
+    border-color: color-mix(in srgb, var(--prism-accent) 42%, transparent);
+  }
+
+  .accent-glow {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--prism-accent) 38%, transparent),
+      0 18px 60px -24px color-mix(in srgb, var(--prism-accent) 55%, transparent);
+  }
+
+  /* The player bar and floating panels sit on this: a tinted, frosted film that
+     keeps text legible even over a bright sleeve. */
+  .glass-bar {
+    background-color: color-mix(in srgb, var(--prism-surface) 68%, transparent);
+    backdrop-filter: blur(40px) saturate(1.35);
+    -webkit-backdrop-filter: blur(40px) saturate(1.35);
+  }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
   .drag-region {
     -webkit-app-region: drag;
   }
@@ -120,6 +172,22 @@
   .grain {
     background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
   }
+}
+
+@keyframes prism-drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(2.5%, -3.5%, 0) scale(1.06);
+  }
+}
+
+/* Compositor-only drift for the ambient orbs: no layout, no paint, no JS. */
+.ambient-orb {
+  animation: prism-drift 26s ease-in-out infinite;
+  will-change: transform;
 }
 
 @media (prefers-reduced-motion: reduce) {

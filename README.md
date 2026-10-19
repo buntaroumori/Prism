@@ -37,15 +37,16 @@ implementation, not the ambition.
 | **1** | Repository, toolchain, SQLite schema + FTS5, Tauri shell, IPC contract, CI/CD, release pipeline | ✅ **Complete** |
 | **2** | Audio engine, device backends (WASAPI/ASIO/PipeWire/ALSA), gapless + RAM Play, DSP graph        | ✅ **Complete** |
 | **3** | Metadata scanner + incremental indexing, FTS5 search & read models, cover art, Discord RPC      | ✅ **Complete** |
-| **4** | React shell, virtualised library, PlayerBar, ambient canvas, modular layout system, lyrics      | 🟡 Next         |
-| **5** | Plugin runtime (Lua 5.4 / WebAssembly), scrobbling, lyrics fetchers                             | ⬜ Planned      |
+| **4** | React shell, PlayerBar, artwork palette engine, ambient canvas, IPC hooks and stores            | ✅ **Complete** |
+| **5** | Virtualised library views, FFT visualiser, synced lyrics, modular layouts, plugin runtime       | 🟡 Next         |
 | **6** | Stress, fuzzing, memory and latency audits, 120 FPS profiling                                   | ⬜ Planned      |
 | **7** | Repository hardening, documentation, signed public release                                      | ⬜ Planned      |
 
-The current build ships a **real, working foundation**: a WAL-mode SQLite catalogue with 16 STRICT tables,
-FTS5 external-content search, cascade triggers, integrity constraints, an embedded migration
-ledger, a typed and runtime-validated IPC layer, a non-blocking dual-sink logger, and a glass
-diagnostics interface that reads live engine state. No screen displays invented data.
+The current build ships a **working desktop player**: a native Rust engine that talks to WASAPI
+Exclusive, ASIO, PipeWire and ALSA; an incremental catalogue over WAL-mode SQLite with FTS5; and a
+React shell whose player bar, transport, device selector and ambient palette all read live engine
+state. No screen displays invented data, and every route is implemented — the browser-only build
+says so instead of faking an interface.
 
 ---
 
@@ -101,10 +102,23 @@ synthetic or mocked screenshot is shipped.
 
 ### Interface (FASE 4)
 
-- React 19 + TypeScript strict + Tailwind v4 + Framer Motion + `@tanstack/react-virtual`.
-- Virtualised 500k-row grids with atomic Zustand selectors: the FFT meter and playhead cannot
-  re-render the library.
-- Dynamic ambient canvas: dominant-colour extraction in Rust (`palette`), composited on the GPU.
+- **Player bar** with a real Hi-Res / Bit-perfect / Processed badge: the claim is only made when the
+  engine reports an exclusive endpoint, an exact format match, unity gain and no DSP stage.
+- **Output selector** listing every reachable endpoint with its driver stack, sample-rate range,
+  exclusive capability and a 64–2048-frame buffer choice; the trigger shows the device that is
+  _actually_ open, not the one that was requested.
+- **Artwork palette engine** in Rust: deterministic median cut, WCAG-checked accents (≥ 4.5:1),
+  hue-derived fallback for greyscale sleeves, 512-entry cache — applied as six CSS custom
+  properties, so re-tinting the window costs one style write.
+- **Ambient canvas** animated on the compositor only (transform/opacity), scaled by the artwork's
+  mean luminance, with an Off/Subtle/Full setting and `prefers-reduced-motion` support.
+- **State split by update frequency**: the 8 Hz playhead lives in its own store slice and its own
+  event channel, so scrolling a five-hundred-thousand-row library cannot be disturbed by the clock.
+- Framer Motion restricted to page cross-fades, the player-bar entrance and the segmented indicator.
+
+### Library interface (FASE 5)
+
+- Virtualised 500k-row grid via `@tanstack/react-virtual`; atomic selectors per row.
 - Dockable, resizable panels (foobar2000-style layout editing) over an Apple-Music-grade preset.
 - Synced LRC lyrics with karaoke follow, waveform seekbar, 31-band FFT spectroscope.
 

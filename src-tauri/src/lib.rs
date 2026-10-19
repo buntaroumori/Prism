@@ -18,6 +18,7 @@ pub mod discord;
 pub mod error;
 pub mod logging;
 pub mod metadata;
+pub mod palette;
 pub mod state;
 
 use tauri::Manager;
@@ -155,7 +156,40 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
 
-            // The window is created hidden (`visible: false`) to avoid the
+            // --- Playhead ticker ----------------------------------------------
+            // The supervisor owns the clock; the UI only needs a coarse
+            // projection. Ticking here (not in React) means a background window
+            // costs nothing: `emit` to a hidden webview is a no-op and the
+            // payload is skipped entirely while the transport is stopped.
+            if let Some(state) = app.try_state::<AppState>() {
+                let engine = std::sync::Arc::clone(state.engine());
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    let mut interval = tokio::time::interval(std::time::Duration::from_millis(
+                        commands::player::PLAYER_TICK_INTERVAL_MS,
+                    ));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        interval.tick().await;
+                        let status = engine.status();
+                        if matches!(
+                            status.state,
+                            audio::engine::PlaybackState::Playing
+                                | audio::engine::PlaybackState::Paused
+                        ) {
+                            let tick = commands::player::PlayerTick::from_status(&status);
+                            if let Err(error) =
+                                handle.emit(commands::player::PLAYER_TICK_CHANNEL, &tick)
+                            {
+                                tracing::debug!(%error, "cannot forward playhead tick");
+                            }
+                        }
+                    }
+                });
+            }
+
+            // The window is created hidden (`visible = false`) to avoid the
             // white flash before React paints the OLED background.
             if let Some(window) = app.get_webview_window("main") {
                 window.show()?;
@@ -182,6 +216,7 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::library::library_global_search,
             commands::library::library_album_cover,
             commands::library::library_track_cover,
+            commands::library::library_cover_palette,
             commands::discord::discord_status,
             commands::discord::discord_configure,
             commands::discord::discord_clear,
@@ -202,6 +237,7 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::player::player_set_ram_play,
             commands::player::player_devices,
             commands::player::player_event_channel,
+            commands::player::player_tick_channel,
         ])
         .run(tauri::generate_context!())?;
 

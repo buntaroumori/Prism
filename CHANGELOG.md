@@ -92,4 +92,38 @@ All notable changes to Prism are documented here. The format follows
   missing sweeps, FTS ranking, diacritic folding, hostile query input, artwork normalisation,
   embedded-art precedence, negative caching and a real Discord IPC round trip.
 
+### Desktop interface (FASE 4)
+
+- Artwork palette engine (`palette/`): deterministic median cut over a 128 px downsample, swatch
+  population recovered by re-counting sampled pixels, accent scoring by saturation × mid-lightness
+  bell × prominence, tone mapping to 0.66–0.88 value, and a WCAG 2.1 loop that lightens the accent
+  until it clears 4.5:1 against the generated background. Greyscale art, corrupt files and missing
+  covers fall back to a hue derived from the cover key (FNV-1a), so the same album is always the same
+  colour. 512-entry in-memory cache, key validated as 64 hex characters before any disk access.
+- `library_cover_palette` command plus `player_tick_channel`, and a `player://tick` stream carrying
+  `{ positionMs, durationMs, playing }` at 8 Hz — dispatched by Rust so the webview never polls.
+- Strict TypeScript contracts for the whole engine surface: `PlayerStatus`, `NowPlaying`,
+  `AudioFormat`, `OutputDevice`, `TrackRequest`, the internally tagged `EngineEvent` union, the tick
+  payload and `CoverPalette`, all zod-validated at the IPC edge.
+- Zustand stores split by update frequency (`ui`, `output`, `library`, `playback.status`,
+  `playback.tick`) with exhaustive-selector subscriptions; shell and output preferences persisted and
+  versioned with a migration from the FASE 1 layout.
+- IPC hooks: `usePlayerBridge` (status + events + ticks, generation-guarded), `useScanEvents`,
+  `useArtworkPalette` and `useAlbumCoverKey` (album-scoped so skipping inside a record does not
+  re-tint the window).
+- Shell: navigable rail with live counters, top bar with scan state, routed content column with a
+  180 ms cross-fade, and a `DesktopRequired` screen for the browser build instead of fake data.
+- Player bar: artwork thumbnail, Hi-Res / Bit-perfect / Processed badge with the exact reason in the
+  tooltip, scrubber with drag preview and single-shot seek, transport cluster, output selector
+  (device, driver stack, exclusive capability, buffer size) and a dB-labelled volume control that
+  snaps to unity gain.
+- Now Playing: crossfaded artwork, palette bloom and a technical read-out of source format, device
+  format, backend, latency and xrun counters.
+- Home: editorial hero derived from the catalogue, four counters, and a recents rail that queues a
+  whole album (disc/track ordered, deterministic shuffle) through the real engine.
+- Settings: output mode/device/buffer, library roots with availability state, scan history table,
+  Discord presence configuration and ambient intensity.
+- Tests: 189 Rust tests (157 unit + 32 integration across database, engine, library, artwork,
+  Discord and palette).
+
 [0.1.0]: https://github.com/prism-audio/prism/releases/tag/v0.1.0

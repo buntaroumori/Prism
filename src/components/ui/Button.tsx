@@ -10,7 +10,8 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   icon?: LucideIcon;
   loading?: boolean;
-  children: ReactNode;
+  /** Optional: icon-only buttons carry their accessible name in `aria-label`. */
+  children?: ReactNode;
 }
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {

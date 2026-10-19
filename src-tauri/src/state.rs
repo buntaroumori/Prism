@@ -13,6 +13,7 @@ use crate::db::{self, DATABASE_FILENAME};
 use crate::discord::{DiscordConfig, DiscordService};
 use crate::error::PrismError;
 use crate::metadata::Scanner;
+use crate::palette::PaletteService;
 
 /// Canonical filesystem locations used by Prism.
 ///
@@ -74,6 +75,7 @@ pub struct AppState {
     scanner: Scanner,
     artwork: std::sync::Arc<ArtworkService>,
     discord: std::sync::Arc<DiscordService>,
+    palette: std::sync::Arc<PaletteService>,
 }
 
 impl AppState {
@@ -96,6 +98,9 @@ impl AppState {
         let scanner = Scanner::new(pool.clone());
         let artwork = std::sync::Arc::new(ArtworkService::new(pool.clone(), paths.artwork_dir())?);
         let discord = std::sync::Arc::new(DiscordService::new(std::sync::Arc::clone(&artwork)));
+        // Palettes are derived from the same files the artwork service writes,
+        // so both share the directory and neither owns the other.
+        let palette = std::sync::Arc::new(PaletteService::new(paths.artwork_dir()));
 
         // Rich presence is opt-in; a stored configuration is applied only when
         // it validates, so a broken client id cannot block startup.
@@ -126,6 +131,7 @@ impl AppState {
             scanner,
             artwork,
             discord,
+            palette,
         })
     }
 
@@ -152,6 +158,11 @@ impl AppState {
     #[must_use]
     pub fn discord(&self) -> &std::sync::Arc<DiscordService> {
         &self.discord
+    }
+
+    #[must_use]
+    pub fn palette(&self) -> &std::sync::Arc<PaletteService> {
+        &self.palette
     }
 
     #[must_use]

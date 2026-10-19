@@ -266,16 +266,74 @@ Settings; with no id the feature stays off rather than pretending to work.
 
 ## 10. Frontend rendering
 
-- Zustand stores are split by domain (shell, queue, playback, library, DSP); components subscribe with
-  atomic selectors. The 60 Hz playhead and 60 Hz FFT meter do not live in the same store slice as the
-  library list.
-- `@tanstack/react-virtual` renders only visible rows; row height is fixed per density mode, keys are
-  track ids, and no cell performs an Intl call per frame (formatters are cached).
-- The ambient canvas is a GPU layer: palette extraction happens in Rust; the WebView only animates
-  pre-composited blobs with `transform`/`opacity`.
-- Framer Motion is limited to entrances, layout transitions and the player bar; continuous animation
-  uses CSS/compositor-only properties.
-- CLS budget: 0 — the shell geometry is identical between skeleton and loaded states.
+### 10.1 State topology
+
+Five stores, split by update frequency — the split _is_ the performance design:
+
+| Store                  |      Updated at | Contents                                            |
+| :--------------------- | --------------: | :-------------------------------------------------- |
+| `uiStore`              |     user action | route, sidebar width, ambient intensity (persisted) |
+| `outputStore`          |     user action | engine mode, device id, buffer size (persisted)     |
+| `libraryStore`         |  scan / refresh | counters, roots, recent rail, scan state machine    |
+| `playbackStore.status` | transport event | engine snapshot: state, track, formats, bit-perfect |
+| `playbackStore.tick`   |        **8 Hz** | `{ positionMs, durationMs, playing }`               |
+
+The playhead lives in its own slice and its own event channel (`player://tick`,
+dispatched by Rust at 125 ms). Only the scrubber subtree subscribes to it; the
+cover, the quality badge, the device selector and the whole library never see a
+playhead update. A single store would re-render the tree eight times a second
+for two numbers.
+
+### 10.2 Palette pipeline
+
+1. `artwork` resolves the cover and writes `<cache>/artwork/<sha256>.jpg`.
+2. `palette::PaletteService` decodes it on the blocking pool, downsamples to
+   128 px, runs deterministic median cut (`color_thief`), re-counts the sampled
+   pixels to recover each swatch's true share, and scores candidates by
+   `saturation^1.15 × mid-lightness bell × prominence^0.5`.
+3. The accent is tone-mapped (saturation 0.46–0.92, value 0.66–0.88) and then
+   lightened in 2 % steps until WCAG 2.1 contrast against the generated page
+   background clears **4.5:1**. Background and surface are the same hue at
+   7.5 % and 12.5 % value, so the chrome stays OLED-dark whatever the artwork.
+4. Greyscale art, a corrupt file or a missing cover falls back to a palette
+   _derived from the cache key_ (FNV-1a → hue), so the same album is always the
+   same colour across restarts, and an outage never changes the interface.
+5. The answer is memoised (512 entries in Rust, `Map` in the renderer) and
+   applied as **six CSS custom properties on the shell root**. Components read
+   `var(--prism-accent)`; a track change writes six strings and the compositor
+   does the rest. No per-frame JS, no canvas loop.
+
+The ambient canvas itself is three blurred orbs animated with a
+`transform`-only keyframe; intensity is scaled by the artwork's mean luminance so
+a white sleeve does not wash out the window. `prefers-reduced-motion` and the
+persisted "Off" setting both collapse it to flat black.
+
+### 10.3 Shell and motion
+
+- The player bar is a flex sibling of the scroller, not an overlay: content can
+  never be hidden behind it, and the reserved height means the bar's entrance
+  cannot shift the page (CLS = 0).
+- Framer Motion is used for four things only: page cross-fade (180 ms,
+  opacity + 6 px), the player-bar slide-in, the segmented-control indicator
+  (`layoutId`) and the album cross-fade in Now Playing. Everything continuous is
+  CSS/compositor-only.
+- The shell renders one of two things, never a half-state: the desktop shell
+  when `__TAURI_INTERNALS__` exists, or a `DesktopRequired` screen explaining
+  that playback and scanning live in the Rust process. There is no browser mode
+  with fake data.
+
+### 10.4 Contracts
+
+Every Rust → TS boundary is a zod schema (`src/types/ipc.ts`), including the
+engine event union (internally tagged, discriminated on `type`) and the
+`player://tick` payload. A malformed event is dropped and logged, never written
+into a store; a malformed command result surfaces as a `contract` failure.
+
+### 10.5 Library grid (FASE 5)
+
+`@tanstack/react-virtual` renders visible rows only; row height is fixed per
+density mode, keys are track ids, and formatters are module-level constants so no
+cell allocates an `Intl` object per frame.
 
 ## 11. Error taxonomy and observability
 

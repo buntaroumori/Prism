@@ -573,6 +573,20 @@ pub async fn library_album_cover(
     Ok(asset)
 }
 
+/// Ambient palette derived from a cached cover.
+///
+/// `key` is the 64-character `cover_cache` hash returned by the cover commands,
+/// so the UI never has to send a filesystem path across IPC. When the cover is
+/// missing or has no usable chroma, the answer is a deterministic palette
+/// derived from the key itself — the shell is never left without an accent.
+#[tauri::command]
+pub async fn library_cover_palette(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<crate::palette::CoverPalette, PrismError> {
+    state.palette().palette(&key).await
+}
+
 /// Cover for the album a track belongs to (player bar).
 #[tauri::command]
 pub async fn library_track_cover(

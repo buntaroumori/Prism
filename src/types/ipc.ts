@@ -354,3 +354,157 @@ export const DiscordStatusSchema = z.object({
   showQuality: z.boolean(),
 });
 export type DiscordStatus = z.infer<typeof DiscordStatusSchema>;
+
+/* ------------------------------------------------------------------------- */
+/* FASE 4 — engine transport, devices, palette                               */
+/* ------------------------------------------------------------------------- */
+
+/** Physical sample representation, mirroring `audio::format::SampleFormat`. */
+export const SampleFormatSchema = z.enum(["s16", "s24", "s24_in32", "s32", "f32", "f64"]);
+export type SampleFormat = z.infer<typeof SampleFormatSchema>;
+
+/** One sample rate / channel layout. */
+export const AudioFormatSchema = z.object({
+  sampleRate: z.number().int().positive(),
+  channels: z.number().int().positive(),
+  sampleFormat: SampleFormatSchema,
+});
+export type AudioFormat = z.infer<typeof AudioFormatSchema>;
+
+export const PlaybackStateSchema = z.enum(["stopped", "buffering", "playing", "paused"]);
+export type PlaybackState = z.infer<typeof PlaybackStateSchema>;
+
+/** Metadata of the track loaded in the engine. */
+export const NowPlayingSchema = z.object({
+  trackId: z.string().min(1),
+  title: z.string(),
+  artist: z.string(),
+  album: z.string(),
+  path: z.string().min(1),
+  durationFrames: z.number().int().nonnegative().nullable(),
+  sourceFormat: AudioFormatSchema.nullable(),
+});
+export type NowPlaying = z.infer<typeof NowPlayingSchema>;
+
+export const BackendKindSchema = z.enum([
+  "wasapiExclusive",
+  "wasapiShared",
+  "asio",
+  "alsaHw",
+  "pipeWire",
+  "cpalShared",
+]);
+export type BackendKind = z.infer<typeof BackendKindSchema>;
+
+export const OutputModeSchema = z.enum(["auto", "exclusive", "shared", "asio"]);
+export type OutputMode = z.infer<typeof OutputModeSchema>;
+
+/** Full engine snapshot returned by `player_status`. */
+export const PlayerStatusSchema = z.object({
+  state: PlaybackStateSchema,
+  track: NowPlayingSchema.nullable(),
+  positionFrames: z.number().int().nonnegative(),
+  durationFrames: z.number().int().nonnegative().nullable(),
+  sourceFormat: AudioFormatSchema.nullable(),
+  outputFormat: AudioFormatSchema.nullable(),
+  backend: BackendKindSchema.nullable(),
+  deviceName: z.string().nullable(),
+  bitPerfect: z.boolean(),
+  dop: z.boolean(),
+  volumeDb: z.number(),
+  muted: z.boolean(),
+  latencyFrames: z.number().int().nonnegative(),
+  underruns: z.number().int().nonnegative(),
+  overruns: z.number().int().nonnegative(),
+  queueIndex: z.number().int().nonnegative(),
+  queueLen: z.number().int().nonnegative(),
+});
+export type PlayerStatus = z.infer<typeof PlayerStatusSchema>;
+
+/** Playhead projection pushed on `player://tick`. */
+export const PlayerTickSchema = z.object({
+  positionMs: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative().nullable(),
+  playing: z.boolean(),
+});
+export type PlayerTick = z.infer<typeof PlayerTickSchema>;
+
+/** One output endpoint reported by `player_devices`. */
+export const OutputDeviceSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  kind: BackendKindSchema,
+  isDefault: z.boolean(),
+  channels: z.number().int().positive(),
+  sampleRates: z.array(z.number().int().positive()),
+  sampleFormats: z.array(SampleFormatSchema),
+  supportsExclusive: z.boolean(),
+});
+export type OutputDevice = z.infer<typeof OutputDeviceSchema>;
+
+/** A track handed to `player_play`. Mirrors `audio::decoder::TrackRequest`. */
+export const TrackRequestSchema = z.object({
+  trackId: z.string().min(1),
+  title: z.string(),
+  artist: z.string(),
+  album: z.string(),
+  path: z.string().min(1),
+  startMs: z.number().int().nonnegative().nullable(),
+  endMs: z.number().int().nonnegative().nullable(),
+  replaygainTrackGainDb: z.number().nullable(),
+  replaygainTrackPeak: z.number().nullable(),
+  replaygainAlbumGainDb: z.number().nullable(),
+  replaygainAlbumPeak: z.number().nullable(),
+});
+export type TrackRequest = z.infer<typeof TrackRequestSchema>;
+
+/**
+ * Engine push events.
+ *
+ * The Rust enum is internally tagged (`#[serde(tag = "type")]`), so every
+ * payload is a plain object with a `type` discriminator — the reducer switches
+ * on it exhaustively, and an unknown variant fails closed instead of leaking a
+ * half-parsed object into the store.
+ */
+export const EngineEventSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("stateChanged"), state: PlaybackStateSchema }),
+  z.object({
+    type: z.literal("trackChanged"),
+    track: NowPlayingSchema,
+    index: z.number().int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal("deviceChanged"),
+    device: z.string(),
+    backend: BackendKindSchema,
+    format: AudioFormatSchema,
+    bit_perfect: z.boolean(),
+  }),
+  z.object({ type: z.literal("outputError"), message: z.string() }),
+  z.object({ type: z.literal("underrun"), total: z.number().int().nonnegative() }),
+]);
+export type EngineEvent = z.infer<typeof EngineEventSchema>;
+
+/** One quantised artwork swatch. */
+export const SwatchSchema = z.object({
+  hex: z.string().length(7),
+  population: z.number().min(0).max(1),
+  lightness: z.number().min(0).max(1),
+});
+export type Swatch = z.infer<typeof SwatchSchema>;
+
+/** Palette extracted from (or derived for) the current cover. */
+export const CoverPaletteSchema = z.object({
+  key: z.string().length(64),
+  source: z.enum(["cover", "derived"]),
+  background: z.string().length(7),
+  surface: z.string().length(7),
+  accent: z.string().length(7),
+  accentSoft: z.string().length(7),
+  highlight: z.string().length(7),
+  highlightAlt: z.string().length(7),
+  contrast: z.number().min(1),
+  averageLightness: z.number().min(0).max(1),
+  swatches: z.array(SwatchSchema),
+});
+export type CoverPalette = z.infer<typeof CoverPaletteSchema>;

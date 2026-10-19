@@ -4,6 +4,12 @@ import { ZodError, z, type ZodType } from "zod";
 import {
   AlbumRowSchema,
   AppInfoSchema,
+  CoverPaletteSchema,
+  EngineEventSchema,
+  OutputDeviceSchema,
+  PlayerStatusSchema,
+  PlayerTickSchema,
+  TrackRequestSchema,
   ArtistRowSchema,
   CoverAssetSchema,
   DiscordStatusSchema,
@@ -23,12 +29,18 @@ import {
   type AppInfo,
   type ArtistRow,
   type CoverAsset,
+  type CoverPalette,
+  type EngineEvent,
   type DiscordConfig,
   type DiscordStatus,
   type Facets,
   type GlobalSearch,
   type LibraryRoot,
   type LibraryStats,
+  type OutputDevice,
+  type OutputMode,
+  type PlayerStatus,
+  type PlayerTick,
   type PrismErrorPayload,
   type RuntimeHealth,
   type ScanError,
@@ -36,6 +48,7 @@ import {
   type ScanRun,
   type ScanStatus,
   type TrackQuery,
+  type TrackRequest,
   type TrackRow,
   type TrackSort,
 } from "@/types/ipc";
@@ -110,6 +123,15 @@ export async function command<T>(
 export async function commandVoid(name: string): Promise<void> {
   try {
     await invoke(name);
+  } catch (error) {
+    throw new IpcFailure(toPayload(error));
+  }
+}
+
+/** Invoke a command with arguments that returns unit (`null` on the wire). */
+async function commandVoidWithArgs(name: string, args: Record<string, unknown>): Promise<void> {
+  try {
+    await invoke(name, args);
   } catch (error) {
     throw new IpcFailure(toPayload(error));
   }
@@ -192,6 +214,9 @@ export const libraryApi = {
   globalSearch: (text: string, limit?: number): Promise<GlobalSearch> =>
     command("library_global_search", GlobalSearchSchema, { text, limit: limit ?? null }),
 
+  coverPalette: (key: string): Promise<CoverPalette> =>
+    command("library_cover_palette", CoverPaletteSchema, { key }),
+
   albumCover: (albumId: string): Promise<CoverAsset> =>
     command("library_album_cover", CoverAssetSchema, { albumId }),
   trackCover: (trackId: string): Promise<CoverAsset> =>
@@ -206,9 +231,51 @@ export const discordApi = {
   clear: (): Promise<boolean> => command("discord_clear", Z_BOOLEAN),
 };
 
+/**
+ * Transport and output control.
+ *
+ * Every call is a thin pass-through to the engine supervisor: the audio thread
+ * owns the device, so the promise resolves as soon as the command is queued and
+ * the resulting state arrives on `player://event`.
+ */
+export const playerApi = {
+  status: (): Promise<PlayerStatus> => command("player_status", PlayerStatusSchema),
+  play: (tracks: TrackRequest[], index: number): Promise<void> =>
+    commandVoidWithArgs("player_play", {
+      tracks: tracks.map((track) => TrackRequestSchema.parse(track)),
+      index,
+    }),
+  pause: (): Promise<void> => commandVoid("player_pause"),
+  resume: (): Promise<void> => commandVoid("player_resume"),
+  stop: (): Promise<void> => commandVoid("player_stop"),
+  seek: (frame: number): Promise<void> => commandVoidWithArgs("player_seek", { frame }),
+  setVolumeDb: (volumeDb: number): Promise<void> =>
+    commandVoidWithArgs("player_set_volume", { volumeDb }),
+  setMuted: (muted: boolean): Promise<void> => commandVoidWithArgs("player_set_muted", { muted }),
+  setOutput: (mode: OutputMode, device: string | null, bufferFrames: number): Promise<void> =>
+    commandVoidWithArgs("player_set_output", { mode, device, bufferFrames }),
+  setRamPlay: (enabled: boolean): Promise<void> =>
+    commandVoidWithArgs("player_set_ram_play", { enabled }),
+  devices: (mode: OutputMode): Promise<OutputDevice[]> =>
+    command("player_devices", z.array(OutputDeviceSchema), { mode }),
+};
+
 /** Event channel names, mirrored from the Rust constants. */
 export const EVENT_CHANNELS = {
   scanProgress: "library://scan-progress",
   scanComplete: "library://scan-complete",
   playerEvent: "player://event",
+  playerTick: "player://tick",
 } as const;
+
+/** Parse an engine push event, returning `null` instead of throwing. */
+export function parseEngineEvent(payload: unknown): EngineEvent | null {
+  const parsed = EngineEventSchema.safeParse(payload);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Parse a playhead tick. */
+export function parsePlayerTick(payload: unknown): PlayerTick | null {
+  const parsed = PlayerTickSchema.safeParse(payload);
+  return parsed.success ? parsed.data : null;
+}

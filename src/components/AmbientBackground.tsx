@@ -1,28 +1,74 @@
 import type { JSX } from "react";
+
+import type { CoverPalette } from "@/types/ipc";
+
+interface AmbientBackgroundProps {
+  palette: CoverPalette | null;
+  /** `off` paints the OLED flat colour only. */
+  intensity: "off" | "subtle" | "full";
+}
+
 /**
- * Static ambient canvas for the shell.
+ * Ambient canvas.
  *
- * FASE 1 ships a GPU-cheap composition of blurred gradient orbs (pure CSS:
- * compositor-only `transform`/`opacity` animation, zero main-thread work).
- * FASE 4 replaces the colour source with palette extraction from the current
- * artwork, keeping this exact DOM structure so the WebGL/Canvas upgrade does
- * not cause a layout shift.
+ * Three blurred, palette-tinted orbs composited on the GPU. Nothing animates on
+ * the main thread: the drift is a CSS transform animation, the tint is three
+ * custom properties, and the only per-track cost is a style write on the
+ * container. That keeps the FASE 6 idle-CPU budget reachable with a full-screen
+ * background effect, which a per-frame canvas loop would not.
+ *
+ * The orbs are scaled by the artwork's mean lightness: a white album sleeve
+ * produces the same bloom as a dark one without washing the interface out.
  */
-export function AmbientBackground(): JSX.Element {
+export function AmbientBackground({ palette, intensity }: AmbientBackgroundProps): JSX.Element {
+  if (intensity === "off") {
+    return <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-oled-950" />;
+  }
+
+  const strength = intensity === "subtle" ? 0.45 : 1;
+  const lift = palette === null ? 0.5 : 0.35 + palette.averageLightness * 0.9;
+  const accent = palette?.accent ?? "var(--prism-accent)";
+  const highlight = palette?.highlight ?? "var(--prism-highlight)";
+  const alt = palette?.highlightAlt ?? "var(--prism-highlight-alt)";
+
+  // Opacity is derived, not fixed: a bright cover gets less pigment because the
+  // same alpha over a lighter base reads much stronger.
+  const primary = (0.3 * strength * (0.55 + (1 - lift) * 0.75)).toFixed(3);
+  const secondary = (0.2 * strength * (0.55 + (1 - lift) * 0.8)).toFixed(3);
+  const tertiary = (0.16 * strength).toFixed(3);
+
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
       <div className="absolute inset-0 bg-oled-950" />
-      <div className="absolute -top-[28rem] left-[18%] h-[52rem] w-[52rem] animate-breathe rounded-full bg-accent/[0.16] blur-[160px]" />
+
       <div
-        className="absolute top-[10%] -right-[18rem] h-[44rem] w-[44rem] animate-breathe rounded-full bg-spectrum-pink/[0.075] blur-[150px]"
-        style={{ animationDelay: "-3s" }}
+        className="ambient-orb absolute -top-[26rem] left-[12%] h-[54rem] w-[54rem] rounded-full blur-[170px]"
+        style={{
+          background: accent,
+          opacity: Number(primary),
+          animationDelay: "-2s",
+        }}
       />
       <div
-        className="absolute -bottom-[26rem] left-[30%] h-[46rem] w-[46rem] animate-breathe rounded-full bg-spectrum-cyan/[0.05] blur-[170px]"
-        style={{ animationDelay: "-6s" }}
+        className="ambient-orb absolute top-[6%] -right-[20rem] h-[46rem] w-[46rem] rounded-full blur-[160px]"
+        style={{
+          background: highlight,
+          opacity: Number(secondary),
+          animationDelay: "-7s",
+        }}
       />
-      <div className="absolute inset-0 bg-[radial-gradient(120%_80%_at_50%_0%,transparent_20%,rgb(8_8_10/0.55)_70%,rgb(8_8_10/0.9)_100%)]" />
-      <div className="grain absolute inset-0 opacity-[0.035] mix-blend-overlay" />
+      <div
+        className="ambient-orb absolute -bottom-[28rem] left-[26%] h-[50rem] w-[50rem] rounded-full blur-[180px]"
+        style={{
+          background: alt,
+          opacity: Number(tertiary),
+          animationDelay: "-11s",
+        }}
+      />
+
+      {/* Vignette: keeps the outer 15 % of the window readable against the orbs. */}
+      <div className="absolute inset-0 bg-[radial-gradient(120%_85%_at_50%_0%,transparent_18%,rgb(8_8_10/0.6)_72%,rgb(8_8_10/0.92)_100%)]" />
+      <div className="grain absolute inset-0 opacity-[0.03] mix-blend-overlay" />
     </div>
   );
 }
