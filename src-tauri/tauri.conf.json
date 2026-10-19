@@ -1,0 +1,97 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Prism",
+  "version": "0.1.0",
+  "identifier": "io.prism.player",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Prism",
+        "width": 1440,
+        "height": 900,
+        "minWidth": 1040,
+        "minHeight": 680,
+        "center": true,
+        "resizable": true,
+        "maximizable": true,
+        "minimizable": true,
+        "closable": true,
+        "fullscreen": false,
+        "visible": false,
+        "decorations": true,
+        "theme": "Dark",
+        "backgroundColor": "#08080A",
+        "dragDropEnabled": true,
+        "zoomHotkeysEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob: https://is1-ssl.mzstatic.com https://*.mzstatic.com https://coverartarchive.org https://*.archive.org; media-src 'self' asset: http://asset.localhost blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://itunes.apple.com https://musicbrainz.org https://coverartarchive.org https://lrclib.net; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost data: blob: https:; media-src 'self' asset: http://asset.localhost blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420 https://itunes.apple.com https://musicbrainz.org https://coverartarchive.org https://lrclib.net; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'",
+      "freezePrototype": true,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/**", "$APPCACHE/**"]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi", "appimage", "deb"],
+    "publisher": "Prism Audio",
+    "copyright": "Copyright © 2026 Prism Contributors",
+    "category": "Music",
+    "license": "MIT",
+    "shortDescription": "Audiophile-grade local music player",
+    "longDescription": "Prism is an open-source, bit-perfect local music player for Windows and Linux. It pairs a Rust audio engine (WASAPI Exclusive, ASIO, PipeWire, ALSA, DSD over PCM, gapless playback, parametric EQ, EBU R128 loudness normalisation) with a fluid, keyboard-first interface designed for libraries with hundreds of thousands of tracks.",
+    "homepage": "https://github.com/prism-audio/prism",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "allowDowngrades": false,
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "installMode": "both",
+        "displayLanguageSelector": true,
+        "languages": ["English", "Spanish", "German", "French", "Japanese"],
+        "compression": "lzma",
+        "startMenuFolder": "Prism"
+      },
+      "wix": {
+        "language": ["en-US", "es-ES", "de-DE", "fr-FR", "ja-JP"]
+      }
+    },
+    "linux": {
+      "deb": {
+        "section": "sound",
+        "priority": "optional",
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0 | libgtk-3-0t64",
+          "libasound2 | libasound2t64",
+          "libpipewire-0.3-0 | libpipewire-0.3-0t64"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
+  },
+  "plugins": {}
+}

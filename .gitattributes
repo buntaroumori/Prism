@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.woff2 binary
+*.flac binary
+
+Cargo.lock merge=binary
+pnpm-lock.yaml merge=binary

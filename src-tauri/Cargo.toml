@@ -1,0 +1,98 @@
+[package]
+name = "prism"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Prism — an audiophile-grade local music player for Windows and Linux"
+default-run = "prism"
+
+[lib]
+name = "prism_lib"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "prism"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+# --- Desktop shell -----------------------------------------------------------
+# `protocol-asset` is required by `app.security.assetProtocol` in tauri.conf.json:
+# it lets the WebView display extracted cover art through asset://localhost
+# without copying image bytes over IPC.
+tauri = { workspace = true, features = ["protocol-asset"] }
+tauri-plugin-dialog.workspace = true
+tauri-plugin-opener.workspace = true
+tauri-plugin-single-instance.workspace = true
+
+# --- Core ---------------------------------------------------------------------
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+time.workspace = true
+uuid.workspace = true
+parking_lot.workspace = true
+
+# --- Persistence ----------------------------------------------------------------
+sqlx.workspace = true
+
+# --- Audio engine (wired up in FASE 2) --------------------------------------------
+cpal.workspace = true
+symphonia.workspace = true
+rubato.workspace = true
+ringbuf.workspace = true
+crossbeam-channel.workspace = true
+
+# --- Metadata (wired up in FASE 3) -----------------------------------------------
+lofty.workspace = true
+
+# --- Library scanning & artwork -----------------------------------------------------
+walkdir.workspace = true
+rayon.workspace = true
+palette.workspace = true
+color-thief.workspace = true
+image.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+# --- Networking (Discord RPC artwork pipeline, FASE 3) -------------------------------
+reqwest.workspace = true
+
+# --- Extensibility (opt-in; the runtime lands in FASE 5) ------------------------------
+mlua = { workspace = true, optional = true }
+wasmtime = { workspace = true, optional = true }
+
+# --- Platform backends ------------------------------------------------------------------
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa.workspace = true
+pipewire.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[features]
+default = []
+# Embedded Lua 5.4 plugin runtime (mlua vendored — no system Lua required).
+lua-plugins = ["dep:mlua"]
+# WebAssembly plugin runtime (wasmtime, Cranelift JIT).
+wasm-plugins = ["dep:wasmtime"]
+# DevTools in release builds (diagnostics only; never enabled in CI artifacts).
+devtools = ["tauri/devtools"]
+
+[lints]
+workspace = true

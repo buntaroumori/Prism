@@ -1,0 +1,38 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      rust-minor:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # Major upgrades of the audio/shell stack are deliberate migrations,
+      # never automatic: they change device behaviour and must be validated
+      # against hardware.
+      - dependency-name: "tauri"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "cpal"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "symphonia"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      frontend-minor:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly

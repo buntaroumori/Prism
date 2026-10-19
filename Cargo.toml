@@ -1,0 +1,179 @@
+# =============================================================================
+#  Prism — Audiophile Music Player
+#  Rust workspace root
+#
+#  Edition 2024 + resolver "3" (MSRV 1.88). Every dependency is pinned at the
+#  workspace level so that `src-tauri` (and future crates such as
+#  `prism-plugin-sdk`) resolve to exactly one semver-compatible version.
+#  `Cargo.lock` is committed: this is an application, not a library.
+# =============================================================================
+
+[workspace]
+members = ["src-tauri"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+authors = ["Prism Contributors"]
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+license-file = "LICENSE"
+repository = "https://github.com/prism-audio/prism"
+homepage = "https://prism-audio.dev"
+documentation = "https://github.com/prism-audio/prism/tree/main/docs"
+
+[workspace.dependencies]
+# --- Tauri v2 ---------------------------------------------------------------
+tauri = { version = "2", features = [] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+
+# --- Serialization & errors --------------------------------------------------
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+
+# --- Async runtime & telemetry ----------------------------------------------
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "fs", "sync", "time", "io-util", "process"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+tracing-appender = "0.2"
+
+# --- Database ----------------------------------------------------------------
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros", "migrate", "json", "time"] }
+
+# --- Audio I/O ---------------------------------------------------------------
+cpal = "0.15"
+
+# --- Decoding ----------------------------------------------------------------
+symphonia = { version = "0.5", default-features = false, features = [
+    "flac",
+    "alac",
+    "wav",
+    "aiff",
+    "ogg",
+    "vorbis",
+    "mp3",
+    "pcm",
+    "mkv",
+] }
+
+# --- DSP ---------------------------------------------------------------------
+rubato = "0.16"
+
+# --- Metadata ----------------------------------------------------------------
+lofty = "0.22"
+
+# --- Library scanning --------------------------------------------------------
+walkdir = "2"
+rayon = "1"
+
+# --- Artwork / colour extraction ---------------------------------------------
+palette = { version = "0.7", default-features = false, features = ["std"] }
+color-thief = "0.2"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+
+# --- Networking ---------------------------------------------------------------
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip"] }
+
+# --- Misc primitives -----------------------------------------------------------
+sha2 = "0.10"
+hex = "0.4"
+uuid = { version = "1", features = ["v4", "serde"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "serde"] }
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+ringbuf = "0.4"
+libc = "0.2"
+
+# --- Extensibility (opt-in via `lua-plugins` / `wasm-plugins` features) --------
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
+wasmtime = { version = "26", default-features = true }
+
+# --- Platform-specific -----------------------------------------------------------
+[workspace.dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+]
+
+[workspace.dependencies.alsa]
+version = "0.9"
+
+[workspace.dependencies.pipewire]
+version = "0.8"
+
+# --- Dev -----------------------------------------------------------------------
+[workspace.dependencies.tempfile]
+version = "3"
+
+# =============================================================================
+#  Lints — deny-by-default culture without blocking day-to-day development.
+#  `unsafe_code` is only allowed in the audio backend boundary (Phase 2), and
+#  even there every block must be justified (`// SAFETY:`).
+# =============================================================================
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_debug_implementations = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+too_many_lines = "allow"
+cargo_common_metadata = "allow"
+multiple_crate_versions = "allow"
+
+# =============================================================================
+#  Release profile — tuned for binary size + runtime throughput.
+#
+#  * LTO "fat" lets LLVM inline across the decoder/DSP crate boundary, which is
+#    worth 5-12 % in the hot mixing loop at the cost of a slower link step.
+#  * panic = "abort": no unwinding machinery; every panic is a hard crash, so
+#    audio threads use explicit error channels instead of relying on unwind.
+#  * codegen-units = 1: maximal optimisation scope.
+#  * strip = "symbols": symbols are published separately as `.sym` artifacts by
+#    the release workflow when crash reporting is enabled.
+# =============================================================================
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = 0
+incremental = false
+
+# Profiling profile: same optimisations, but keeps DWARF for `perf`/`flamegraph`
+# (see docs/PERFORMANCE.md). Use `cargo flamegraph --profile profiling`.
+[profile.profiling]
+inherits = "release"
+debug = 1
+strip = "none"
+
+# Fast local builds for iterative UI/backend work (never shipped).
+[profile.dev]
+opt-level = 0
+debug = 1
+incremental = true
+
+# Dependencies are always built with optimisations, even in dev: symphonia and
+# rubato are unusable at opt-level 0 and would make `tauri dev` drop audio.
+[profile.dev.package."*"]
+opt-level = 2

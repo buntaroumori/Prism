@@ -1,0 +1,231 @@
+name: Release
+
+# Native, reproducible builds for Windows and Linux triggered by a semver tag:
+#   git tag -a v0.1.0 -m "Release v0.1.0" && git push origin v0.1.0
+#
+# The pipeline is split into a quality gate (frontend contract, Rust lints and
+# database integration tests), a native bundle matrix and a publishing job that
+# generates structured release notes from Conventional Commits.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  NODE_VERSION: "20.19.0"
+  PNPM_VERSION: "10.34.7"
+  RUST_VERSION: "1.88.0"
+
+jobs:
+  quality:
+    name: Quality gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libasound2-dev libpipewire-0.3-dev libxdo-dev \
+            libayatana-appindicator3-dev libclang-dev
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify version consistency
+        run: node scripts/check-version.mjs
+
+      - name: Frontend typecheck, lint and format
+        run: pnpm check
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Validate SQLite schema and FTS5 behaviour
+        run: python3 scripts/validate_schema.py
+
+      - name: Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Rust lints (deny warnings)
+        run: cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
+
+      - name: Rust integration tests
+        run: cargo test --all-targets
+
+  bundle:
+    name: Bundle (${{ matrix.label }})
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+            platform: windows
+          - os: ubuntu-24.04
+            label: linux-x64
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libasound2-dev libpipewire-0.3-dev libxdo-dev \
+            libayatana-appindicator3-dev libclang-dev libfuse2t64
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: bundle-${{ matrix.label }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify version consistency
+        run: node scripts/check-version.mjs
+
+      - name: Build native bundles
+        run: pnpm tauri build
+
+      - name: Stage Windows artifacts
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p artifacts
+          cp src-tauri/target/release/prism.exe "artifacts/Prism_${VERSION}_x64_portable.exe"
+          cp src-tauri/target/release/bundle/msi/*.msi "artifacts/Prism_${VERSION}_x64.msi"
+          cp src-tauri/target/release/bundle/nsis/*.exe "artifacts/Prism_${VERSION}_x64_setup.exe"
+          ls -lh artifacts
+
+      - name: Stage Linux artifacts
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p artifacts
+          cp src-tauri/target/release/bundle/appimage/*.AppImage "artifacts/Prism_${VERSION}_amd64.AppImage"
+          cp src-tauri/target/release/bundle/deb/*.deb "artifacts/Prism_${VERSION}_amd64.deb"
+          chmod +x artifacts/*.AppImage
+          ls -lh artifacts
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: prism-${{ matrix.label }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (full history for the changelog)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify tag matches manifests
+        run: node scripts/check-version.mjs "${GITHUB_REF_NAME}"
+
+      - name: Download bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate structured changelog
+        run: node scripts/generate-changelog.mjs > RELEASE_NOTES.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Prism ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/*.msi
+            artifacts/*.exe
+            artifacts/*.AppImage
+            artifacts/*.deb
+            artifacts/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
