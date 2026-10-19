@@ -1,7 +1,7 @@
 # FASE 5 — Virtualised library, spectrum, lyrics and the plugin runtime
 
 **Status:** delivered, awaiting approval
-**Commit:** _(recorded on delivery)_
+**Commits:** `49d233d` (phase) · `4d1ea78` (typed Lua settings + example plugin)
 **Scope:** the four FASE 5 deliverables — a 500 000-row virtualised track list, a GPU-friendly
 31-band FFT visualiser, synchronised LRC lyrics with a karaoke cursor, a modular Now Playing layout,
 and the Lua / WebAssembly plugin runtime with its configuration surface.

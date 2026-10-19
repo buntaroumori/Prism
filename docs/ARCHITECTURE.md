@@ -255,14 +255,28 @@ Settings; with no id the feature stays off rather than pretending to work.
 
 ## 9. Plugin runtime
 
-- **Lua 5.4** (`mlua`, vendored) for DSP processors, scrobblers and fetchers; **wasmtime** for
-  untrusted visualisers.
-- Events are delivered from a dedicated thread; each plugin gets an instruction/epoch budget per
-  callback. Panics/traps are isolated and reported to the plugin manager.
-- The host API is capability-based: a plugin declares `dsp`, `library.read`, `network` or `ui.panel`;
-  undeclared capabilities fail closed. No plugin receives raw filesystem or device handles.
-- DSP plugins operate on interleaved f32 blocks with a maximum block size; the host validates sample
-  bounds before and after the call.
+Two opt-in sandboxes behind Cargo features (`lua-plugins`, `wasm-plugins`); the default build ships
+neither, and Settings says so instead of failing at load time.
+
+- **Lua 5.4** (`mlua`, vendored — no system Lua) and **WebAssembly** (`wasmtime` 26, Cranelift, no
+  WASI). One interpreter/store per plugin, never shared.
+- **Capabilities are declared, not implied.** `log`, `notify`, `player:read` and `player:control` are
+  listed in `plugin.toml`; a host call without its capability fails closed with an error that names
+  the missing one. There is no filesystem, process or network handle in either sandbox.
+- **Budgets:** Lua gets 16 MiB of memory and 20 M VM instructions per call (checked every 10 000 by a
+  VM hook); WebAssembly gets 64 MiB of linear memory and 200 M fuel per call. Exceeding either raises
+  a normal error, so a runaway plugin cannot hang the dispatcher — measured by tests that abort a
+  `while true do end` plugin and a `(loop (br 0))` module.
+- **Failure policy:** a plugin that errors is disabled for the session, and the reason is stored on
+  its descriptor for the settings panel. Playback never depends on a plugin.
+- **Dispatch:** the same engine broadcast that feeds Discord presence also feeds the plugin manager,
+  so plugins see transport truth even when the window is hidden.
+- **Storage:** `settings` rows `plugins.disabled` and `plugin.config.<id>`; configuration is validated
+  against the manifest schema on write and reconciled on load (a plugin update can change its own
+  schema without stranding the user on an invalid value).
+
+DSP-block processing and `library.read`/`network` capabilities are planned for the plugin API v2; v1
+covers what is implemented above, and nothing in the UI claims otherwise.
 
 ## 10. Frontend rendering
 
@@ -329,11 +343,53 @@ engine event union (internally tagged, discriminated on `type`) and the
 `player://tick` payload. A malformed event is dropped and logged, never written
 into a store; a malformed command result surfaces as a `contract` failure.
 
-### 10.5 Library grid (FASE 5)
+### 10.5 The 500 000-row list
 
-`@tanstack/react-virtual` renders visible rows only; row height is fixed per
-density mode, keys are track ids, and formatters are module-level constants so no
-cell allocates an `Intl` object per frame.
+The list is **paged, never materialised**. `useTrackWindow` owns a cache object per query
+(`pages`, `inflight`, `center`), requests 500-row pages — the backend's maximum — for the indices the
+virtualiser is about to paint, and keeps twelve pages (6 000 rows, ~3 MB), evicting the ones farthest
+from the viewport first. A new query swaps the cache object during render, so a response that arrives
+late lands in a cache nobody reads instead of overwriting the current results.
+
+`@tanstack/react-virtual` maps scroll position to indices; rows are a fixed 52 px, positioned with a
+single `translateY`, overscanned by 12 and contained with `contain: strict`. The DOM holds 30–60 rows
+whatever the library size. Skeleton rows use the same height, so a page arriving never moves the list
+(CLS = 0). "Play from here" queues the page that contains the row, because a 500 000-entry queue
+would pin the whole catalogue in the engine's memory and in IPC.
+
+### 10.6 Spectrum path
+
+```
+decoder → DSP → apply_gain → [Analyzer::push] → ring → device callback
+```
+
+The FFT runs in Rust on the supervisor's **producer** thread, on the block that was just decoded —
+never a second read of the file, never in the device callback. 2 048 points, Hann window, 31
+log-spaced bands from 20 Hz to 0.98 × Nyquist, peak per band, −80 dBFS floor, attack 0.55 / release
+0.14. A sample-rate change invalidates the window rather than reinterpreting old samples at a new
+clock.
+
+The webview receives `visualiser://frame` at 60 Hz (~450 bytes) and paints a canvas on
+`requestAnimationFrame`, interpolating between frames: on-screen motion runs at the display rate
+(120 Hz included) while the IPC rate stays at 60. The tap is reference-counted in the frontend, so an
+unmounted visualiser costs the audio thread nothing. Frames never touch React state.
+
+### 10.7 Lyrics
+
+Embedded `USLT` → sidecar `.lrc` → empty, with a miss never cached (adding a `.lrc` and pressing
+refresh always shows it) and sidecar rows re-validated against their path. The parser accepts the
+dialects that exist in the wild: 1–3 fraction digits, `mm:ss:ff`, several timestamps per line,
+metadata tags, BOM/CRLF, unsorted input and `[offset:]` in both signs (positive delays). The karaoke
+cursor is a binary search over timestamps on every playhead tick; manual scrolling suspends
+auto-follow for four seconds.
+
+### 10.8 Modular Now Playing
+
+`useLayoutStore` holds an ordered module list (`artwork`, `lyrics`, `spectrum`, `technical`, `queue`)
+with three presets, persisted and migrated. Editing a preset makes the layout `custom`; at least one
+module always remains. Modules are real panels with their own data source, so removing one removes its
+work — a hidden spectrum releases the audio tap, a hidden lyrics panel stops fetching. Reordering
+animates with Framer Motion `layout` (transform-only) and honours `prefers-reduced-motion`.
 
 ## 11. Error taxonomy and observability
 
