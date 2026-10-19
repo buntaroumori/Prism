@@ -1,7 +1,7 @@
 # Prism — Architecture
 
-> Status: the persistence, IPC, logging and shell layers are implemented (FASE 1).
-> The audio engine (FASE 2), catalogue workers (FASE 3), full interface (FASE 4) and plugin runtime
+> Status: persistence, IPC, logging, shell (FASE 1) and the complete audio engine (FASE 2) are
+> implemented. Catalogue workers (FASE 3), the full interface (FASE 4) and the plugin runtime
 > (FASE 5) are specified here as the binding target architecture — every later module lands against
 > these contracts rather than improvising around them.
 
@@ -14,9 +14,9 @@ A single native process hosts everything; there is no sidecar binary to keep ali
 | **UI / event loop** | Tauri, WebView, window management                      | Never touches audio buffers; commands are `async` and return quickly                      |
 | **Command workers** | tokio multi-thread runtime                             | All SQL, filesystem and HTTP work; bounded by the pool                                    |
 | **Scanner**         | dedicated rayon pool                                   | `walkdir` producer → parallel metadata readers → single SQL writer                        |
-| **Decode A/B**      | two cooperating threads                                | Pre-roll the next track while the current one plays (gapless)                             |
-| **Audio callback**  | OS real-time thread owned by cpal/WASAPI/ASIO/PipeWire | **No allocation, no locks, no syscalls, no logging.** Only ring-buffer reads and DSP math |
-| **DSP worker**      | high-priority non-RT thread                            | Resampling and EQ run ahead of the callback, feeding a lock-free ring buffer              |
+| **Supervisor**      | one thread, `prism` names it                           | Owns the decoder, the DSP chain, the playhead and the device handle; the only writer of the ring |
+| **Prefetch worker** | one thread (`prism-prefetch`)                          | Prepares track _N+1_ while track _N_ plays (gapless)                                      |
+| **Audio callback**  | OS real-time thread owned by cpal/WASAPI/ASIO/PipeWire | **No allocation, no locks, no syscalls, no logging.** Only ring-buffer reads and format conversion |
 | **Discord RPC**     | tokio task                                             | Never blocks playback; failures are retried with exponential backoff                      |
 | **Plugin host**     | sandboxed Lua / wasmtime instance                      | Event-driven, CPU- and memory-budgeted, cannot touch the filesystem directly              |
 
@@ -27,67 +27,121 @@ a DAC disappeared.
 
 ## 2. Audio output layer
 
-| Platform | Backend  | Mode          | Notes                                                                                |
-| :------- | :------- | :------------ | :----------------------------------------------------------------------------------- |
-| Windows  | WASAPI   | Exclusive     | `AUDCLNT_SHAREMODE_EXCLUSIVE`, event-driven, device clock; bypasses the system mixer |
-| Windows  | WASAPI   | Shared        | Fallback with format negotiation; mixer bypass impossible by definition              |
-| Windows  | ASIO     | Native        | Direct driver access for pro interfaces; per-driver buffer size control              |
-| Linux    | PipeWire | Native client | Low-latency graph node, explicit sample format negotiation                           |
-| Linux    | ALSA     | Direct `hw:`  | Bit-perfect passthrough, bypasses PulseAudio/PipeWire entirely                       |
+### Backends
 
-Device discovery is dynamic. A hot-swap (USB DAC unplugged mid-track) follows this sequence:
+| Platform | Backend | Mode | Implementation | Exclusive |
+| :------- | :------ | :--- | :------------- | :-------- |
+| Windows | `WasapiExclusive` | Exclusive | `windows` 0.58 COM: `IMMDeviceEnumerator` → `IAudioClient::Initialize` with `AUDCLNT_SHAREMODE_EXCLUSIVE`, event-driven (`hnsPeriodicity = 0`) | yes |
+| Windows | `WasapiShared` | Shared | cpal WASAPI host; the graph format is the device format | no |
+| Windows | `Asio` | Native | cpal ASIO host behind the opt-in `asio` feature (needs the Steinberg SDK) | yes |
+| Windows | `CpalShared` | Shared | System default host, last-resort fallback | no |
+| Linux | `AlsaHw` | Raw `hw:` | `alsa` 0.9 `snd_pcm_writei` loop on a dedicated thread; dmix and PulseAudio are bypassed | yes |
+| Linux | `PipeWire` | Native graph node | `pw_stream` with `RT_PROCESS`, format negotiation through the SPA pod | no |
+| Linux | `CpalShared` | Shared | cpal ALSA host on `default` | no |
 
-1. callback returns silence and raises `DeviceError` via an atomic flag;
-2. the supervisor stops the stream and marks the engine `Suspended`;
-3. a watcher waits for device topology changes (WASAPI notifications / PipeWire registry events /
-   ALSA card enumeration);
-4. when the previous device or its default replacement returns, the clock is rebuilt, the decoder
-   seeks to the exact sample position and playback resumes with a short fade-in.
+`OutputMode` (`Auto`, `Exclusive`, `Shared`, `Asio`) is a *preference*, not a promise. `open_sink`
+walks the candidate backends in order and returns the first one that negotiates; `Auto` therefore
+degrades from exclusive to mixed output on its own, and a configuration error never leaves the user
+without sound. Selecting an endpoint pins its driver stack: an `alsa-hw:` id never silently opens
+PipeWire.
 
-The UI receives `device_lost` / `device_restored` events; the queue is never cleared.
+### Negotiation and commit
+
+Opening a device is split in two so the DAC never starts on an empty buffer:
+
+1. **`negotiate(device, desired_format, buffer_frames)`** answers with a `Negotiation`: the concrete
+   endpoint, the exact format the clock will run at, the period size, the ring capacity and the
+   driver latency. Exclusive backends honour the requested format or fail; mixed backends are
+   allowed to answer with their graph format.
+2. The supervisor creates the lock-free ring at `Negotiation::format.channels`, builds the
+   `GaplessPlayer` and the DSP chain for that exact output format, and primes several periods.
+3. **`start(negotiation, consumer, refill, stats)`** commits: it spawns the real-time thread and
+   returns an `OutputSink`. Only then does the supervisor call `OutputSink::start`.
+
+### Synchronisation
+
+The device thread pulls from a `ringbuf` SPSC ring of interleaved `f32` frames at the device rate.
+It never locks, allocates, syscalls or logs. When it consumes a buffer it calls
+`RefillSignal::request()`, which sets a flag and unparks the pump thread — `Thread::unpark`
+allocates nothing and never blocks, so it is safe inside a real-time callback. Requests coalesce,
+so a burst of wake-ups costs one pump iteration.
+
+The same object carries liveness: a driver that dies (WASAPI `AUDCLNT_E_DEVICE_INVALIDATED`,
+ALSA `Disconnected`, PipeWire `StreamState::Error`) calls `RefillSignal::close()`. The supervisor
+sees `!is_open()` on its next pump, tears the endpoint down and rebuilds it — the process never
+aborts because a DAC disappeared, and the queue is never cleared.
+
+### Format renegotiation
+
+An exclusive endpoint owns the clock, so a mixed-rate queue is played bit-perfectly by reopening
+the device at every rate change. The supervisor detects the boundary inside a decoded block, keeps
+the outgoing track's tail, drops at most one period of the incoming track, and rebuilds the device
+and player at the new native rate. Mixed endpoints are locked to the graph rate instead, and the
+DSP chain resamples — which is why `bitPerfect` is false there by construction.
 
 ## 3. Bit-perfect path
 
-`file bytes → decoder (integer samples where possible) → DSP graph (bypassable) → ring buffer → OS
-audio endpoint`.
+`file bytes → decoder → DSP chain (bypassable) → ring → endpoint`
 
-- Float conversion only occurs inside DSP modules that require it; if EQ, crossfeed, ReplayGain and
-  resampling are all disabled, PCM samples reach the endpoint untouched.
-- The engine refuses to open an output stream that would force a hidden resample; instead it exposes
-  the limitation as a UI badge ("device does not accept 96 kHz") and offers an explicit resampler.
-- DSD is transmitted either as native DSD (ASIO DSD, PipeWire DSD) or as DoP: 1-bit groups packed
-  into 24-bit PCM frames with the `0x05/0xFA` marker, at 176.4 kHz (DSD64), 352.8 kHz (DSD128) and
-  705.6 kHz (DSD256). A DoP stream is never passed through EQ or volume.
+`EngineStatus::bit_perfect` is true only when **all** of the following hold, checked live:
+
+- the sink is an exclusive backend (`WasapiExclusive`, `Asio`, `AlsaHw`);
+- no DSP stage is active: no EQ band, no ReplayGain mode, no crossfeed;
+- no resampling is engaged (`source.rate == device.rate`);
+- the volume is exactly 0 dB and the output is not muted (volume is applied by the pump, so any
+  attenuation is by definition a bit change);
+- `source.sample_format == device.sample_format` and the channel counts match;
+- for DoP, the carrier rate equals the device rate and the marker bytes reach the DAC untouched.
+
+The engine never claims bit-perfect playback it cannot prove. When the device refuses the exact
+format, the status reports the negotiated format and the UI shows the mismatch.
+
+DSD is transmitted as DoP: 16-bit groups packed into 24-bit PCM words with the `0x05`/`0xFA`
+markers alternating every frame, carried at 176.4 kHz (DSD64), 352.8 kHz (DSD128), 705.6 kHz
+(DSD256) and 1411.2 kHz (DSD512). DSD always takes the bypass path — any gain or filter would
+corrupt the markers and the DAC would mute.
 
 ## 4. Gapless playback and RAM Play
 
-Two decode contexts alternate. While track _N_ is audible, track _N+1_ is fully decoded into a
-bounded buffer. The GPU/UI never sees a gap: the transition is a pointer swap at a sample boundary.
+`GaplessPlayer` owns a bounded prefetch channel and a worker thread that prepares track _N+1_ while
+track _N_ is audible:
 
-- **Strict gapless** requires matching sample rate/format. When they differ, Prism either reconfigures
-  the device (exclusive backends) or inserts the configured resampler; the transition point is still
-  sample-accurate.
-- **RAM Play** preloads a track or a whole album into a single contiguous allocation. Files are
-  memory-mapped when larger than the configured threshold; the scanner records `file_size` and the
-  decoder estimates decoded PCM size before committing.
-- CUE virtual tracks share one decode context: seeking is arithmetic on the album image plus the
-  track offset, so cue boundaries are also gap-free.
+- `prepare_track` opens the file, builds the DSP chain for the target format and pre-rolls the first
+  `PRIME_FRAMES` so the boundary lands on real samples, not on a decoder warm-up;
+- `next_chunk(frames)` returns interleaved `f32` plus the annotations the supervisor needs:
+  `ended`, `started` and `boundary_offset_frames` — the sample-exact offset inside the block where
+  the new track begins;
+- a `delivered`/`planned` pair of counters stops the player from waiting for a track that does not
+  exist, which is what makes the tail of a queue end silently instead of blocking for 30 s.
+
+Track boundaries are sample-accurate: the sum of the decoded frames of two consecutive tracks equals
+the frames the player produced, with no silence inserted anywhere. CUE virtual tracks share a single
+decode context, so cue boundaries are gap-free too.
+
+**RAM Play** decodes a whole track into one contiguous allocation before playback starts. Files
+larger than `ram_limit_bytes` are streamed instead, and the fallback is logged rather than silently
+degrading the gapless guarantee.
 
 ## 5. DSP graph
 
-`Decoder → [ReplayGain 2] → [Resampler] → [Parametric EQ] → [Crossfeed] → [Volume] → Ring buffer`
+`decode → [ReplayGain 2] → [rubato resampler] → [parametric EQ] → [crossfeed] → ring → [gain ramp]`
 
-- **ReplayGain 2 / EBU R128**: track or album gain, pre-amp, peak-aware limiting; applied in the
-  float domain only when enabled, with a true-peak guard.
-- **rubato**: sinc interpolation (256-tap, Blackman-Harris window) for irrational ratios; linear
-  phase; anti-aliasing enforced on downsample.
-- **EQ**: up to 31 biquad bands, peaking/low-shelf/high-shelf/HP/LP, per channel, coefficients
-  recomputed off the audio thread and atomically published. Presets are stored as JSON with schema
-  validation in SQLite.
-- **Crossfeed**: Bauer (default), Meier and custom delay/gain; mild low-pass on the opposite channel
-  to reduce headphone fatigue without collapsing the image.
-- Graphs are compiled once per configuration change; bypassed nodes cost zero instructions (the
-  compiler removes them from the process closure).
+- **Chain compilation**: `DspChain::build` is called once per (settings, source, output) triple and
+  compiles out inactive stages entirely — a bypassed chain returns the input buffer unchanged.
+- **Volume** is *not* part of the chain: the pump applies a per-block linear ramp so a slider drag
+  never rebuilds a filter graph and never clicks. `DspSettings::volume_db` therefore stays at 0 dB
+  for chain consumers, and the engine owns the value.
+- **ReplayGain 2 / EBU R128**: track or album gain with a peak-aware guard; measured by
+  `LoudnessMeter`, whose K-weighting reproduces the BS.1770-4 reference filters exactly at 48 kHz
+  (coefficients from De Man's analogue reconstruction, unnormalised RLB high-pass numerator
+  included) and reads a 0 dBFS 997 Hz mono sine as −3.01 LUFS.
+- **rubato**: 256-tap sinc interpolation with a Blackman-Harris window, linear phase, anti-aliasing
+  on downsampling; the chain reports its latency in output frames so the playhead stays honest.
+- **EQ**: up to 31 biquad sections per channel (peaking, low/high shelf, HP/LP), coefficients
+  recomputed off the audio thread. Shelves use the RBJ cookbook; the loudness meter deliberately
+  does not, see above.
+- **Crossfeed**: Bauer (default), Meier and custom delay/gain. The direct path is untouched and only
+  the opposite channel is delayed and low-passed, which is what keeps the image stable.
 
 ## 6. Library pipeline
 

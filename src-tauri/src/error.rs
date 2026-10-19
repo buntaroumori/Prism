@@ -43,6 +43,11 @@ pub enum PrismError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// The audio engine refused the operation (device busy, unsupported
+    /// format, decoder failure). The message is user-facing.
+    #[error("audio engine error: {0}")]
+    Audio(#[from] crate::audio::AudioError),
+
     /// Any other internal invariant violation. Never contains user data.
     #[error("internal error: {0}")]
     Internal(String),
@@ -58,6 +63,7 @@ impl PrismError {
             Self::Io { .. } => "io",
             Self::Tauri(_) => "runtime",
             Self::Install(_) => "install",
+            Self::Audio(_) => "audio",
             Self::InvalidInput(_) => "invalid_input",
             Self::Internal(_) => "internal",
         }

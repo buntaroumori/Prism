@@ -87,6 +87,8 @@ tempfile.workspace = true
 
 [features]
 default = []
+# ASIO drivers (Windows only). Requires the Steinberg ASIO SDK, see CONTRIBUTING.
+asio = ["cpal/asio"]
 # Embedded Lua 5.4 plugin runtime (mlua vendored — no system Lua required).
 lua-plugins = ["dep:mlua"]
 # WebAssembly plugin runtime (wasmtime, Cranelift JIT).

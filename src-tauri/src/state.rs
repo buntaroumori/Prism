@@ -7,6 +7,7 @@ use sqlx::SqlitePool;
 use tauri::Manager;
 use tauri::path::PathResolver;
 
+use crate::audio::engine::{Engine, EngineConfig};
 use crate::db::{self, DATABASE_FILENAME};
 use crate::error::PrismError;
 
@@ -66,6 +67,7 @@ pub struct AppState {
     pool: SqlitePool,
     paths: AppPaths,
     started_at: Instant,
+    engine: std::sync::Arc<Engine>,
 }
 
 impl AppState {
@@ -79,16 +81,27 @@ impl AppState {
 
         let pool = db::connect(&paths.database).await?;
 
+        // The audio engine starts lazily: its supervisor thread only opens a
+        // device when the first track is queued, so boot stays under 300 ms.
+        let engine = Engine::new(EngineConfig::default())?;
+        tracing::debug!("audio engine supervisor started");
+
         Ok(Self {
             pool,
             paths,
             started_at: Instant::now(),
+            engine,
         })
     }
 
     #[must_use]
     pub const fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    #[must_use]
+    pub fn engine(&self) -> &std::sync::Arc<Engine> {
+        &self.engine
     }
 
     #[must_use]

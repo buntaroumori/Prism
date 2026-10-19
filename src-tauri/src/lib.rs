@@ -10,6 +10,7 @@
 //! (FASE 3), plugin runtime (FASE 5) and the React shell (FASE 4) plug into the
 //! modules declared here.
 
+pub mod audio;
 pub mod commands;
 pub mod db;
 pub mod error;
@@ -89,6 +90,33 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             );
             app.manage(state);
 
+            // --- Audio engine event bridge ------------------------------------
+            // The supervisor pushes transport events through a tokio
+            // broadcast channel; this task forwards them to the webview as
+            // `player://event` so React never polls the engine.
+            if let Some(state) = app.try_state::<AppState>() {
+                let mut events = state.engine().subscribe();
+                let handle = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    use tauri::Emitter;
+                    loop {
+                        match events.recv().await {
+                            Ok(event) => {
+                                if let Err(error) =
+                                    handle.emit(commands::player::PLAYER_EVENT_CHANNEL, &event)
+                                {
+                                    tracing::warn!(error = %error, "cannot forward engine event");
+                                }
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                                tracing::warn!(skipped, "engine event subscriber lagged");
+                            }
+                            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        }
+                    }
+                });
+            }
+
             // The window is created hidden (`visible: false`) to avoid the
             // white flash before React paints the OLED background.
             if let Some(window) = app.get_webview_window("main") {
@@ -104,6 +132,19 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::system::get_runtime_health,
             commands::system::open_log_folder,
             commands::system::open_data_folder,
+            commands::player::player_status,
+            commands::player::player_play,
+            commands::player::player_pause,
+            commands::player::player_resume,
+            commands::player::player_stop,
+            commands::player::player_seek,
+            commands::player::player_set_volume,
+            commands::player::player_set_muted,
+            commands::player::player_set_dsp,
+            commands::player::player_set_output,
+            commands::player::player_set_ram_play,
+            commands::player::player_devices,
+            commands::player::player_event_channel,
         ])
         .run(tauri::generate_context!())?;
 

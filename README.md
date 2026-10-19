@@ -35,8 +35,8 @@ implementation, not the ambition.
 | Phase | Scope                                                                                           | Status          |
 | :---- | :---------------------------------------------------------------------------------------------- | :-------------- |
 | **1** | Repository, toolchain, SQLite schema + FTS5, Tauri shell, IPC contract, CI/CD, release pipeline | ✅ **Complete** |
-| **2** | Audio engine, device backends (WASAPI/ASIO/PipeWire/ALSA), gapless + RAM Play, DSP graph        | 🟡 Next         |
-| **3** | Metadata scanner, tag editor, file organiser, SQLite domain layer, Discord Rich Presence        | ⬜ Planned      |
+| **2** | Audio engine, device backends (WASAPI/ASIO/PipeWire/ALSA), gapless + RAM Play, DSP graph        | ✅ **Complete** |
+| **3** | Metadata scanner, tag editor, file organiser, SQLite domain layer, Discord Rich Presence        | 🟡 Next         |
 | **4** | React shell, virtualised library, PlayerBar, ambient canvas, modular layout system, lyrics      | ⬜ Planned      |
 | **5** | Plugin runtime (Lua 5.4 / WebAssembly), scrobbling, lyrics fetchers                             | ⬜ Planned      |
 | **6** | Stress, fuzzing, memory and latency audits, 120 FPS profiling                                   | ⬜ Planned      |
@@ -72,11 +72,11 @@ synthetic or mocked screenshot is shipped.
 - **Native output paths** — WASAPI Exclusive with full mixer bypass, WASAPI Shared fallback, ASIO,
   PipeWire with low-latency client, ALSA direct (hw:) for bit-perfect passthrough; hot-swappable
   output devices without stopping the process.
-- **Decoding** — `symphonia` for FLAC, ALAC, WAV, AIFF, OGG Vorbis, MP3; DSD over PCM up to DSD256
-  (`DoP` framing at 176.4/352.8 kHz), APE via a dedicated decoder; 16/24/32-bit integer and float,
+- **Decoding** — `symphonia` for FLAC, ALAC, WAV, AIFF, OGG Vorbis, MP3, AAC and WavPack; DSD over
+  PCM up to DSD512 (`DoP` framing at 176.4/352.8/705.6/1411.2 kHz); 16/24/32-bit integer and float,
   44.1 kHz–768 kHz.
-- **Gapless, sample-exact** — double-buffered decoder threads pre-roll the next track; the mixer
-  crossfades at the sample boundary, never the file boundary.
+- **Gapless, sample-exact** — a dedicated prefetch thread prepares the next track while the current
+  one plays, and the boundary is spliced at the exact sample, never at the file edge.
 - **RAM Play** — optional per-track or whole-album preload into physical memory; disk is removed
   from the playback path.
 - **CUE sheets** — single-image albums become first-class tracks with sample-accurate offsets,
