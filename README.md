@@ -151,6 +151,9 @@ synthetic or mocked screenshot is shipped.
   verbatim, and a live `plugin://message` activity stream.
 - A plugin that throws is **disabled for the session** with its error recorded; playback never depends
   on one.
+- A complete example ships in [`examples/plugins/volume-guard`](examples/plugins/volume-guard) — a
+  manifest, a Lua plugin and its README — and the test suite loads it, so the documented API cannot
+  drift away from the working one.
 
 ---
 

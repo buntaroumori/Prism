@@ -277,6 +277,12 @@ impl HostBridge {
             .map_err(|error| PluginError::runtime(format!("cannot serialise status: {error}")))
     }
 
+    /// One configured value, for runtimes whose host API exposes typed getters.
+    #[must_use]
+    pub fn config_value(&self, key: &str) -> Option<Value> {
+        self.config.read().get(key).cloned()
+    }
+
     /// Current configuration as a JSON object.
     #[must_use]
     pub fn config_json(&self) -> String {

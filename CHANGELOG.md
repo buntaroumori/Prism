@@ -152,7 +152,11 @@ All notable changes to Prism are documented here. The format follows
   aware, reduced-motion static mode), `LyricsPanel` (karaoke cursor, auto-follow with manual-scroll
   suspension), `useLayoutStore` + `NowPlayingDeck` (five modules, three presets, persisted order), and
   a `PluginsSection` in Settings with typed controls and a live activity stream.
+- `prism.setting(key)` for Lua plugins: typed setting access as native Lua values, because the sandbox
+  deliberately has no JSON decoder.
+- Example plugin `examples/plugins/volume-guard` (manifest + Lua + README), loaded by the test suite so
+  the documented host API stays executable.
 - Tests: 34 new unit tests (9 lyrics, 9 analysis, 16 plugin manifest/runtime), 191 lib tests in the
-  default build and 198 with `--features lua-plugins`.
+  default build and 199 with `--features lua-plugins`.
 
 [0.1.0]: https://github.com/prism-audio/prism/releases/tag/v0.1.0

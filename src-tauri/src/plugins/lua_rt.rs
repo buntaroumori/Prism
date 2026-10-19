@@ -226,6 +226,27 @@ fn register_api(
         .map_err(to_error)?;
     api.set("config", config).map_err(to_error)?;
 
+    // Typed getter: Lua has no JSON decoder in this sandbox, so settings are
+    // handed over as native values instead of a string the plugin cannot parse.
+    let setting_bridge = Arc::clone(bridge);
+    let setting = lua
+        .create_function(move |lua, key: String| {
+            let value = match setting_bridge.config_value(&key) {
+                Some(serde_json::Value::Bool(flag)) => LuaValue::Boolean(flag),
+                Some(serde_json::Value::Number(number)) => number.as_i64().map_or_else(
+                    || number.as_f64().map_or(LuaValue::Nil, LuaValue::Number),
+                    LuaValue::Integer,
+                ),
+                Some(serde_json::Value::String(text)) => {
+                    LuaValue::String(lua.create_string(&text)?)
+                }
+                _ => LuaValue::Nil,
+            };
+            Ok(value)
+        })
+        .map_err(to_error)?;
+    api.set("setting", setting).map_err(to_error)?;
+
     let pause_bridge = Arc::clone(bridge);
     let pause = lua
         .create_function(move |_, ()| {
@@ -405,6 +426,37 @@ end
             panic!("expected a manifest error, got {error:?}");
         };
         assert!(message.contains("on_event"));
+    }
+
+    #[test]
+    fn the_shipped_example_plugin_loads_and_runs() {
+        // The example in `examples/plugins/volume-guard` is part of the product,
+        // so it is covered like one: a manifest change that breaks it fails here.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../examples/plugins/volume-guard");
+        let manifest = Manifest::load(&root).expect("example manifest");
+        assert_eq!(manifest.id, "io.prism.volume-guard");
+
+        let engine = crate::audio::engine::Engine::new(
+            crate::audio::engine::EngineConfig::default(),
+        )
+        .expect("engine");
+        let (messages, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let bridge = Arc::new(HostBridge::new(
+            &manifest,
+            manifest.defaults(),
+            engine,
+            messages,
+        ));
+        let mut runtime = LuaRuntime::new(&manifest, &root, bridge).expect("runtime");
+        runtime.call(Hook::Load, "{}").expect("on_load");
+        runtime
+            .call(Hook::Event, r#"{"kind":"track_changed","payload":{}}"#)
+            .expect("on_event");
+
+        let message = receiver.try_recv().expect("on_load logs its level");
+        assert_eq!(message.kind, "log");
+        assert!(message.message.contains("-12.0"), "{}", message.message);
     }
 
     #[test]
