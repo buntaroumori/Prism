@@ -10,7 +10,7 @@ All notable changes to Prism are documented here. The format follows
 
 - Rust workspace (edition 2024, MSRV 1.88) with release profile tuned for throughput
   (`lto = "fat"`, `codegen-units = 1`, `panic = "abort"`).
-- Complete SQLite schema: 18 STRICT tables covering tracks, albums, artists, CUE sheets, playlists,
+- Complete SQLite schema: 16 STRICT tables covering tracks, albums, artists, CUE sheets, playlists,
   smart playlists, lyrics, cover cache, play history, settings, library roots, scan ledger, DSP
   presets and layouts.
 - FTS5 external-content search with diacritic folding, insert/update/delete triggers and

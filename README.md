@@ -42,7 +42,7 @@ implementation, not the ambition.
 | **6** | Stress, fuzzing, memory and latency audits, 120 FPS profiling                                   | ⬜ Planned      |
 | **7** | Repository hardening, documentation, signed public release                                      | ⬜ Planned      |
 
-The current build ships a **real, working foundation**: a WAL-mode SQLite catalogue with 18 tables,
+The current build ships a **real, working foundation**: a WAL-mode SQLite catalogue with 16 STRICT tables,
 FTS5 external-content search, cascade triggers, integrity constraints, an embedded migration
 ledger, a typed and runtime-validated IPC layer, a non-blocking dual-sink logger, and a glass
 diagnostics interface that reads live engine state. No screen displays invented data.
@@ -272,12 +272,12 @@ prism/
 The schema is versioned, embedded in the binary and applied transactionally at boot
 (`src-tauri/migrations/0001_initial_schema.sql`):
 
-- **18 STRICT tables** — `tracks`, `albums`, `artists`, `cue_sheets`, `playlists`, `playlist_items`,
+- **16 STRICT tables** — `tracks`, `albums`, `artists`, `cue_sheets`, `playlists`, `playlist_items`,
   `smart_playlists`, `lyrics_cache`, `cover_cache`, `play_history`, `settings`, `library_roots`,
   `scan_runs`, `scan_errors`, `eq_presets`, `layouts` and the FTS5 shadow tables.
 - **FTS5 external-content index** with insert/update/delete triggers and rename cascades, verified by
   `INSERT INTO tracks_fts(tracks_fts) VALUES('integrity-check')` in CI.
-- **Six read models** (`v_track_details`, `v_album_summary`, `v_artist_summary`,
+- **Five read models** (`v_track_details`, `v_album_summary`, `v_artist_summary`,
   `v_playlist_summary`, `v_library_stats`) so the UI never assembles joins itself.
 - **CUE-aware identity**: virtual tracks share the image path and are disambiguated by sample offset.
 - Timestamps are ISO-8601 UTC strings with millisecond precision; all JSON columns are validated by
