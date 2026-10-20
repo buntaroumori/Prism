@@ -67,7 +67,7 @@ fn tag_wav(path: &Path, fixture: &Fixture<'_>) {
     tag.set_track(fixture.track);
     tag.set_track_total(fixture.total);
     tag.set_year(fixture.year);
-    tag.insert_text(ItemKey::ReplayGainTrackGain, "-6.28 dB".to_string());
+    tag.insert_text(ItemKey::ReplayGainTrackGain, "-6.25 dB".to_string());
     tag.save_to_path(path, WriteOptions::default())
         .expect("write id3v2 tag");
 }
@@ -255,7 +255,7 @@ async fn scan_indexes_files_albums_artists_cue_tracks_and_errors() {
             .fetch_one(&pool)
             .await
             .expect("gain");
-    assert_eq!(gain, Some(-6.28));
+    assert_eq!(gain, Some(-6.25));
 
     // The CUE sheet produced a sheet row linked to its album.
     let (sheet_tracks, sheet_total, linked_album): (i64, i64, Option<String>) =

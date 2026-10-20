@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn replaygain_and_musicbrainz_identifiers_are_read_from_any_container() {
         let tags = tags_with(&[
-            ("REPLAYGAIN_TRACK_GAIN", "-6.28 dB"),
+            ("REPLAYGAIN_TRACK_GAIN", "-6.25 dB"),
             ("REPLAYGAIN_TRACK_PEAK", "0.9772"),
             (
                 "MUSICBRAINZ_TRACKID",
@@ -539,7 +539,7 @@ mod tests {
             ),
             ("X-PRISM-NOTE", "nocturnal"),
         ]);
-        assert_eq!(tags.replaygain_track_gain_db, Some(-6.28));
+        assert_eq!(tags.replaygain_track_gain_db, Some(-6.25));
         assert_eq!(tags.replaygain_track_peak, Some(0.9772));
         assert_eq!(
             tags.musicbrainz_track_id.as_deref(),

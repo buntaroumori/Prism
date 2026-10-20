@@ -84,7 +84,5 @@ pub async fn plugins_open_folder(
     std::fs::create_dir_all(&directory).map_err(|error| PrismError::io(&directory, error))?;
     app.opener()
         .open_path(directory.to_string_lossy().into_owned(), None::<&str>)
-        .map_err(|error| {
-            PrismError::Internal(format!("could not open the plugin folder: {error}"))
-        })
+        .map_err(|error| PrismError::Internal(format!("could not open the plugin folder: {error}")))
 }

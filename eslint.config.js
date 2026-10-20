@@ -14,7 +14,7 @@ import tseslint from "typescript-eslint";
  */
 export default tseslint.config(
   {
-    ignores: ["dist", "node_modules", "src-tauri", "coverage", "scripts"],
+    ignores: ["dist", ".perf-dist", "node_modules", "src-tauri", "coverage", "scripts"],
   },
   {
     files: ["**/*.{js,mjs,cjs}"],

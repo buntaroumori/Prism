@@ -357,6 +357,21 @@ whatever the library size. Skeleton rows use the same height, so a page arriving
 (CLS = 0). "Play from here" queues the page that contains the row, because a 500 000-entry queue
 would pin the whole catalogue in the engine's memory and in IPC.
 
+Two properties are load-bearing and both were found by measurement, not by reading the docs:
+
+1. **The virtualiser's option callbacks are module-level.** `estimateSize`, `getItemKey` and
+   `getScrollElement` are compared by identity inside the library's memoised measurement cache. Inline
+   arrows are new objects on every render, so the cache was rebuilt over 500 000 rows on every scroll
+   frame — 21–30 % of all JS samples inside `getMeasurements`, 18.9 ms of main-thread work per frame.
+   Stable callbacks cost 3.0 ms.
+2. **The first page is fetched by the hook, not by the list.** A virtualiser with `count: 0` renders
+   nothing, so a hook that only fetches once it knows the total never fetches at all. `useTrackWindow`
+   bootstraps page 0 per query generation, guarded on the page cache so an empty result is requested
+   once.
+
+Rows are `memo` components that subscribe to `playbackStore` through boolean selectors, so a track
+change re-renders two rows rather than the list, and scrolling re-renders none.
+
 ### 10.6 Spectrum path
 
 ```
@@ -391,7 +406,31 @@ module always remains. Modules are real panels with their own data source, so re
 work — a hidden spectrum releases the audio tap, a hidden lyrics panel stops fetching. Reordering
 animates with Framer Motion `layout` (transform-only) and honours `prefers-reduced-motion`.
 
-## 11. Error taxonomy and observability
+## 11. Failure injection and measurement
+
+Everything in §1–§10 is only as good as the tests that break it on purpose.
+
+- **Device seam.** `Engine::with_opener` takes the same `Fn(OutputMode, Option<&str>, &AudioFormat,
+u32) -> Result<OpenedSink>` that the production build points at `backend::open_sink`. The stress
+  suite replaces it with a loopback that consumes the same ring, honours the same `RefillSignal` and
+  can be unplugged on demand, so hot-swap, device loss and recovery are exercised end to end on a
+  machine with no sound card.
+- **Skipped tracks.** A file that cannot be opened is a `SkippedTrack`, not an error: the decoder
+  records it, the supervisor drains it into `EngineEvent::TrackSkipped`, the plugin bridge reports
+  `track_skipped`, and the UI shows the file and the reason while the queue keeps playing. A queue
+  whose _head_ is unreadable walks forward before opening a device; a queue with nothing playable
+  tears down cleanly.
+- **Frame budget.** `scripts/perf-audit.mjs` mounts the production list over 500 000 synthetic rows
+  and measures renderer main-thread time per painted frame — not frame rate, because a compositor can
+  tick at 60 Hz on a machine with several times the budget to spare. Two workloads (a 120 px/frame
+  flick and a three-viewport scrub) are reported separately, and seven verdicts gate CI.
+- **Memory.** `valgrind --tool=memcheck` over the stress suite and the `audio::*` units; Miri over the
+  pure-logic modules in CI. Both are described in `docs/PERFORMANCE.md`, with the numbers.
+- **Backoff as a value.** `BackoffPolicy` (start, ceiling, growth, jitter) is data, so the Discord
+  reconnect loop is tested in milliseconds against a real UNIX socket instead of being described in a
+  comment.
+
+## 12. Error taxonomy and observability
 
 - `PrismError` serialises to `{ code, message }`: `database`, `migration`, `io`, `runtime`,
   `install`, `invalid_input`, `internal`. The frontend branches on `code`, never on message text.
@@ -400,7 +439,7 @@ animates with Framer Motion `layout` (transform-only) and honours `prefers-reduc
 - A diagnostics export bundles app info, pragma-derived database health, recent scan errors and the
   log tail, with paths redacted on request.
 
-## 12. Packaging and delivery
+## 13. Packaging and delivery
 
 - Tauri v2 bundles: NSIS + WiX (MSI) + portable EXE on Windows; DEB + AppImage on Linux.
 - WebView2 uses the download bootstrapper (silent); Linux DEB dependencies use the Ubuntu 24.04

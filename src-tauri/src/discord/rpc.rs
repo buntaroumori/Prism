@@ -46,6 +46,71 @@ const BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// half of that leaves headroom for the user opening and closing albums.
 const MIN_UPDATE_INTERVAL: Duration = Duration::from_millis(2_500);
 
+/// Reconnect schedule.
+///
+/// Kept as a value rather than as three loose constants so the tests can drive a
+/// full offline → online → offline cycle in milliseconds instead of minutes, and
+/// so the growth curve is a property with an assertion instead of a comment.
+///
+/// The default policy waits 1 s after the first failure and multiplies by 1.5 on
+/// every subsequent one, capped at 60 s. A user whose Discord is closed does not
+/// notice; a user who opens Discord does not wait more than a minute.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackoffPolicy {
+    /// Delay after the first failure.
+    start: Duration,
+    /// Ceiling, however many failures pile up.
+    max: Duration,
+    /// Current delay, advanced by [`BackoffPolicy::next`].
+    current: Duration,
+}
+
+impl Default for BackoffPolicy {
+    fn default() -> Self {
+        Self {
+            start: BACKOFF_START,
+            max: BACKOFF_MAX,
+            current: BACKOFF_START,
+        }
+    }
+}
+
+impl BackoffPolicy {
+    /// A policy that starts at `start` and never exceeds `max`.
+    #[must_use]
+    pub fn new(start: Duration, max: Duration) -> Self {
+        Self {
+            start,
+            max: max.max(start),
+            current: start,
+        }
+    }
+
+    /// Delay to wait *now*, then grow. Every call is jittered so that a hundred
+    /// Prism instances do not reconnect in lockstep after a Discord restart.
+    pub fn next(&mut self) -> Duration {
+        let delay = jitter(self.current);
+        self.current = self.grow(self.current);
+        delay
+    }
+
+    /// The un-jittered delay that [`Self::next`] will use next.
+    #[must_use]
+    pub fn peek(&self) -> Duration {
+        self.current
+    }
+
+    /// Back to the first delay, after a successful connection.
+    pub fn reset(&mut self) {
+        self.current = self.start;
+    }
+
+    fn grow(&self, delay: Duration) -> Duration {
+        let grown = delay.saturating_mul(3) / 2;
+        if grown > self.max { self.max } else { grown }
+    }
+}
+
 /// Connection lifecycle, surfaced to the settings UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -189,8 +254,23 @@ pub struct DiscordRpc {
 
 impl DiscordRpc {
     /// Spawn the worker for `client_id` and return immediately.
+    ///
+    /// The worker owns the socket: it probes Discord's IPC endpoints, reconnects
+    /// with [`BackoffPolicy`] and publishes whatever activity is current the
+    /// moment the connection comes up. Discord not running is a normal state,
+    /// not an error — the UI simply shows "unavailable".
     #[must_use]
     pub fn spawn(client_id: String) -> Self {
+        Self::spawn_with(client_id, candidate_sockets(), BackoffPolicy::default())
+    }
+
+    /// Spawn against an explicit socket list and schedule.
+    ///
+    /// Production always passes [`candidate_sockets`] and the default policy;
+    /// the seam exists so the reconnect loop can be tested against a real Unix
+    /// socket without touching the user's Discord.
+    #[must_use]
+    pub fn spawn_with(client_id: String, sockets: Vec<PathBuf>, policy: BackoffPolicy) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (status_tx, status_rx) = watch::channel(DiscordStatus {
             state: DiscordState::Connecting,
@@ -199,7 +279,7 @@ impl DiscordRpc {
             last_error: None,
             last_update_at: None,
         });
-        let task = tokio::spawn(run(client_id, command_rx, status_tx));
+        let task = tokio::spawn(run(client_id, sockets, policy, command_rx, status_tx));
         Self {
             commands: command_tx,
             status: status_rx,
@@ -241,18 +321,20 @@ impl Drop for DiscordRpc {
 /// activity as soon as the connection is ready.
 async fn run(
     client_id: String,
+    sockets: Vec<PathBuf>,
+    policy: BackoffPolicy,
     mut commands: mpsc::UnboundedReceiver<Command>,
     status: watch::Sender<DiscordStatus>,
 ) {
     let mut desired: Option<Activity> = None;
     let mut attempts: u32 = 0;
-    let mut backoff = BACKOFF_START;
+    let mut backoff = policy;
 
     loop {
-        match connect_and_handshake(&client_id).await {
+        match connect_and_handshake(&client_id, &sockets).await {
             Ok(mut transport) => {
                 attempts = 0;
-                backoff = BACKOFF_START;
+                backoff.reset();
                 status.send_modify(|snapshot| {
                     snapshot.state = DiscordState::Connected;
                     snapshot.attempts = 0;
@@ -359,7 +441,7 @@ async fn run(
 
         // Back off before reconnecting, but stay responsive to Stop and to a
         // newer activity so the next connection carries fresh data.
-        let delay = jitter(backoff);
+        let delay = backoff.next();
         let sleep = tokio::time::sleep(delay);
         tokio::pin!(sleep);
         loop {
@@ -377,7 +459,6 @@ async fn run(
                 }
             }
         }
-        backoff = (backoff * 3 / 2).min(BACKOFF_MAX);
     }
 }
 
@@ -393,9 +474,12 @@ fn jitter(base: Duration) -> Duration {
 }
 
 /// Open the first socket that answers and complete the handshake.
-async fn connect_and_handshake(client_id: &str) -> Result<Box<dyn Transport>, String> {
+async fn connect_and_handshake(
+    client_id: &str,
+    sockets: &[PathBuf],
+) -> Result<Box<dyn Transport>, String> {
     let mut last_error = "no discord-ipc socket found".to_string();
-    for path in candidate_sockets() {
+    for path in sockets {
         match open(&path).await {
             Ok(mut transport) => match handshake(&mut transport, client_id).await {
                 Ok(()) => return Ok(transport),
@@ -419,8 +503,12 @@ async fn handshake(transport: &mut Box<dyn Transport>, client_id: &str) -> Resul
     let read = tokio::time::timeout(Duration::from_secs(10), read_frame(transport)).await;
     match read {
         Ok(Ok((OP_FRAME, payload))) => {
+            // Discord names the field `evt` on every DISPATCH frame. Older
+            // clients and some forks emit `ev`; accept both, because reading the
+            // wrong key silently turns a rejection into a reconnect loop.
             let event = payload
-                .get("ev")
+                .get("evt")
+                .or_else(|| payload.get("ev"))
                 .and_then(Value::as_str)
                 .unwrap_or_default();
             match event {
@@ -662,5 +750,283 @@ mod tests {
         assert!(!paths.is_empty());
         let unique: std::collections::HashSet<_> = paths.iter().collect();
         assert_eq!(unique.len(), paths.len());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod reconnect_tests {
+    //! Offline behaviour, driven against a real Unix socket.
+    //!
+    //! The RPC worker is exercised end to end: it is pointed at a socket in a
+    //! temporary directory that either does not exist (Discord closed), refuses
+    //! the handshake (unknown client id) or answers `READY`. No mock and no
+    //! sleeping for production delays — the tests inject a millisecond-scale
+    //! [`BackoffPolicy`], which is exactly why the policy is a value.
+
+    use std::path::Path;
+    use std::time::Duration;
+
+    use serde_json::{Value, json};
+    use tokio::net::{UnixListener, UnixStream};
+    use tokio::time::{Instant, sleep, timeout};
+
+    use super::*;
+
+    const CLIENT: &str = "123456789012345678";
+
+    /// Poll the handle until `predicate` holds, or fail after five seconds.
+    async fn wait_for(
+        rpc: &DiscordRpc,
+        predicate: impl Fn(&DiscordStatus) -> bool,
+    ) -> DiscordStatus {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = rpc.status();
+            if predicate(&status) {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for a status; last was {status:?}"
+            );
+            sleep(Duration::from_millis(2)).await;
+        }
+    }
+
+    /// Read one frame, answering keepalives so the client never goes quiet.
+    async fn read(stream: &mut UnixStream) -> (u32, Value) {
+        loop {
+            let (op, payload) = read_frame(stream).await.expect("frame");
+            if op == OP_PING {
+                write_frame(stream, OP_PONG, &payload).await.expect("pong");
+                continue;
+            }
+            return (op, payload);
+        }
+    }
+
+    /// Read frames until a `SET_ACTIVITY` arrives, and return it.
+    async fn next_activity(stream: &mut UnixStream) -> Value {
+        loop {
+            let (op, payload) = read(stream).await;
+            if op == OP_FRAME && payload["cmd"] == "SET_ACTIVITY" {
+                return payload;
+            }
+        }
+    }
+
+    fn sample_activity() -> Activity {
+        Activity {
+            details: "Everything In Its Right Place".into(),
+            state: "Kid A".into(),
+            start_timestamp: Some(1_700_000_000_000),
+            end_timestamp: None,
+            large_image: None,
+            large_text: Some("Kid A".into()),
+            small_image: Some("prism".into()),
+            small_text: Some("Bit-perfect".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn offline_discord_is_reported_and_retried_without_spinning() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let socket = directory.path().join("discord-ipc-0");
+        let policy = BackoffPolicy::new(Duration::from_millis(5), Duration::from_millis(20));
+        let started = Instant::now();
+        let rpc = DiscordRpc::spawn_with(CLIENT.to_string(), vec![socket], policy);
+
+        // With Discord closed, failures accumulate and each one names a reason.
+        let status = wait_for(&rpc, |status| status.attempts >= 3).await;
+        assert_eq!(status.state, DiscordState::Unavailable);
+        let reason = status.last_error.expect("an error is reported");
+        assert!(
+            reason.contains("discord-ipc-0"),
+            "the reason names the socket: {reason}"
+        );
+
+        // Three attempts cost at least the first two backoff sleeps (5 ms then
+        // 7.5 ms): the loop waits between failures instead of spinning on the
+        // socket, which is what keeps a closed Discord at 0 % CPU.
+        assert!(
+            started.elapsed() >= Duration::from_millis(12),
+            "reconnects are rate limited, elapsed {:?}",
+            started.elapsed()
+        );
+
+        rpc.stop();
+        let stopped = wait_for(&rpc, |status| status.state == DiscordState::Stopped).await;
+        assert_eq!(stopped.state, DiscordState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_client_id_falls_back_instead_of_failing_the_application() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("discord-ipc-0");
+        let listener = UnixListener::bind(&path).expect("bind");
+        let policy = BackoffPolicy::new(Duration::from_millis(10), Duration::from_millis(40));
+        let rpc = DiscordRpc::spawn_with(CLIENT.to_string(), vec![path], policy);
+
+        let (mut first, _) = timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("connect")
+            .expect("accept");
+        let (op, handshake) = read(&mut first).await;
+        assert_eq!(op, OP_HANDSHAKE);
+        assert_eq!(handshake["v"], 1);
+        assert_eq!(handshake["client_id"], CLIENT);
+        write_frame(
+            &mut first,
+            OP_FRAME,
+            &json!({"cmd": "DISPATCH", "evt": "ERROR", "data": {"code": 4000, "message": "Invalid Client ID"}}),
+        )
+        .await
+        .expect("reject");
+        drop(first);
+
+        let status = wait_for(&rpc, |status| status.attempts >= 1).await;
+        assert_eq!(status.state, DiscordState::Unavailable);
+        let reason = status.last_error.unwrap_or_default();
+        assert!(
+            reason.contains("4000"),
+            "the rejection is surfaced: {reason}"
+        );
+
+        // The rest of the application never sees an error: the handle is still
+        // usable and can be stopped cleanly.
+        rpc.set_activity(sample_activity());
+        rpc.stop();
+        wait_for(&rpc, |status| status.state == DiscordState::Stopped).await;
+    }
+
+    #[tokio::test]
+    async fn reconnecting_flushes_the_pending_activity() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let path = directory.path().join("discord-ipc-0");
+        let listener = UnixListener::bind(&path).expect("bind");
+        let policy = BackoffPolicy::new(Duration::from_millis(10), Duration::from_millis(40));
+        let rpc = DiscordRpc::spawn_with(CLIENT.to_string(), vec![path], policy);
+
+        // Connection #1 is refused, as Discord does for an unregistered client.
+        let (mut refused, _) = timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("connect")
+            .expect("accept");
+        let (op, _) = read(&mut refused).await;
+        assert_eq!(op, OP_HANDSHAKE);
+        write_frame(
+            &mut refused,
+            OP_FRAME,
+            &json!({"cmd": "DISPATCH", "evt": "ERROR", "data": {"code": 4000}}),
+        )
+        .await
+        .expect("reject");
+        drop(refused);
+        wait_for(&rpc, |status| status.attempts >= 1).await;
+
+        // The user starts a track while Discord is unreachable.
+        rpc.set_activity(sample_activity());
+
+        // Connection #2 is healthy: the queued activity must go out immediately,
+        // not on the next two-and-a-half-second tick.
+        let (mut healthy, _) = timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("reconnect")
+            .expect("accept");
+        let (op, _) = read(&mut healthy).await;
+        assert_eq!(op, OP_HANDSHAKE);
+        write_frame(
+            &mut healthy,
+            OP_FRAME,
+            &json!({"cmd": "DISPATCH", "evt": "READY", "data": {"v": 1}}),
+        )
+        .await
+        .expect("ready");
+
+        let activity = timeout(Duration::from_secs(5), next_activity(&mut healthy))
+            .await
+            .expect("the pending activity is flushed");
+        assert_eq!(
+            activity["args"]["activity"]["details"],
+            "Everything In Its Right Place"
+        );
+        assert_eq!(
+            activity["args"]["activity"]["assets"]["small_text"],
+            "Bit-perfect"
+        );
+
+        let status = wait_for(&rpc, DiscordStatus::is_active).await;
+        assert_eq!(status.state, DiscordState::Connected);
+        assert_eq!(status.attempts, 0, "a success resets the backoff");
+
+        rpc.stop();
+        wait_for(&rpc, |status| status.state == DiscordState::Stopped).await;
+    }
+
+    #[test]
+    fn backoff_grows_geometrically_then_holds_at_the_ceiling() {
+        let mut policy =
+            BackoffPolicy::new(Duration::from_millis(100), Duration::from_millis(1_000));
+        let mut delays = Vec::new();
+        for _ in 0..10 {
+            delays.push(policy.peek());
+            let mut probe = policy.clone();
+            let jittered = probe.next();
+            assert!(jittered >= policy.peek(), "jitter only ever adds delay");
+            assert!(
+                jittered < policy.peek() + Duration::from_millis(500),
+                "jitter stays inside its half-second window"
+            );
+            policy = probe;
+        }
+
+        assert_eq!(delays[0], Duration::from_millis(100));
+        assert_eq!(delays[1], Duration::from_millis(150));
+        assert_eq!(delays[2], Duration::from_millis(225));
+        assert!(
+            delays.windows(2).all(|pair| pair[1] >= pair[0]),
+            "monotonic"
+        );
+        assert!(
+            delays
+                .iter()
+                .all(|delay| *delay <= Duration::from_millis(1_000)),
+            "never exceeds the ceiling"
+        );
+        assert_eq!(
+            *delays.last().expect("delays"),
+            Duration::from_millis(1_000),
+            "reaches the ceiling"
+        );
+
+        policy.reset();
+        assert_eq!(
+            policy.peek(),
+            Duration::from_millis(100),
+            "reset restores the start"
+        );
+    }
+
+    #[test]
+    fn the_default_policy_waits_a_second_and_caps_at_a_minute() {
+        let mut policy = BackoffPolicy::default();
+        assert_eq!(policy.peek(), BACKOFF_START);
+        for _ in 0..40 {
+            let _ = policy.next();
+        }
+        assert_eq!(policy.peek(), BACKOFF_MAX);
+    }
+
+    #[tokio::test]
+    async fn a_socket_that_does_not_exist_is_never_a_panic() {
+        let missing = Path::new("/nonexistent/discord-ipc-0").to_path_buf();
+        let error = connect_and_handshake(CLIENT, &[missing])
+            .await
+            .err()
+            .expect("a missing socket is an error, never a panic");
+        assert!(
+            error.contains("discord-ipc-0"),
+            "the path is named: {error}"
+        );
     }
 }

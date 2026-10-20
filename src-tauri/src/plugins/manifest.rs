@@ -80,7 +80,12 @@ pub enum Capability {
 
 impl Capability {
     /// Every capability the host understands, in display order.
-    pub const ALL: [Self; 4] = [Self::Log, Self::Notify, Self::PlayerRead, Self::PlayerControl];
+    pub const ALL: [Self; 4] = [
+        Self::Log,
+        Self::Notify,
+        Self::PlayerRead,
+        Self::PlayerControl,
+    ];
 
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -202,7 +207,9 @@ impl SettingSpec {
                 Value::String(text) if self.options.iter().any(|option| option == text) => {
                     Ok(raw.clone())
                 }
-                Value::String(text) => fail(&format!("must be one of the declared options, got '{text}'")),
+                Value::String(text) => fail(&format!(
+                    "must be one of the declared options, got '{text}'"
+                )),
                 _ => fail("expects a string option"),
             },
         }
@@ -272,10 +279,9 @@ impl SettingSpec {
             }
             let unique: BTreeSet<&String> = self.options.iter().collect();
             if unique.len() != self.options.len()
-                || self
-                    .options
-                    .iter()
-                    .any(|option| option.trim().is_empty() || option.chars().count() > MAX_VALUE_TEXT)
+                || self.options.iter().any(|option| {
+                    option.trim().is_empty() || option.chars().count() > MAX_VALUE_TEXT
+                })
             {
                 return Err(PluginError::manifest(format!(
                     "select setting '{}' has duplicate or empty options",
@@ -468,7 +474,10 @@ impl Manifest {
     /// and falling back to the default for every value that no longer validates
     /// (a plugin update can change its own schema).
     #[must_use]
-    pub fn reconcile(&self, stored: &serde_json::Map<String, Value>) -> std::collections::BTreeMap<String, Value> {
+    pub fn reconcile(
+        &self,
+        stored: &serde_json::Map<String, Value>,
+    ) -> std::collections::BTreeMap<String, Value> {
         self.settings
             .iter()
             .map(|spec| {
@@ -531,9 +540,9 @@ fn is_valid_id(id: &str) -> bool {
     if id.starts_with('.') || id.ends_with('.') || id.contains("..") {
         return false;
     }
-    id.chars()
-        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '_')
-        && !id.starts_with('-')
+    id.chars().all(|ch| {
+        ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '_'
+    }) && !id.starts_with('-')
         && !id.ends_with('-')
 }
 
@@ -653,7 +662,8 @@ options = ["warm", "cool"]
             let dir = scratch("", &manifest);
             let error = Manifest::load(dir.path()).expect_err("must reject {entry}");
             assert!(
-                error.to_string().contains("relative") || error.to_string().contains("does not exist"),
+                error.to_string().contains("relative")
+                    || error.to_string().contains("does not exist"),
                 "{error}"
             );
         }
@@ -670,7 +680,10 @@ options = ["warm", "cool"]
 
     #[test]
     fn unknown_capabilities_are_named_in_the_error() {
-        let manifest = VALID.replace(r#""log", "notify", "player:read", "player:control""#, r#""telepathy""#);
+        let manifest = VALID.replace(
+            r#""log", "notify", "player:read", "player:control""#,
+            r#""telepathy""#,
+        );
         let dir = scratch("main.lua", &manifest);
         let error = Manifest::load(dir.path()).expect_err("must reject");
         assert!(error.to_string().contains("telepathy"), "{error}");
@@ -749,6 +762,9 @@ options = ["warm", "cool"]
         let manifest = format!("{VALID}\n[surprise]\nvalue = 1\n");
         let dir = scratch("main.lua", &manifest);
         let error = Manifest::load(dir.path()).expect_err("must reject");
-        assert!(error.to_string().contains("surprise") || error.to_string().contains("unknown"), "{error}");
+        assert!(
+            error.to_string().contains("surprise") || error.to_string().contains("unknown"),
+            "{error}"
+        );
     }
 }

@@ -169,6 +169,16 @@ pub enum EngineEvent {
     Underrun {
         total: u64,
     },
+    /// A queued file could not be opened and was skipped.
+    ///
+    /// Playback continues with the next track; the UI explains which file and
+    /// why, because a silently missing track is worse than a visible gap.
+    TrackSkipped {
+        track_id: String,
+        title: String,
+        artist: String,
+        reason: String,
+    },
 }
 
 enum Command {
@@ -236,6 +246,18 @@ impl Playhead {
     }
 }
 
+/// Opens an output endpoint.
+///
+/// Production always uses [`backend::open_sink`]. Tests inject a loopback sink so
+/// device loss and hot-swap can be reproduced on a machine with no sound card —
+/// the same code path a real DAC takes, with the device replaced by a thread that
+/// consumes the ring and reports liveness.
+pub type SinkOpener = Arc<
+    dyn Fn(OutputMode, Option<&str>, &AudioFormat, u32) -> Result<OpenedSink, AudioError>
+        + Send
+        + Sync,
+>;
+
 /// Handle used by the Tauri layer. Cheap to clone through an `Arc`.
 pub struct Engine {
     commands: Sender<Command>,
@@ -259,6 +281,19 @@ impl std::fmt::Debug for Engine {
 impl Engine {
     /// Start the supervisor thread with the given configuration.
     pub fn new(config: EngineConfig) -> Result<Arc<Self>, AudioError> {
+        Self::with_opener(
+            config,
+            Arc::new(|mode, device, format, buffer| {
+                backend::open_sink(mode, device, format, buffer)
+            }),
+        )
+    }
+
+    /// Start the supervisor with an explicit endpoint opener.
+    ///
+    /// Used by the stress suite to drive the device lifecycle (open, hot-swap,
+    /// loss, recovery) without hardware. Everything else is the production code.
+    pub fn with_opener(config: EngineConfig, opener: SinkOpener) -> Result<Arc<Self>, AudioError> {
         let (commands, receiver) = unbounded::<Command>();
         let status = Arc::new(RwLock::new(EngineStatus::default()));
         let volume_db = Arc::new(AtomicU32::new(
@@ -275,6 +310,7 @@ impl Engine {
             muted: Arc::clone(&muted),
             events: events.clone(),
             analyzer: Arc::clone(&analyzer),
+            opener,
             config,
             player: None,
             output: None,
@@ -429,6 +465,7 @@ struct Supervisor {
     muted: Arc<AtomicBool>,
     events: broadcast::Sender<EngineEvent>,
     analyzer: Arc<Analyzer>,
+    opener: SinkOpener,
     config: EngineConfig,
     player: Option<GaplessPlayer>,
     output: Option<OpenedSink>,
@@ -587,11 +624,41 @@ impl Supervisor {
         self.index = index.min(self.queue.len() - 1);
         self.set_state(PlaybackState::Buffering);
 
+        // A track that cannot be opened must not take the queue down with it:
+        // walk forward, report each dead file, and start on the first playable
+        // one. Without this, an album whose first rip failed would refuse to
+        // play at all. The remaining tracks are handled by the decoder, which
+        // skips them mid-stream without dropping the device.
+        let source_format = loop {
+            let candidate = self.queue[self.index].clone();
+            match probe_format(&candidate) {
+                Ok(format) => break format,
+                Err(error) => {
+                    tracing::warn!(
+                        track = %candidate.track_id,
+                        path = %candidate.path.display(),
+                        %error,
+                        "skipping unplayable track at the head of the queue"
+                    );
+                    self.emit(EngineEvent::TrackSkipped {
+                        track_id: candidate.track_id.clone(),
+                        title: candidate.title.clone(),
+                        artist: candidate.artist.clone(),
+                        reason: error.to_string(),
+                    });
+                    if self.index + 1 >= self.queue.len() {
+                        // Nothing between here and the end of the queue plays.
+                        self.teardown();
+                        return Ok(());
+                    }
+                    self.index += 1;
+                }
+            }
+        };
         let first = self.queue[self.index].clone();
-        let source_format = probe_format(&first)?;
         let desired = self.choose_format(&source_format);
 
-        let opened = backend::open_sink(
+        let opened = (self.opener)(
             self.config.mode,
             self.config.device_id.as_deref(),
             &desired,
@@ -761,11 +828,8 @@ impl Supervisor {
         if self.analyzer.is_enabled()
             && let Some(output) = self.output.as_ref()
         {
-            self.analyzer.push(
-                samples,
-                channels,
-                output.negotiation.format.sample_rate,
-            );
+            self.analyzer
+                .push(samples, channels, output.negotiation.format.sample_rate);
         }
 
         let Some(output) = self.output.as_mut() else {
@@ -853,6 +917,7 @@ impl Supervisor {
         }
 
         self.promote_if_audible();
+        self.drain_skips();
 
         // Everything has been decoded *and* played: stop cleanly instead of
         // letting the ring starve into an underrun storm.
@@ -887,6 +952,21 @@ impl Supervisor {
             self.publish(true);
         } else {
             self.playhead.pending = Some(pending);
+        }
+    }
+
+    /// Forward unplayable-track reports from the decoder to the UI.
+    fn drain_skips(&mut self) {
+        let Some(player) = self.player.as_mut() else {
+            return;
+        };
+        for skip in player.take_skipped() {
+            self.emit(EngineEvent::TrackSkipped {
+                track_id: skip.track_id,
+                title: skip.title,
+                artist: skip.artist,
+                reason: skip.reason,
+            });
         }
     }
 

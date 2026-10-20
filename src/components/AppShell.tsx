@@ -1,6 +1,6 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, type CSSProperties, type JSX } from "react";
-import { TriangleAlert, X } from "lucide-react";
+import { Info, TriangleAlert, X } from "lucide-react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { PlayerBar } from "@/components/player/PlayerBar";
@@ -36,6 +36,8 @@ export function AppShell(): JSX.Element {
   const playbackError = usePlaybackStore((state) => state.error);
   const clearLibraryError = useLibraryStore((state) => state.clearError);
   const clearPlaybackError = usePlaybackStore((state) => state.clearError);
+  const notice = usePlaybackStore((state) => state.notice);
+  const clearNotice = usePlaybackStore((state) => state.clearNotice);
 
   useEffect(() => {
     void loadOverview();
@@ -102,6 +104,29 @@ export function AppShell(): JSX.Element {
               )}
             </div>
           )}
+
+          {notice !== null ? (
+            <div className="mx-auto w-full max-w-[1420px] px-8 pt-4">
+              <div
+                role="status"
+                className="flex items-start gap-3 rounded-2xl border border-warning/20 bg-warning/[0.05] px-4 py-2.5"
+              >
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12px] font-medium text-warning">Skipped · {notice.title}</p>
+                  <p className="mt-0.5 text-[11.5px] text-white/50">{notice.message}</p>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={clearNotice}
+                  className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-white/30 hover:bg-white/[0.06] hover:text-white/70"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           <PageTransition route={route} />
         </main>

@@ -27,6 +27,9 @@ node_modules/
 .pnpm-store/
 dist/
 dist-ssr/
+# Performance harness build (never shipped)
+.perf-dist/
+perf-report.json
 *.local
 .vite/
 **/.vite/

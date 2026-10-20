@@ -22,7 +22,9 @@
     "format:check": "prettier --check .",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check",
     "schema:validate": "python3 scripts/validate_schema.py",
-    "icons": "tauri icon assets/icon.png"
+    "icons": "tauri icon assets/icon.png",
+    "perf": "vite build --config vite.bench.config.ts && node scripts/perf-audit.mjs --no-build",
+    "perf:build": "vite build --config vite.bench.config.ts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.5",
@@ -51,6 +53,7 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.19",
     "globals": "^16.0.0",
+    "playwright": "1.63.0",
     "prettier": "^3.5.0",
     "prettier-plugin-tailwindcss": "^0.6.11",
     "tailwindcss": "^4.1.0",

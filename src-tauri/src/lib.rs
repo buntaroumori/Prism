@@ -204,14 +204,25 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
                         match events.recv().await {
                             Ok(event) => {
                                 let kind = match &event {
-                                    audio::engine::EngineEvent::StateChanged { .. } => "state_changed",
-                                    audio::engine::EngineEvent::TrackChanged { .. } => "track_changed",
-                                    audio::engine::EngineEvent::DeviceChanged { .. } => "device_changed",
-                                    audio::engine::EngineEvent::OutputError { .. } => "output_error",
+                                    audio::engine::EngineEvent::StateChanged { .. } => {
+                                        "state_changed"
+                                    }
+                                    audio::engine::EngineEvent::TrackChanged { .. } => {
+                                        "track_changed"
+                                    }
+                                    audio::engine::EngineEvent::DeviceChanged { .. } => {
+                                        "device_changed"
+                                    }
+                                    audio::engine::EngineEvent::OutputError { .. } => {
+                                        "output_error"
+                                    }
                                     audio::engine::EngineEvent::Underrun { .. } => "underrun",
+                                    audio::engine::EngineEvent::TrackSkipped { .. } => {
+                                        "track_skipped"
+                                    }
                                 };
-                                let payload = serde_json::to_value(&event)
-                                    .unwrap_or(serde_json::Value::Null);
+                                let payload =
+                                    serde_json::to_value(&event).unwrap_or(serde_json::Value::Null);
                                 plugins
                                     .dispatch(&plugins::PluginEvent::new(kind, payload))
                                     .await;
@@ -232,9 +243,7 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
                 tauri::async_runtime::spawn(async move {
                     use tauri::Emitter;
                     while let Some(message) = messages.recv().await {
-                        if let Err(error) =
-                            handle.emit(plugins::PLUGIN_MESSAGE_EVENT, &message)
-                        {
+                        if let Err(error) = handle.emit(plugins::PLUGIN_MESSAGE_EVENT, &message) {
                             tracing::trace!(%error, "cannot forward plugin message");
                         }
                     }

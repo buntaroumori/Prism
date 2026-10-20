@@ -12,10 +12,12 @@
 //! that propagates as a plugin failure instead of hanging the dispatcher.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use mlua::{Function, HookTriggers, Lua, LuaOptions, RegistryKey, StdLib, Value as LuaValue, VmState};
+use mlua::{
+    Function, HookTriggers, Lua, LuaOptions, RegistryKey, StdLib, Value as LuaValue, VmState,
+};
 
 use super::manifest::Manifest;
 use super::{ControlOp, Hook, HostBridge, LUA_INSTRUCTION_BUDGET, LUA_MEMORY_LIMIT, PluginError};
@@ -53,8 +55,8 @@ impl LuaRuntime {
         bridge: Arc<HostBridge>,
     ) -> Result<Self, PluginError> {
         let path = dir.join(&manifest.entry);
-        let source = std::fs::read_to_string(&path)
-            .map_err(|error| PluginError::io(path.clone(), error))?;
+        let source =
+            std::fs::read_to_string(&path).map_err(|error| PluginError::io(path.clone(), error))?;
         if source.len() > MAX_SOURCE {
             return Err(PluginError::manifest(format!(
                 "{} exceeds {} KiB",
@@ -101,9 +103,9 @@ impl LuaRuntime {
             "debug",
             "collectgarbage",
         ] {
-            globals
-                .set(name, LuaValue::Nil)
-                .map_err(|error| PluginError::runtime(format!("cannot seal global '{name}': {error}")))?;
+            globals.set(name, LuaValue::Nil).map_err(|error| {
+                PluginError::runtime(format!("cannot seal global '{name}': {error}"))
+            })?;
         }
 
         let api = lua
@@ -168,7 +170,11 @@ impl LuaRuntime {
     }
 }
 
-fn take_hook(lua: &Lua, globals: &mlua::Table, name: &str) -> Result<Option<RegistryKey>, PluginError> {
+fn take_hook(
+    lua: &Lua,
+    globals: &mlua::Table,
+    name: &str,
+) -> Result<Option<RegistryKey>, PluginError> {
     let value: LuaValue = globals
         .get(name)
         .map_err(|error| PluginError::runtime(format!("cannot read '{name}': {error}")))?;
@@ -196,7 +202,8 @@ fn register_api(
     bridge: &Arc<HostBridge>,
     manifest: &Manifest,
 ) -> Result<(), PluginError> {
-    let to_error = |error: mlua::Error| PluginError::runtime(format!("cannot register host api: {error}"));
+    let to_error =
+        |error: mlua::Error| PluginError::runtime(format!("cannot register host api: {error}"));
 
     let log_bridge = Arc::clone(bridge);
     let log = lua
@@ -284,8 +291,8 @@ fn register_api(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::manifest::Manifest;
     use crate::plugins::PluginError as Error;
+    use crate::plugins::manifest::Manifest;
 
     fn write_plugin(source: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -316,10 +323,9 @@ max = 10
 
     fn runtime(dir: &Path) -> LuaRuntime {
         let manifest = Manifest::load(dir).expect("manifest");
-        let engine = crate::audio::engine::Engine::new(
-            crate::audio::engine::EngineConfig::default(),
-        )
-        .expect("engine");
+        let engine =
+            crate::audio::engine::Engine::new(crate::audio::engine::EngineConfig::default())
+                .expect("engine");
         let (messages, _receiver) = tokio::sync::mpsc::unbounded_channel();
         let bridge = Arc::new(HostBridge::new(
             &manifest,
@@ -349,7 +355,9 @@ end
         );
         let mut runtime = runtime(dir.path());
         runtime.call(Hook::Load, "{\"limit\":3}").expect("on_load");
-        runtime.call(Hook::Event, "{\"kind\":\"state_changed\"}").expect("on_event");
+        runtime
+            .call(Hook::Event, "{\"kind\":\"state_changed\"}")
+            .expect("on_event");
         runtime.call(Hook::Config, "{}").expect("on_config");
         runtime.call(Hook::Event, "{}").expect("second event");
     }
@@ -383,7 +391,9 @@ end
 "#,
         );
         let mut runtime = runtime(dir.path());
-        runtime.call(Hook::Load, "{}").expect("sandbox verified in Lua");
+        runtime
+            .call(Hook::Load, "{}")
+            .expect("sandbox verified in Lua");
     }
 
     #[test]
@@ -415,12 +425,16 @@ end
     fn a_non_function_hook_is_rejected_at_load() {
         let dir = write_plugin("on_event = 42\n");
         let manifest = Manifest::load(dir.path()).expect("manifest");
-        let engine = crate::audio::engine::Engine::new(
-            crate::audio::engine::EngineConfig::default(),
-        )
-        .expect("engine");
+        let engine =
+            crate::audio::engine::Engine::new(crate::audio::engine::EngineConfig::default())
+                .expect("engine");
         let (messages, _receiver) = tokio::sync::mpsc::unbounded_channel();
-        let bridge = Arc::new(HostBridge::new(&manifest, manifest.defaults(), engine, messages));
+        let bridge = Arc::new(HostBridge::new(
+            &manifest,
+            manifest.defaults(),
+            engine,
+            messages,
+        ));
         let error = LuaRuntime::new(&manifest, dir.path(), bridge).expect_err("must reject");
         let Error::Manifest(message) = error else {
             panic!("expected a manifest error, got {error:?}");
@@ -437,10 +451,9 @@ end
         let manifest = Manifest::load(&root).expect("example manifest");
         assert_eq!(manifest.id, "io.prism.volume-guard");
 
-        let engine = crate::audio::engine::Engine::new(
-            crate::audio::engine::EngineConfig::default(),
-        )
-        .expect("engine");
+        let engine =
+            crate::audio::engine::Engine::new(crate::audio::engine::EngineConfig::default())
+                .expect("engine");
         let (messages, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         let bridge = Arc::new(HostBridge::new(
             &manifest,
@@ -482,12 +495,16 @@ capabilities = ["log"]
         .expect("entry");
 
         let manifest = Manifest::load(dir.path()).expect("manifest");
-        let engine = crate::audio::engine::Engine::new(
-            crate::audio::engine::EngineConfig::default(),
-        )
-        .expect("engine");
+        let engine =
+            crate::audio::engine::Engine::new(crate::audio::engine::EngineConfig::default())
+                .expect("engine");
         let (messages, _receiver) = tokio::sync::mpsc::unbounded_channel();
-        let bridge = Arc::new(HostBridge::new(&manifest, manifest.defaults(), engine, messages));
+        let bridge = Arc::new(HostBridge::new(
+            &manifest,
+            manifest.defaults(),
+            engine,
+            messages,
+        ));
         let mut runtime = LuaRuntime::new(&manifest, dir.path(), bridge).expect("runtime");
         let error = runtime.call(Hook::Event, "{}").expect_err("must deny");
         assert!(error.to_string().contains("not allowed"), "{error}");

@@ -39,8 +39,8 @@ implementation, not the ambition.
 | **3** | Metadata scanner + incremental indexing, FTS5 search & read models, cover art, Discord RPC      | ✅ **Complete** |
 | **4** | React shell, PlayerBar, artwork palette engine, ambient canvas, IPC hooks and stores            | ✅ **Complete** |
 | **5** | Virtualised library views, FFT visualiser, synced lyrics, modular layouts, plugin runtime       | ✅ **Complete** |
-| **6** | Stress, fuzzing, memory and latency audits, 120 FPS profiling                                   | 🟡 Next         |
-| **7** | Repository hardening, documentation, signed public release                                      | ⬜ Planned      |
+| **6** | Stress, fuzzing, memory and latency audits, 120 FPS profiling                                   | ✅ **Complete** |
+| **7** | Repository hardening, documentation, signed public release                                      | 🟡 Next         |
 
 The current build ships a **working desktop player**: a native Rust engine that talks to WASAPI
 Exclusive, ASIO, PipeWire and ALSA; an incremental catalogue over WAL-mode SQLite with FTS5; and a
@@ -115,6 +115,31 @@ synthetic or mocked screenshot is shipped.
 - **State split by update frequency**: the 8 Hz playhead lives in its own store slice and its own
   event channel, so scrolling a five-hundred-thousand-row library cannot be disturbed by the clock.
 - Framer Motion restricted to page cross-fades, the player-bar entrance and the segmented indicator.
+
+### Quality engineering (FASE 6)
+
+- **Device and decoder stress** — seven tests drive a loopback endpoint injected through the same
+  seam the production build uses: five hot swaps without losing the playhead or the queue, a DAC that
+  disappears and is rebuilt, a corrupt file skipped mid-album (with the file named in the UI), a
+  queue of nothing but dead files that stops instead of hanging, and a **1.5 GB sparse CUE image**
+  expanded into three sample-accurate tracks without reading it.
+- **120 FPS, measured** — a harness page mounts the production track list over **500 000 synthetic
+  rows** and reports main-thread time per painted frame, not frame rate: **2.8–3.4 ms of the 8.33 ms**
+  a 120 Hz panel allows, 0 dropped frames at 60 Hz, 262–305 fps unpinned, 39–40 rows / 755–775 DOM
+  nodes, 14.5 MB of JS heap, **CLS exactly 0** with zero shift entries, zero long tasks. `pnpm perf`
+  runs it and fails on regression.
+- **The optimisations it found** — hoisting the virtualiser's option callbacks (its measurement cache
+  was being rebuilt over 500 000 rows on every frame: 18.9 ms → 3.0 ms per frame), bootstrapping the
+  first page of the paged list (it never loaded), and moving a status label from text to a dot after
+  it registered a 0.0000037 layout shift — a label whose text changes is a shift source.
+- **Memory and UB** — `valgrind --tool=memcheck` reports **0 errors** over the stress suite and over
+  105 audio unit tests; Miri covers the pure-logic modules in CI.
+- **CPU flamegraphs** — `examples/profile_hot_path.rs` profiles the real decode → DSP path with
+  `pprof`: **656× real time** bit-perfect, **25× real time** when resampling 44.1 → 48 kHz, with the
+  graphs committed under `docs/media/`.
+- **Discord RPC offline fallback** — a reconnect schedule as a value (`BackoffPolicy`), six tests
+  against a real UNIX socket, a track queued while Discord is closed published the instant it comes
+  up, and the handshake bug that turned a rejected client id into an infinite reconnect loop fixed.
 
 ### Library and listening interface (FASE 5)
 
@@ -207,12 +232,27 @@ These are the acceptance gates for FASE 6, measured on the reference machine des
 | Idle memory (RSS)         | **< 50 MB**           | `ps_mem` / Windows Private Bytes after 10 min idle |
 | Idle CPU                  | **< 0.5 %**           | 60 s average, audio paused, library loaded         |
 | Cold start to interactive | **< 300 ms**          | `Instant` at process start → first painted frame   |
-| Library scroll            | **120 FPS sustained** | Chrome DevTools performance trace, 500k rows       |
+| Library scroll            | **120 FPS sustained** | `pnpm perf`: 500k rows, main-thread ms per frame   |
 | Indexing 100k FLAC        | **< 10 s**            | Warm NVMe, metadata only, batched commits          |
-| Interaction latency       | **< 16 ms**           | React Profiler + Event Timing API                  |
+| Interaction latency       | **< 16 ms**           | `pnpm perf`: main-thread ms per frame while typing |
 
 Measured in FASE 3, on the 2-vCPU benchmark container: 100 000 files indexed cold in **7.3 s** and
 rescanned incrementally in **1.6 s** (`cargo test --release --test scanner_bench -- --ignored`).
+
+Measured in FASE 6, same container, headless Chromium, **500 000 synthetic rows**:
+
+| Probe                               | Result                                                                            |
+| :---------------------------------- | :-------------------------------------------------------------------------------- |
+| Scroll, 120 px/frame (120 FPS gate) | **2.8–3.4 ms** of main-thread work per frame — 2.5–3.0× inside the 8.33 ms budget |
+| Scroll, 60 Hz display               | 60.0 fps, **0 frames over budget**                                                |
+| Scroll, unpinned                    | **262–305 fps**, mean frame 3.3–3.8 ms, p95 5.6–7.1 ms                            |
+| Typing in the filter                | **0.1–0.3 ms** per frame                                                          |
+| DOM for 500 000 tracks              | **39–40 rows / 755–775 nodes** · 14.5 MB JS heap                                  |
+| Layout shift                        | **CLS = 0** exactly, zero shift entries                                           |
+
+Rust side, same phase: **656× real time** decoding bit-perfect (0.018 ms per 512-frame block) and
+**25× real time** when resampling 44.1 → 48 kHz; **0 valgrind errors** across the device stress suite
+and 105 audio unit tests.
 
 ---
 

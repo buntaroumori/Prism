@@ -1,16 +1,43 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+  type KeyboardEvent,
+} from "react";
 import { AudioLines, Disc3, Play, TriangleAlert } from "lucide-react";
 
 import { formatDuration, formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useTrackWindow, type TrackWindow } from "@/hooks/useTrackWindow";
+import {
+  libraryTrackFetcher,
+  useTrackWindow,
+  type TrackFetcher,
+  type TrackWindow,
+} from "@/hooks/useTrackWindow";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import type { TrackQuery, TrackRow } from "@/types/ipc";
 
 /** Fixed row height: the virtualiser only works because this never changes. */
 const ROW_HEIGHT = 52;
 const OVERSCAN = 12;
+
+/**
+ * Virtualiser options, hoisted on purpose.
+ *
+ * `@tanstack/react-virtual` memoises its measurement cache on the identity of
+ * these callbacks. Inline arrows are new objects on every render, so the cache
+ * is rebuilt from scratch on every scroll frame — over 500 000 rows that is the
+ * single most expensive thing on the main thread (measured: 21–30 % of the
+ * frame's JS samples inside `getMeasurements`). Module-level functions are
+ * created once, so the cache survives scrolling.
+ */
+const estimateRowSize = (): number => ROW_HEIGHT;
+const rowKey = (index: number): number => index;
 
 interface VirtualTrackListProps {
   query: TrackQuery;
@@ -21,6 +48,8 @@ interface VirtualTrackListProps {
   emptyTitle?: string;
   emptyBody?: string;
   className?: string;
+  /** Page source; production uses the Tauri-backed default. */
+  fetcher?: TrackFetcher;
 }
 
 /**
@@ -43,22 +72,25 @@ export function VirtualTrackList({
   emptyTitle = "No tracks match",
   emptyBody = "Adjust the filters, or scan a folder from Settings.",
   className,
+  fetcher = libraryTrackFetcher,
 }: VirtualTrackListProps): JSX.Element {
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const window = useTrackWindow(query);
+  const window = useTrackWindow(query, fetcher);
   const [selected, setSelected] = useState<number>(-1);
 
-  const currentTrackId = usePlaybackStore((state) => state.status?.track?.trackId ?? null);
-  const playing = usePlaybackStore((state) => state.status?.state === "playing");
+  // Rows read the transport themselves through atomic selectors: this component
+  // never subscribes to the playback store, so a track change re-renders the two
+  // affected rows instead of the whole list.
 
+  const getScrollElement = useCallback(() => scrollRef.current, []);
   const virtualizer = useVirtualizer({
     count: window.total,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    getScrollElement,
+    estimateSize: estimateRowSize,
     overscan: OVERSCAN,
     // Rows are a fixed height, so measurement is a multiplication, not an
     // observation pass.
-    getItemKey: (index) => index,
+    getItemKey: rowKey,
   });
 
   const items = virtualizer.getVirtualItems();
@@ -78,6 +110,26 @@ export function VirtualTrackList({
     setSelected(-1);
     scrollRef.current?.scrollTo({ top: 0 });
   }, [queryKey]);
+
+  // Every handler below is stable for the life of the list: the newest props and
+  // the newest data window are read through refs, so a parent re-render never
+  // invalidates sixty memoised rows.
+  const latest = useRef({ window, onActivate, onPlayFrom });
+  latest.current = { window, onActivate, onPlayFrom };
+
+  const selectIndex = useCallback((index: number) => {
+    setSelected(index);
+  }, []);
+  const activateIndex = useCallback((index: number) => {
+    const { window: current, onActivate: activate } = latest.current;
+    const row = current.rowAt(index);
+    if (row !== undefined) {
+      activate(row, index);
+    }
+  }, []);
+  const playIndex = useCallback((index: number) => {
+    latest.current.onPlayFrom(index);
+  }, []);
 
   const moveSelection = (delta: number): void => {
     if (window.total === 0) {
@@ -174,17 +226,9 @@ export function VirtualTrackList({
                       row={row}
                       index={item.index}
                       selected={selected === item.index}
-                      current={row.id === currentTrackId}
-                      playing={playing}
-                      onSelect={() => {
-                        setSelected(item.index);
-                      }}
-                      onActivate={() => {
-                        onActivate(row, item.index);
-                      }}
-                      onPlayFrom={() => {
-                        onPlayFrom(item.index);
-                      }}
+                      onSelectIndex={selectIndex}
+                      onActivateIndex={activateIndex}
+                      onPlayFromIndex={playIndex}
                     />
                   )}
                 </div>
@@ -246,28 +290,41 @@ interface TrackRowItemProps {
   row: TrackRow;
   index: number;
   selected: boolean;
-  current: boolean;
-  playing: boolean;
-  onSelect: () => void;
-  onActivate: () => void;
-  onPlayFrom: () => void;
+  onSelectIndex: (index: number) => void;
+  onActivateIndex: (index: number) => void;
+  onPlayFromIndex: (index: number) => void;
 }
 
-function TrackRowItem({
+/**
+ * One row.
+ *
+ * Memoised on its own data plus two atomic store selectors: the transport state
+ * reaches the row directly, so a track change costs two re-renders rather than
+ * sixty, and scrolling costs none at all (the `row` object reference is stable
+ * while the page cache keeps it).
+ */
+const TrackRowItem = memo(function TrackRowItem({
   row,
   index,
   selected,
-  current,
-  playing,
-  onSelect,
-  onActivate,
-  onPlayFrom,
+  onSelectIndex,
+  onActivateIndex,
+  onPlayFromIndex,
 }: TrackRowItemProps): JSX.Element {
+  const current = usePlaybackStore((state) => state.status?.track?.trackId === row.id);
+  const playing = usePlaybackStore(
+    (state) => state.status?.track?.trackId === row.id && state.status.state === "playing",
+  );
+
   return (
     <div
       role="gridcell"
-      onClick={onSelect}
-      onDoubleClick={onActivate}
+      onClick={() => {
+        onSelectIndex(index);
+      }}
+      onDoubleClick={() => {
+        onActivateIndex(index);
+      }}
       className={cn(
         "group grid h-[52px] grid-cols-[44px_minmax(0,3fr)_minmax(0,2fr)_88px_92px] items-center gap-3 px-4 transition-colors duration-100",
         selected ? "bg-white/[0.055]" : "hover:bg-white/[0.03]",
@@ -290,7 +347,7 @@ function TrackRowItem({
           type="button"
           onClick={(event) => {
             event.stopPropagation();
-            onPlayFrom();
+            onPlayFromIndex(index);
           }}
           aria-label={`Play from ${row.title}`}
           className={cn(
@@ -346,4 +403,4 @@ function TrackRowItem({
       </span>
     </div>
   );
-}
+});

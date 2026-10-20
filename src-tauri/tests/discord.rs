@@ -10,7 +10,7 @@
 //! framing helpers, and the payload/backoff logic is transport-independent.
 #![cfg(unix)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -18,12 +18,14 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// `std::env::set_var` is process-global: two tests pointing `XDG_RUNTIME_DIR`
 /// at different temporary directories at the same time would each probe the
 /// other's socket. Every test that touches the environment holds this lock.
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+///
+/// It is a `tokio` mutex because the guard is held across `await` points — the
+/// whole test body runs while it is held — and a blocking mutex there is exactly
+/// what `clippy::await_holding_lock` is for.
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-    ENV_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+async fn env_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    ENV_LOCK.lock().await
 }
 
 use prism_lib::artwork::ArtworkService;
@@ -65,7 +67,7 @@ fn presence() -> TrackPresence {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[allow(unsafe_code)] // `set_var` is only unsafe because it races; this test owns the variable.
 async fn the_rpc_completes_the_handshake_and_publishes_an_activity() {
-    let _env = env_guard();
+    let _env = env_guard().await;
     let runtime = tempfile::tempdir().expect("runtime dir");
     let socket_path = runtime.path().join("discord-ipc-0");
     let listener = tokio::net::UnixListener::bind(&socket_path).expect("bind ipc socket");
@@ -150,7 +152,7 @@ async fn the_rpc_completes_the_handshake_and_publishes_an_activity() {
 
 #[tokio::test]
 async fn disabling_presence_stops_the_worker_without_panicking() {
-    let _env = env_guard();
+    let _env = env_guard().await;
     let temp = tempfile::tempdir().expect("tempdir");
     let pool = connect(&temp.path().join("prism.db")).await.expect("db");
     let artwork = Arc::new(

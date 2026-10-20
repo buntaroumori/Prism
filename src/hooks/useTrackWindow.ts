@@ -1,8 +1,29 @@
-import { useCallback, useMemo, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { toUiError, type UiError } from "@/lib/errors";
 import { libraryApi } from "@/lib/ipc";
 import type { TrackQuery, TrackRow } from "@/types/ipc";
+
+/** One page of rows plus the total the query matches. */
+export interface TrackPage {
+  items: TrackRow[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * Where pages come from.
+ *
+ * Production uses [`libraryTrackFetcher`]; the performance harness injects a
+ * synthetic catalogue so the 500 000-row requirement can be measured without a
+ * library. Same list component, same paging logic, different source — the seam
+ * exists so the measurement is of the real code, not a replica of it.
+ */
+export type TrackFetcher = (query: TrackQuery, limit: number, offset: number) => Promise<TrackPage>;
+
+export const libraryTrackFetcher: TrackFetcher = (query, limit, offset) =>
+  libraryApi.search({ ...query, limit, offset });
 
 /** Rows requested per round trip. The backend caps a page at 500. */
 export const PAGE_SIZE = 500;
@@ -39,7 +60,10 @@ interface PageCache {
  * arrives after the user typed another filter lands in a cache nobody reads
  * instead of overwriting the current results.
  */
-export function useTrackWindow(query: TrackQuery): TrackWindow {
+export function useTrackWindow(
+  query: TrackQuery,
+  fetcher: TrackFetcher = libraryTrackFetcher,
+): TrackWindow {
   const queryKey = useMemo(() => JSON.stringify(query), [query]);
   const [reloadToken, setReloadToken] = useState(0);
   const key = `${queryKey}#${String(reloadToken)}`;
@@ -74,12 +98,7 @@ export function useTrackWindow(query: TrackQuery): TrackWindow {
       target.inflight.add(pageIndex);
       setBusy({ key: requestKey, value: true });
 
-      void libraryApi
-        .search({
-          ...queryRef.current,
-          limit: PAGE_SIZE,
-          offset: pageIndex * PAGE_SIZE,
-        })
+      void fetcher(queryRef.current, PAGE_SIZE, pageIndex * PAGE_SIZE)
         .then((page) => {
           target.pages.set(pageIndex, page.items);
           setTotals({ key: requestKey, value: page.total });
@@ -94,7 +113,7 @@ export function useTrackWindow(query: TrackQuery): TrackWindow {
           setBusy({ key: requestKey, value: target.inflight.size > 0 });
         });
     },
-    [cache, key],
+    [cache, fetcher, key],
   );
 
   const ensureRange = useCallback(
@@ -124,6 +143,17 @@ export function useTrackWindow(query: TrackQuery): TrackWindow {
   const reload = useCallback(() => {
     setReloadToken((value) => value + 1);
   }, []);
+
+  // Bootstrap: until one page has landed the total is unknown, so the caller
+  // cannot ask for a range — a virtualiser with `count: 0` never scrolls and
+  // never renders a row. Fetch page 0 as soon as the query generation changes.
+  // The check is on the cache, not on `total`, so an empty result is fetched
+  // once and not refetched in a loop.
+  useEffect(() => {
+    if (!cache.pages.has(0) && !cache.inflight.has(0)) {
+      loadPage(0);
+    }
+  }, [cache, loadPage, key]);
 
   return {
     total: totals.key === key ? totals.value : 0,

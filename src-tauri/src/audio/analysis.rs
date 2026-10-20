@@ -214,7 +214,12 @@ impl BandSmoother {
             energy += next * next;
         }
         let level = (energy / BAND_COUNT as f32).sqrt().clamp(0.0, 1.0);
-        self.level += (level - self.level) * if level > self.level { self.attack } else { self.release };
+        self.level += (level - self.level)
+            * if level > self.level {
+                self.attack
+            } else {
+                self.release
+            };
 
         SpectrumFrame {
             bands: self.bands.clone(),
@@ -349,7 +354,10 @@ mod tests {
             (low..=high).contains(&1_000.0),
             "1 kHz fell into {low:.0}–{high:.0} Hz (band {dominant})"
         );
-        assert!(bands[dominant] > 0.5, "a half-scale tone must be clearly visible");
+        assert!(
+            bands[dominant] > 0.5,
+            "a half-scale tone must be clearly visible"
+        );
     }
 
     #[test]
@@ -396,7 +404,10 @@ mod tests {
 
         let quiet = vec![0.0; FFT_SIZE];
         let after = smoother.process(&quiet, 44_100);
-        assert!(after.level < second.level, "release must fall towards silence");
+        assert!(
+            after.level < second.level,
+            "release must fall towards silence"
+        );
         let decayed = smoother.decay();
         assert!(decayed.level < after.level);
     }
@@ -416,7 +427,10 @@ mod tests {
         let (window, rate) = analyzer.snapshot().expect("window");
         assert_eq!(window.len(), FFT_SIZE);
         assert_eq!(rate, 44_100);
-        assert!((window[0] - 0.5).abs() < 1e-6, "mono content is copied verbatim");
+        assert!(
+            (window[0] - 0.5).abs() < 1e-6,
+            "mono content is copied verbatim"
+        );
     }
 
     #[test]

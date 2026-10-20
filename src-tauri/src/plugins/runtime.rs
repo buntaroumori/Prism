@@ -7,9 +7,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use super::HostBridge;
 use super::PluginError;
 use super::manifest::{Manifest, RuntimeKind};
-use super::HostBridge;
 
 /// The three entry points a plugin may implement. All are optional except
 /// `on_event`, which is optional too — a load-only plugin is legal.
@@ -113,7 +113,7 @@ impl Runtime {
             _ => {
                 let _ = (payload, self);
                 Ok(())
-            },
+            }
         }
     }
 

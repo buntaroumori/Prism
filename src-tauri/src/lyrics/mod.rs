@@ -146,15 +146,15 @@ pub fn parse_lrc(input: &str) -> ParsedLrc {
             // lyric; both are kept only if the file has no timestamps at all
             // (decided by the caller).
             if !text.is_empty() {
-                pending.push(LyricLine {
-                    time_ms: -1,
-                    text,
-                });
+                pending.push(LyricLine { time_ms: -1, text });
             }
             continue;
         }
         for ms in stamps {
-            pending.push(LyricLine { time_ms: ms, text: text.clone() });
+            pending.push(LyricLine {
+                time_ms: ms,
+                text: text.clone(),
+            });
         }
     }
 
@@ -296,7 +296,8 @@ pub fn sidecar_lyrics(path: &Path) -> Option<(PathBuf, String)> {
             .extension()
             .and_then(|value| value.to_str())
             .is_some_and(|value| value.eq_ignore_ascii_case("lrc"));
-        if matches_stem && is_lrc
+        if matches_stem
+            && is_lrc
             && let Ok(text) = std::fs::read_to_string(&candidate)
         {
             return Some((candidate, text));
@@ -369,7 +370,11 @@ impl LyricsService {
                 .collect::<Vec<_>>()
                 .join("\n")
         } else {
-            lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n")
+            lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
         };
 
         let document = LyricsDocument {
@@ -429,9 +434,7 @@ impl LyricsService {
         let (lines, synced) = match (&synced_lrc, has_synced) {
             (Some(body), 1) => (parse_lrc(body).lines, true),
             _ => (
-                plain_text
-                    .as_deref()
-                    .map_or_else(Vec::new, parse_plain),
+                plain_text.as_deref().map_or_else(Vec::new, parse_plain),
                 false,
             ),
         };
@@ -473,7 +476,11 @@ impl LyricsService {
         .bind(&document.source_path)
         .bind(&document.language)
         .bind(&document.plain_text)
-        .bind(if document.synced { Some(raw.to_string()) } else { None })
+        .bind(if document.synced {
+            Some(raw.to_string())
+        } else {
+            None
+        })
         .bind(i64::from(document.synced))
         .execute(&self.pool)
         .await?;
@@ -508,7 +515,10 @@ mod tests {
     fn metadata_and_offset_are_understood() {
         let input = "[ar:Radiohead]\n[ti:Kid A]\n[offset:+500]\n[00:01.00]hello\n";
         let parsed = parse_lrc(input);
-        assert_eq!(parsed.metadata.get("ar").map(String::as_str), Some("Radiohead"));
+        assert_eq!(
+            parsed.metadata.get("ar").map(String::as_str),
+            Some("Radiohead")
+        );
         assert_eq!(parsed.offset_ms, 500);
         // A positive offset delays the lyrics: 1 s becomes 1.5 s.
         assert_eq!(parsed.lines[0].time_ms, 1_500);
@@ -532,7 +542,11 @@ mod tests {
     fn crlf_bom_and_untimed_noise_are_handled() {
         let input = "\u{feff}[00:01.00]first\r\nstray line\r\n[00:02.00]second\r\n";
         let parsed = parse_lrc(input);
-        assert_eq!(parsed.lines.len(), 2, "untimed lines must not break the cursor");
+        assert_eq!(
+            parsed.lines.len(),
+            2,
+            "untimed lines must not break the cursor"
+        );
         assert_eq!(parsed.lines[0].text, "first");
         assert_eq!(parsed.lines[1].text, "second");
     }
@@ -541,7 +555,10 @@ mod tests {
     fn a_file_without_timestamps_falls_back_to_plain_lines() {
         let parsed = parse_lrc("just a poem\nwith two lines\n");
         assert!(!parsed.is_synced());
-        assert!(parsed.lines.is_empty(), "untimed lines are not emitted as timed");
+        assert!(
+            parsed.lines.is_empty(),
+            "untimed lines are not emitted as timed"
+        );
 
         let plain = parse_plain("just a poem\n\nwith two lines\n");
         assert_eq!(plain.len(), 2);
@@ -559,7 +576,11 @@ mod tests {
         }
         assert_eq!(parse_timestamp("02:03"), Some(123_000));
         assert_eq!(parse_timestamp("02:03.4"), Some(123_400));
-        assert_eq!(parse_timestamp("02:03:45"), Some(123_450), "frames-style ms");
+        assert_eq!(
+            parse_timestamp("02:03:45"),
+            Some(123_450),
+            "frames-style ms"
+        );
     }
 
     #[test]

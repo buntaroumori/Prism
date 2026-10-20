@@ -656,19 +656,34 @@ pub struct Chunk {
     pub boundary_offset_frames: Option<u64>,
 }
 
+/// A track the prefetch worker could not open.
+///
+/// Surfaced to the UI instead of quietly disappearing from the queue: a file
+/// that has been moved, truncated or replaced by something that is not audio is
+/// a fact the listener needs to see.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedTrack {
+    pub track_id: String,
+    pub title: String,
+    pub artist: String,
+    pub reason: String,
+}
+
 /// Gapless playback engine.
 pub struct GaplessPlayer {
     planned: VecDeque<TrackRequest>,
     current: Option<PreparedTrack>,
     ready: Option<PreparedTrack>,
     request_tx: Sender<TrackRequest>,
-    result_rx: Receiver<Result<PreparedTrack, AudioError>>,
+    result_rx: Receiver<(TrackRequest, Result<PreparedTrack, AudioError>)>,
     config: PlaybackConfig,
     output_channels: usize,
     /// Track requests already handed to the prefetch worker.
     scheduled: usize,
-    /// Tracks the worker has delivered so far.
+    /// Tracks the worker has delivered so far, playable or not.
     delivered: usize,
+    /// Unplayable tracks waiting to be reported to the supervisor.
+    skipped: VecDeque<SkippedTrack>,
     worker: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -694,7 +709,8 @@ impl GaplessPlayer {
         }
         let output_channels = config.output_format.channels as usize;
         let (request_tx, request_rx) = bounded::<TrackRequest>(4);
-        let (result_tx, result_rx) = unbounded::<Result<PreparedTrack, AudioError>>();
+        let (result_tx, result_rx) =
+            unbounded::<(TrackRequest, Result<PreparedTrack, AudioError>)>();
 
         let worker_config = config.clone();
         let worker = std::thread::Builder::new()
@@ -702,7 +718,7 @@ impl GaplessPlayer {
             .spawn(move || {
                 while let Ok(request) = request_rx.recv() {
                     let prepared = prepare_track(&request, &worker_config);
-                    if result_tx.send(prepared).is_err() {
+                    if result_tx.send((request, prepared)).is_err() {
                         break;
                     }
                 }
@@ -721,6 +737,7 @@ impl GaplessPlayer {
             output_channels,
             scheduled: 0,
             delivered: 0,
+            skipped: VecDeque::new(),
             worker: Some(worker),
         };
 
@@ -746,21 +763,52 @@ impl GaplessPlayer {
             self.schedule_next()?;
             return Ok(Some(prepared));
         }
-        match self
-            .result_rx
-            .recv_timeout(std::time::Duration::from_secs(30))
-        {
-            Ok(Ok(prepared)) => {
-                self.delivered += 1;
-                self.schedule_next()?;
-                Ok(Some(prepared))
+        loop {
+            match self
+                .result_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+            {
+                Ok((_request, Ok(prepared))) => {
+                    self.delivered += 1;
+                    self.schedule_next()?;
+                    return Ok(Some(prepared));
+                }
+                Ok((request, Err(error))) => {
+                    // A file that cannot be opened is skipped, never fatal: one
+                    // moved or truncated track must not end the album. The
+                    // failure is recorded and reported to the supervisor, which
+                    // turns it into a `TrackSkipped` event.
+                    self.delivered += 1;
+                    tracing::warn!(
+                        track = %request.track_id,
+                        path = %request.path.display(),
+                        %error,
+                        "skipping unplayable track"
+                    );
+                    self.skipped.push_back(SkippedTrack {
+                        track_id: request.track_id.clone(),
+                        title: request.title.clone(),
+                        artist: request.artist.clone(),
+                        reason: error.to_string(),
+                    });
+                    self.schedule_next()?;
+                    if self.delivered >= self.planned.len() {
+                        return Ok(None);
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    return Err(AudioError::Decode(
+                        "timed out preparing the next track".into(),
+                    ));
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return Ok(None),
             }
-            Ok(Err(error)) => Err(error),
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => Err(AudioError::Decode(
-                "timed out preparing the next track".into(),
-            )),
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => Ok(None),
         }
+    }
+
+    /// Tracks skipped since the last call, oldest first.
+    pub fn take_skipped(&mut self) -> Vec<SkippedTrack> {
+        self.skipped.drain(..).collect()
     }
 
     fn promote(&mut self) -> Result<Option<String>, AudioError> {

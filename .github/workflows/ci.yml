@@ -109,3 +109,112 @@ jobs:
 
       - name: Tests
         run: cargo test --all-targets
+
+  # ---------------------------------------------------------------------------
+  #  Quality engineering (FASE 6).
+  #
+  #  Two jobs, both opt-out-able: they answer questions the functional suite
+  #  cannot. `qa` looks for undefined behaviour and leaks in the unsafe-free
+  #  Rust paths that still own memory (the SPSC ring, the decoder, CUE spans);
+  #  `performance` refuses a pull request that pushes the 500 000-row list past
+  #  its frame budget.
+  # ---------------------------------------------------------------------------
+  qa:
+    name: Undefined behaviour (${{ matrix.tool }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tool: miri
+          - tool: valgrind
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libasound2-dev libpipewire-0.3-dev libxdo-dev \
+            libayatana-appindicator3-dev libclang-dev valgrind
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.tool == 'miri' && 'nightly' || env.RUST_VERSION }}
+          components: ${{ matrix.tool == 'miri' && 'miri' || 'rustfmt, clippy' }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: qa-${{ matrix.tool }}
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      # Miri interprets the code instead of executing it, so only pure logic is
+      # practical: the ring buffer, the sample-format writers, the LRC parser and
+      # the CUE span arithmetic. Anything that opens a device or a socket is out
+      # of scope by construction.
+      - name: Miri — ring buffer and format conversion
+        if: matrix.tool == 'miri'
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: |
+          cargo miri setup
+          cargo miri test --lib audio::ring
+          cargo miri test --lib audio::format
+          cargo miri test --lib lyrics::
+
+      # Valgrind catches what Miri cannot reach: the real allocator, the real
+      # threads and the real sockets. The stress suite is the target because it
+      # is the only suite that opens and closes endpoints repeatedly.
+      - name: Valgrind — stress suite
+        if: matrix.tool == 'valgrind'
+        run: |
+          cargo test --test stress --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true) | .executable' > /tmp/stress-bin
+          BIN="$(tail -1 /tmp/stress-bin)"
+          valgrind --tool=memcheck --error-exitcode=1 --leak-check=no \
+            --errors-for-leak-kinds=definite --track-origins=yes \
+            "$BIN" --test-threads=1
+
+  performance:
+    name: Frame budget (500 000 rows)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Scroll 500 000 rows
+        run: node scripts/perf-audit.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-report
+          path: |
+            perf-report.json
+            .perf-dist/harness-*.png
+          retention-days: 30

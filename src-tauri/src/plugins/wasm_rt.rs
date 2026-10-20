@@ -130,12 +130,9 @@ impl WasmRuntime {
             .map_err(|_| PluginError::manifest("module does not export alloc(len: i32) -> i32"))?;
 
         let on_load = optional(instance.get_typed_func::<(i32, i32), ()>(&mut store, "on_load"))?;
-        let on_event =
-            optional(instance.get_typed_func::<(i32, i32), ()>(&mut store, "on_event"))?;
-        let on_config = optional(instance.get_typed_func::<(i32, i32), ()>(
-            &mut store,
-            "on_config",
-        ))?;
+        let on_event = optional(instance.get_typed_func::<(i32, i32), ()>(&mut store, "on_event"))?;
+        let on_config =
+            optional(instance.get_typed_func::<(i32, i32), ()>(&mut store, "on_config"))?;
 
         // Drop the startup allowance down to a per-call budget.
         store
@@ -164,7 +161,10 @@ impl WasmRuntime {
         };
 
         self.store.set_fuel(WASM_FUEL_PER_CALL).map_err(|error| {
-            PluginError::runtime(format!("cannot refuel plugin for {}: {error}", hook.as_str()))
+            PluginError::runtime(format!(
+                "cannot refuel plugin for {}: {error}",
+                hook.as_str()
+            ))
         })?;
 
         let bytes = payload.as_bytes();
@@ -214,13 +214,18 @@ fn optional<T>(result: Result<T, wasmtime::Error>) -> Result<Option<T>, PluginEr
 /// Register the host imports. Anything a module asks for that is not listed
 /// here fails instantiation — the sandbox is the import list.
 fn register_imports(linker: &mut Linker<StoreData>) -> Result<(), PluginError> {
-    let map = |error: wasmtime::Error| PluginError::runtime(format!("cannot link host api: {error}"));
+    let map =
+        |error: wasmtime::Error| PluginError::runtime(format!("cannot link host api: {error}"));
 
     linker
         .func_wrap(
             "prism",
             "log",
-            |mut caller: Caller<'_, StoreData>, level: i32, ptr: i32, len: i32| -> wasmtime::Result<()> {
+            |mut caller: Caller<'_, StoreData>,
+             level: i32,
+             ptr: i32,
+             len: i32|
+             -> wasmtime::Result<()> {
                 let text = read_string(&mut caller, ptr, len)?;
                 let level = match level {
                     0 => "debug",
@@ -381,10 +386,9 @@ max = 10
 
     fn runtime(dir: &Path) -> WasmRuntime {
         let manifest = Manifest::load(dir).expect("manifest");
-        let engine = crate::audio::engine::Engine::new(
-            crate::audio::engine::EngineConfig::default(),
-        )
-        .expect("engine");
+        let engine =
+            crate::audio::engine::Engine::new(crate::audio::engine::EngineConfig::default())
+                .expect("engine");
         let (messages, _receiver) = tokio::sync::mpsc::unbounded_channel();
         let bridge = Arc::new(HostBridge::new(
             &manifest,
@@ -413,7 +417,9 @@ max = 10
     fn a_module_receives_the_payload_it_was_allocated() {
         let dir = write_plugin(LOGGER);
         let mut runtime = runtime(dir.path());
-        runtime.call(Hook::Event, r#"{"kind":"state_changed"}"#).expect("event");
+        runtime
+            .call(Hook::Event, r#"{"kind":"state_changed"}"#)
+            .expect("event");
     }
 
     #[test]
@@ -456,12 +462,16 @@ max = 10
 "#,
         );
         let manifest = Manifest::load(dir.path()).expect("manifest");
-        let engine = crate::audio::engine::Engine::new(
-            crate::audio::engine::EngineConfig::default(),
-        )
-        .expect("engine");
+        let engine =
+            crate::audio::engine::Engine::new(crate::audio::engine::EngineConfig::default())
+                .expect("engine");
         let (messages, _receiver) = tokio::sync::mpsc::unbounded_channel();
-        let bridge = Arc::new(HostBridge::new(&manifest, manifest.defaults(), engine, messages));
+        let bridge = Arc::new(HostBridge::new(
+            &manifest,
+            manifest.defaults(),
+            engine,
+            messages,
+        ));
         let error = WasmRuntime::new(&manifest, dir.path(), bridge).expect_err("must reject");
         assert!(error.to_string().contains("memory"), "{error}");
     }
@@ -477,14 +487,22 @@ max = 10
 "#,
         );
         let manifest = Manifest::load(dir.path()).expect("manifest");
-        let engine = crate::audio::engine::Engine::new(
-            crate::audio::engine::EngineConfig::default(),
-        )
-        .expect("engine");
+        let engine =
+            crate::audio::engine::Engine::new(crate::audio::engine::EngineConfig::default())
+                .expect("engine");
         let (messages, _receiver) = tokio::sync::mpsc::unbounded_channel();
-        let bridge = Arc::new(HostBridge::new(&manifest, manifest.defaults(), engine, messages));
+        let bridge = Arc::new(HostBridge::new(
+            &manifest,
+            manifest.defaults(),
+            engine,
+            messages,
+        ));
         let error = WasmRuntime::new(&manifest, dir.path(), bridge).expect_err("must reject");
-        assert!(error.to_string().contains("instantiate") || error.to_string().contains("unknown import"), "{error}");
+        assert!(
+            error.to_string().contains("instantiate")
+                || error.to_string().contains("unknown import"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -498,15 +516,20 @@ max = 10
 "#,
         );
         let manifest = Manifest::load(dir.path()).expect("manifest");
-        let engine = crate::audio::engine::Engine::new(
-            crate::audio::engine::EngineConfig::default(),
-        )
-        .expect("engine");
+        let engine =
+            crate::audio::engine::Engine::new(crate::audio::engine::EngineConfig::default())
+                .expect("engine");
         let (messages, _receiver) = tokio::sync::mpsc::unbounded_channel();
-        let bridge = Arc::new(HostBridge::new(&manifest, manifest.defaults(), engine, messages));
+        let bridge = Arc::new(HostBridge::new(
+            &manifest,
+            manifest.defaults(),
+            engine,
+            messages,
+        ));
         let error = WasmRuntime::new(&manifest, dir.path(), bridge).expect_err("must reject");
         assert!(
-            error.to_string().to_lowercase().contains("memory") || error.to_string().contains("limit"),
+            error.to_string().to_lowercase().contains("memory")
+                || error.to_string().contains("limit"),
             "{error}"
         );
     }
@@ -536,12 +559,16 @@ max = 10
         .expect("module");
 
         let manifest = Manifest::load(dir.path()).expect("manifest");
-        let engine = crate::audio::engine::Engine::new(
-            crate::audio::engine::EngineConfig::default(),
-        )
-        .expect("engine");
+        let engine =
+            crate::audio::engine::Engine::new(crate::audio::engine::EngineConfig::default())
+                .expect("engine");
         let (messages, _receiver) = tokio::sync::mpsc::unbounded_channel();
-        let bridge = Arc::new(HostBridge::new(&manifest, manifest.defaults(), engine, messages));
+        let bridge = Arc::new(HostBridge::new(
+            &manifest,
+            manifest.defaults(),
+            engine,
+            messages,
+        ));
         let mut runtime = WasmRuntime::new(&manifest, dir.path(), bridge).expect("runtime");
         let error = runtime.call(Hook::Event, "{}").expect_err("must deny");
         assert!(error.to_string().contains("not allowed"), "{error}");

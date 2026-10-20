@@ -18,6 +18,12 @@ crate-type = ["rlib"]
 name = "prism"
 path = "src/main.rs"
 
+# The profiler needs `pprof`, which is opt-in. Declared here so
+# `cargo build --all-targets` does not try to compile it without the feature.
+[[example]]
+name = "profile_hot_path"
+required-features = ["profiling"]
+
 [build-dependencies]
 tauri-build.workspace = true
 
@@ -72,6 +78,9 @@ hex.workspace = true
 # --- Networking (Discord RPC artwork pipeline, FASE 3) -------------------------------
 reqwest.workspace = true
 
+# --- Profiling (opt-in, FASE 6) ---------------------------------------------------------
+pprof = { workspace = true, optional = true }
+
 # --- Plugins (manifest parsing + opt-in runtimes, FASE 5) ------------------------------
 toml.workspace = true
 mlua = { workspace = true, optional = true }
@@ -101,6 +110,8 @@ lua-plugins = ["dep:mlua"]
 wasm-plugins = ["dep:wasmtime"]
 # DevTools in release builds (diagnostics only; never enabled in CI artifacts).
 devtools = ["tauri/devtools"]
+# CPU profiling: sampling profiler + SVG flamegraph (see docs/PERFORMANCE.md).
+profiling = ["dep:pprof"]
 
 [lints]
 workspace = true

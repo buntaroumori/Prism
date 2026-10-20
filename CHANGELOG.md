@@ -159,4 +159,51 @@ All notable changes to Prism are documented here. The format follows
 - Tests: 34 new unit tests (9 lyrics, 9 analysis, 16 plugin manifest/runtime), 191 lib tests in the
   default build and 199 with `--features lua-plugins`.
 
+### Quality engineering (FASE 6)
+
+- **Device stress** (`tests/stress.rs`): a loopback endpoint injected through `Engine::with_opener`
+  — the same seam production points at `backend::open_sink` — drives seven tests: five mid-track hot
+  swaps (playhead, queue index and one device open per swap), an unplugged DAC reopened and resumed
+  at the same position, a corrupt track skipped mid-album and reported to the UI, a queue of only
+  corrupt files stopping cleanly with four ordered skip events, a 1.5 GB sparse CUE image expanded
+  into three sample-accurate virtual tracks in under 20 s, an endpoint that refuses once and then
+  succeeds, and swap/stop churn leaving no live device thread.
+- **Corrupt-file recovery end to end**: `SkippedTrack` in the decoder, `EngineEvent::TrackSkipped`
+  through the supervisor, a `track_skipped` plugin event, a `notice` slice in `playbackStore` and a
+  dismissible `AppShell` banner naming the file and the reason. A queue that starts with an
+  unreadable file now skips forward instead of refusing to play.
+- **The library list actually loads**: `useTrackWindow` bootstraps page 0 when its query generation
+  changes — previously the total was only known after the first page, which was never requested, so
+  a fresh mount showed an empty list forever.
+- **120 FPS audit** (`scripts/perf-audit.mjs`, `vite.bench.config.ts`, `src/perf/*`): the production
+  `VirtualTrackList` over 500 000 synthetic rows in Chromium, two scroll workloads, main-thread
+  milliseconds per painted frame via `Performance.getMetrics`, CLS with its sources, long tasks, DOM
+  count and heap. Seven pass/fail verdicts; `pnpm perf` fails the build on regression; CI runs it on
+  every pull request and uploads the report.
+- **Virtualiser fix**: `estimateSize`/`getItemKey`/`getScrollElement` hoisted out of render. Inline
+  arrows invalidated `@tanstack/react-virtual`'s measurement memo, rebuilding a 500 000-entry array
+  on every scroll frame (21–30 % of JS samples). **18.92 ms → 3.02 ms** of main-thread work per
+  frame; 51 → 293 fps unpinned.
+- **Rows**: `TrackRowItem` is a `memo` component subscribing to `playbackStore` through boolean
+  selectors, so a track change re-renders two rows instead of the list and scrolling re-renders none.
+- **CLS = 0**: measured exactly zero with no shift sources after reserving the width of a status
+  label in the harness chrome.
+- **Discord RPC offline fallback**: reconnect schedule as a value (`BackoffPolicy`, 1 s start,
+  ×1.5 growth, 60 s ceiling, additive jitter) and six tests against a real UNIX socket — unavailable
+  state with a reason, rate-limited retries, rejection by client id, pending activity flushed on
+  reconnect, the growth curve, and a missing socket that is an error rather than a panic. Fixes a
+  handshake that read `ev` instead of Discord's `evt` and turned a rejected client id into an
+  infinite reconnect loop.
+- **Memory and UB tooling**: `valgrind --tool=memcheck` over the stress suite and 105 `audio::*`
+  tests reports **0 errors from 0 contexts**; a nightly Miri job covers `audio::ring`,
+  `audio::format` and `lyrics::` in CI.
+- **CPU profiling**: `pprof` behind the `profiling` feature and `examples/profile_hot_path.rs`, with
+  two flamegraphs committed under `docs/media/`. Measured in a debug build: **656× real time**
+  bit-perfect (0.018 ms per 512-frame block) and **25× real time** resampling 44.1 → 48 kHz.
+- **CI**: new `qa` job (Miri + valgrind) and `performance` job (frame budget with artefact upload);
+  `docs/PERFORMANCE.md` now carries the measured numbers, the profiling recipes and a withdrawn
+  `loom` plan instead of a promise.
+- Tests: **197 lib + 39 integration** (32 + 7 stress) = 236 in the default build; 205 lib with
+  `--features lua-plugins`.
+
 [0.1.0]: https://github.com/prism-audio/prism/releases/tag/v0.1.0

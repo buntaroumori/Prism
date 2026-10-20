@@ -71,6 +71,11 @@ realfft = "3"
 # --- Metadata ----------------------------------------------------------------
 lofty = "0.22"
 
+# --- Profiling (FASE 6, opt-in) ----------------------------------------------
+# Sampling profiler with an SVG flamegraph writer. In-process, so it needs no
+# `perf` and no root: `cargo run --profile profiling --features profiling`.
+pprof = { version = "0.14", features = ["flamegraph"] }
+
 # --- Library scanning --------------------------------------------------------
 walkdir = "2"
 rayon = "1"

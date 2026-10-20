@@ -37,7 +37,9 @@ pub use backend::{
     BackendKind, Negotiation, OpenedSink, OutputDevice, OutputMode, OutputSink, RefillSignal,
     SinkDescriptor,
 };
-pub use supervisor::{Engine, EngineConfig, EngineEvent, EngineStatus, NowPlaying, PlaybackState};
+pub use supervisor::{
+    Engine, EngineConfig, EngineEvent, EngineStatus, NowPlaying, PlaybackState, SinkOpener,
+};
 
 #[cfg(test)]
 mod tests {

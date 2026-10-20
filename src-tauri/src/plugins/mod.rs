@@ -448,14 +448,14 @@ impl Entry {
                 path: self.dir.to_string_lossy().into_owned(),
             },
             None => PluginDescriptor {
-                id: self
-                    .dir
-                    .file_name()
-                    .map_or_else(|| "unknown".to_string(), |name| name.to_string_lossy().into_owned()),
-                name: self
-                    .dir
-                    .file_name()
-                    .map_or_else(|| "Unknown plugin".to_string(), |name| name.to_string_lossy().into_owned()),
+                id: self.dir.file_name().map_or_else(
+                    || "unknown".to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                ),
+                name: self.dir.file_name().map_or_else(
+                    || "Unknown plugin".to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                ),
                 version: "—".to_string(),
                 api: 0,
                 description: String::new(),
@@ -528,9 +528,10 @@ impl PluginManager {
         let mut entries = BTreeMap::new();
 
         for folder in discovered {
-            let key = folder
-                .file_name()
-                .map_or_else(|| folder.to_string_lossy().into_owned(), |name| name.to_string_lossy().into_owned());
+            let key = folder.file_name().map_or_else(
+                || folder.to_string_lossy().into_owned(),
+                |name| name.to_string_lossy().into_owned(),
+            );
 
             match Manifest::load(&folder) {
                 Ok(manifest) => {
@@ -544,7 +545,13 @@ impl PluginManager {
                         bridge: None,
                         error: None,
                     };
-                    let is_disabled = registry.disabled.contains(&entry.manifest.as_ref().map(|m| m.id.clone()).unwrap_or_default());
+                    let is_disabled = registry.disabled.contains(
+                        &entry
+                            .manifest
+                            .as_ref()
+                            .map(|m| m.id.clone())
+                            .unwrap_or_default(),
+                    );
                     if !is_disabled {
                         self.instantiate(&mut entry);
                     }
@@ -620,7 +627,11 @@ impl PluginManager {
     }
 
     /// Enable or disable a plugin, persisting the choice.
-    pub async fn set_enabled(&self, id: &str, enabled: bool) -> Result<PluginDescriptor, PrismError> {
+    pub async fn set_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<PluginDescriptor, PrismError> {
         let mut registry = self.registry.lock().await;
         let key = registry
             .entries
@@ -642,7 +653,8 @@ impl PluginManager {
         let disabled: Vec<String> = registry.disabled.iter().cloned().collect();
         drop(registry);
 
-        self.store_json(DISABLED_KEY, &serde_json::json!(disabled)).await?;
+        self.store_json(DISABLED_KEY, &serde_json::json!(disabled))
+            .await?;
 
         let mut registry = self.registry.lock().await;
         if let Some(entry) = registry.entries.get_mut(&key) {
@@ -677,11 +689,18 @@ impl PluginManager {
             let entry = registry
                 .entries
                 .values_mut()
-                .find(|entry| entry.manifest.as_ref().is_some_and(|manifest| manifest.id == id))
+                .find(|entry| {
+                    entry
+                        .manifest
+                        .as_ref()
+                        .is_some_and(|manifest| manifest.id == id)
+                })
                 .ok_or_else(|| PrismError::invalid(format!("unknown plugin '{id}'")))?;
 
             let Some(manifest) = entry.manifest.clone() else {
-                return Err(PrismError::invalid(format!("plugin '{id}' has no valid manifest")));
+                return Err(PrismError::invalid(format!(
+                    "plugin '{id}' has no valid manifest"
+                )));
             };
             let Some(spec) = manifest.settings.iter().find(|spec| spec.key == key_name) else {
                 return Err(PrismError::invalid(format!(
@@ -717,7 +736,12 @@ impl PluginManager {
         registry
             .entries
             .values()
-            .find(|entry| entry.manifest.as_ref().is_some_and(|manifest| manifest.id == id))
+            .find(|entry| {
+                entry
+                    .manifest
+                    .as_ref()
+                    .is_some_and(|manifest| manifest.id == id)
+            })
             .map(|entry| entry.descriptor(registry.disabled.contains(id)))
             .ok_or_else(|| PrismError::invalid(format!("unknown plugin '{id}'")))
     }
@@ -725,11 +749,12 @@ impl PluginManager {
     /// Record a runtime failure and stop calling the plugin this session.
     async fn mark_failed(&self, id: &str, message: String) -> Result<(), PrismError> {
         let mut registry = self.registry.lock().await;
-        if let Some(entry) = registry
-            .entries
-            .values_mut()
-            .find(|entry| entry.manifest.as_ref().is_some_and(|manifest| manifest.id == id))
-        {
+        if let Some(entry) = registry.entries.values_mut().find(|entry| {
+            entry
+                .manifest
+                .as_ref()
+                .is_some_and(|manifest| manifest.id == id)
+        }) {
             entry.runtime = None;
             entry.bridge = None;
             entry.error = Some(message.clone());
@@ -771,11 +796,12 @@ impl PluginManager {
     /// Call `on_config` on a plugin after the host changed its settings.
     pub async fn notify_config(&self, id: &str) -> Result<(), PrismError> {
         let mut registry = self.registry.lock().await;
-        let Some(entry) = registry
-            .entries
-            .values_mut()
-            .find(|entry| entry.manifest.as_ref().is_some_and(|manifest| manifest.id == id))
-        else {
+        let Some(entry) = registry.entries.values_mut().find(|entry| {
+            entry
+                .manifest
+                .as_ref()
+                .is_some_and(|manifest| manifest.id == id)
+        }) else {
             return Err(PrismError::invalid(format!("unknown plugin '{id}'")));
         };
         let payload = serde_json::to_string(&entry.config).unwrap_or_else(|_| "{}".to_string());
@@ -786,12 +812,13 @@ impl PluginManager {
     }
 
     async fn load_disabled(&self) -> BTreeSet<String> {
-        let stored: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?1")
-            .bind(DISABLED_KEY)
-            .fetch_optional(&self.pool)
-            .await
-            .ok()
-            .flatten();
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = ?1")
+                .bind(DISABLED_KEY)
+                .fetch_optional(&self.pool)
+                .await
+                .ok()
+                .flatten();
         stored
             .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
             .map(|ids| ids.into_iter().collect())
@@ -800,20 +827,22 @@ impl PluginManager {
 
     async fn load_config(&self, id: &str) -> serde_json::Map<String, Value> {
         let key = format!("{CONFIG_PREFIX}{id}");
-        let stored: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?1")
-            .bind(&key)
-            .fetch_optional(&self.pool)
-            .await
-            .ok()
-            .flatten();
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = ?1")
+                .bind(&key)
+                .fetch_optional(&self.pool)
+                .await
+                .ok()
+                .flatten();
         stored
             .and_then(|json| serde_json::from_str::<serde_json::Map<String, Value>>(&json).ok())
             .unwrap_or_default()
     }
 
     async fn store_json(&self, key: &str, value: &impl Serialize) -> Result<(), PrismError> {
-        let encoded = serde_json::to_string(value)
-            .map_err(|error| PrismError::Internal(format!("cannot encode plugin state: {error}")))?;
+        let encoded = serde_json::to_string(value).map_err(|error| {
+            PrismError::Internal(format!("cannot encode plugin state: {error}"))
+        })?;
         sqlx::query(
             "INSERT INTO settings (key, value) VALUES (?1, ?2) \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
@@ -889,8 +918,14 @@ mod tests {
     #[test]
     fn runtime_support_reflects_the_feature_flags() {
         let support = runtime_support();
-        assert_eq!(support["lua"], serde_json::json!(cfg!(feature = "lua-plugins")));
-        assert_eq!(support["wasm"], serde_json::json!(cfg!(feature = "wasm-plugins")));
+        assert_eq!(
+            support["lua"],
+            serde_json::json!(cfg!(feature = "lua-plugins"))
+        );
+        assert_eq!(
+            support["wasm"],
+            serde_json::json!(cfg!(feature = "wasm-plugins"))
+        );
         assert_eq!(support["api"], serde_json::json!(1));
     }
 }

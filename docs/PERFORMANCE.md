@@ -51,10 +51,15 @@ release unless they regress relative to the previous tagged build.
 
 ### Memory and UB
 
-- `cargo +nightly miri test` for DSP and CUE parser modules (pure code, no OS calls).
-- `valgrind --tool=memcheck` on Linux integration tests that exercise CUE parsing and playback buffer
-  lifecycle; `heaptrack` for allocation growth across 10 000 track changes.
-- `loom` models for the SPSC ring buffer once FASE 2 lands (feature-gated, CI nightly job).
+- `valgrind --tool=memcheck` over `tests/stress.rs` — the only suite that opens, loses, swaps and
+  closes endpoints repeatedly — and over the `audio::*` unit tests, which cover the SPSC ring, the
+  sample-format writers, the CUE span arithmetic and the DSP chain. Both report 0 errors.
+- `cargo +nightly miri test` over the pure-logic modules (`audio::ring`, `audio::format`,
+  `lyrics::`) in the CI `qa` job. Miri cannot reach the device or socket layers by construction,
+  which is why the valgrind run exists: it covers the threads valgrind _can_ see.
+- No `loom` model: the ring is built on `ringbuf`'s SPSC implementation rather than on hand-written
+  atomics, so there is no custom protocol left to model. The `loom` plan in earlier revisions of this
+  document is withdrawn.
 
 ### Leak checks
 
@@ -64,38 +69,124 @@ release unless they regress relative to the previous tagged build.
 
 ## 3. Frontend methodology
 
-- **React Profiler** in development with the "Highlight updates" overlay; any commit over 4 ms in the
-  library view is investigated.
-- **Chrome/WebKit performance traces** while scrolling with `pointer` wheel events at maximum speed
-  for 60 seconds. Success criteria: no frame > 8.3 ms p95, no long tasks > 50 ms, zero blank rows.
-- **Virtualisation audit**: `@tanstack/react-virtual` measurement cache stays warm; row components are
-  memoised; formatters are module-level singletons; no `Intl` construction inside render.
-- **State isolation**: assert with React DevTools that a playhead tick re-renders only `ProgressBar`
-  (and its leaf), never `TrackList`. The FFT meter subscribes through `useSyncExternalStore` to a
-  non-React ring buffer.
-- **CLS**: Lighthouse/DevTools layout-instability trace must report 0; skeletons match final geometry.
-- **GPU**: ambient background uses compositor-only properties. Canvas/WebGL visualisers run in a
-  worker with `OffscreenCanvas`; the main thread only posts frames.
+The measurements are automated; the practices below are what keeps them passing.
+
+- **Automated frame audit** (`pnpm perf`, §4): the production list over 500 000 synthetic rows, two
+  scroll workloads, seven pass/fail verdicts, run in CI on every pull request.
+- **Per-frame cost, not frame rate**: headroom is judged as renderer main-thread time per painted
+  frame, because a compositor can tick at 60 Hz on a machine with six times the budget to spare.
+- **Virtualiser hygiene**: `estimateSize`, `getItemKey` and `getScrollElement` are stable functions.
+  Inline arrows invalidate `@tanstack/react-virtual`'s measurement memo and rebuild its cache over
+  the full row count on every frame — measured at 18.9 ms against 3.0 ms.
+- **Memoised rows with atomic selectors**: `TrackRowItem` is a `memo` component that subscribes to
+  `playbackStore` itself through boolean selectors, so a track change re-renders the two affected
+  rows instead of the whole list, and scrolling re-renders none of them.
+- **State isolation**: the 8 Hz playhead lives in its own store slice and its own event channel, so
+  scrolling cannot be disturbed by the clock. The spectrum canvas subscribes to the analyser ring
+  through a ref and never through React state.
+- **CLS**: the audit measures layout-shift entries with their sources and requires exactly 0.
+  Skeletons match final row geometry; labels with variable width reserve their box.
+- **GPU, honestly**: the ambient background animates only `transform`/`opacity` (compositor work).
+  The spectrum canvas is drawn in a `requestAnimationFrame` loop on the main thread — it does **not**
+  use `OffscreenCanvas` or a worker, and no document claims otherwise. Its cost is bounded by 31
+  bands over a 2 048-sample FFT already computed on the audio thread.
 
 ## 4. How to profile
 
-```bash
-# Rust
-cargo install flamegraph
-cargo flamegraph --profile profiling --bin prism
-# Linux only, detailed allocations
-heaptrack target/profiling/prism
+Everything below is implemented in this repository; FASE 6 added the tooling and recorded the
+results in [`docs/PHASE-6.md`](PHASE-6.md).
 
-# Frontend
-pnpm dev
-# Chrome DevTools → Performance → CPU 4x throttle → record scroll
+### CPU — audio path
+
+```bash
+# Sampling profiler + SVG flamegraph, no root, no `perf`:
+cargo run --example profile_hot_path --features profiling -- --seconds 10 --tracks 8
+cargo run --example profile_hot_path --features profiling -- --output-rate 48000   # resampler
+
+# Line-level detail (DWARF), same optimisation level as release:
+cargo run --profile profiling --example profile_hot_path --features profiling
 ```
 
-Tracy integration (`tracing-tracy`) is enabled behind the `profiling` profile once the audio engine
-lands; frame and callback zones are annotated at the thread boundary.
+Measured on the delivery sandbox, **debug profile** (dependencies at `opt-level = 2`, i.e.
+pessimistic):
+
+| Path                              |     Throughput | Per 512-frame block | Budget at 2 % CPU |
+| :-------------------------------- | -------------: | ------------------: | ----------------: |
+| Decode → DSP, 44.1 → 44.1 kHz     | 656× real time |            0.018 ms |           0.23 ms |
+| Decode → DSP → sinc 44.1 → 48 kHz |  25× real time |            0.424 ms |           0.23 ms |
+
+`docs/media/flamegraph-decode.svg` and `flamegraph-resample.svg` are the corresponding graphs.
+Resampling costs ~23× what PCM decoding costs, which is why it only runs when the device rate
+differs from the source rate.
+
+`tracing` spans are emitted on the supervisor, decoder, prefetch and device threads, so a
+`tracing-tracy` subscriber can be attached without touching call sites. It is **not** vendored: a C++
+client in the dependency graph for a maintainer-only tool is not a trade this project makes.
+
+### Frame budget — 500 000-row list
+
+```bash
+pnpm perf          # builds the harness, drives Chromium, writes perf-report.json
+node scripts/perf-audit.mjs --profile   # also dumps the hottest JS functions by self samples
+```
+
+The harness mounts the **production** `VirtualTrackList` over a synthetic 500 000-row catalogue
+(`vite.bench.config.ts` → `perf.html`, never part of the app bundle) and reports:
+
+- frame cadence (vsync run) and paint capacity (uncapped run);
+- **main-thread time per painted frame** (`Performance.getMetrics` `TaskDuration` delta ÷ frames),
+  which is the metric a 120 Hz panel cares about — not the compositor's tick rate;
+- CLS with its sources, long tasks, DOM node count and JS heap;
+- two workloads: a **flick** (120 px/frame, the 120 FPS gate) and a **scrub** (3 viewports/frame,
+  where page fetches and blank rows are acceptable).
+
+Latest run (Chromium, 1440×900, 2 vCPU shared sandbox):
+
+| Probe                |                                          Cadence |          Main thread |  Script | Layout + style |
+| :------------------- | -----------------------------------------------: | -------------------: | ------: | -------------: |
+| Flick, vsync         |                          60.0 fps, 0 over budget |     **2.8 ms/frame** | 0.69 ms |        0.57 ms |
+| Flick, uncapped      | **262–305 fps**, mean 3.3–3.8 ms, p95 5.6–7.1 ms | **3.0–3.4 ms/frame** | 0.72 ms |        0.57 ms |
+| Scrub                |                        0–22 % frames over budget |   13.4–15.0 ms/frame |       — |              — |
+| Typing in the filter |                                                — | **0.1–0.3 ms/frame** |       — |              — |
+
+39–40 rows / 755–775 DOM nodes for 500 000 tracks, 14.5 MB JS heap, 0 long tasks (mount included),
+CLS exactly 0 with zero shift entries. Ranges are five consecutive runs on the same box; the
+per-frame cost is stable to about ±10 %, the frame rate less so, which is why the gate is per-frame.
+The audit exits non-zero if any verdict regresses, and CI runs it on every pull request.
+
+The finding that produced most of that headroom: `@tanstack/react-virtual` memoises its measurement
+cache on the identity of `estimateSize`/`getItemKey`. Inline arrows forced a 500 000-entry array
+rebuild on every scroll frame (`getMeasurements` was 21–30 % of JS samples); hoisting them to module
+scope took the frame from 18.9 ms to 3.0 ms.
+
+### Memory and undefined behaviour
+
+```bash
+# Real allocator, real threads, real sockets:
+BIN=$(cargo test --test stress --no-run --message-format=json \
+  | jq -r 'select(.profile.test == true) | .executable' | tail -1)
+valgrind --tool=memcheck --error-exitcode=1 --track-origins=yes "$BIN" --test-threads=1
+
+# Pure logic under the interpreter:
+cargo +nightly miri test --lib audio::ring
+cargo +nightly miri test --lib audio::format
+```
+
+Results: valgrind reports **0 errors** over the seven device/decoder stress tests and over the 105
+`audio::*` unit tests. Miri runs in CI; on the 2-vCPU delivery sandbox the interpreted dependency
+build did not finish, which is stated in `docs/PHASE-6.md` rather than claimed as a pass.
 
 ## 5. Regression gates
 
-CI runs functional tests only. Performance gates run before a release on the reference machine and
-are recorded in `docs/benchmarks/` with the tag, commit and hardware. A release checklist item
-requires the four hard budgets above to pass; results are attached to the GitHub Release notes.
+CI enforces what a runner can measure reliably:
+
+- **`performance` job** — `node scripts/perf-audit.mjs` over the 500 000-row harness. Fails on any
+  regressed verdict (`headroom120`, `inputUnder16ms`, `clsZero`, `noStalls`, `virtualised`,
+  `vsyncClean`, `noConsoleErrors`) and uploads `perf-report.json` plus a screenshot as artefacts.
+- **`qa` job** — Miri over the pure-logic modules and valgrind over the stress suite.
+- **`rust` job** — `cargo test --all-targets`, which includes the seven device/decoder stress tests.
+
+The budgets that need real hardware — idle RSS, idle CPU, cold start on Windows/Linux, audio callback
+deadline misses — are measured before a release on the reference machine and attached to the GitHub
+Release notes with the tag, the commit and the hardware. No CI runner can certify them, and this
+document does not pretend otherwise.

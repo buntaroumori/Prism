@@ -53,6 +53,11 @@ interface PlaybackStore {
   /** Optimistic volume while the user drags; the engine echoes the truth. */
   pendingVolumeDb: number | null;
   error: UiError | null;
+  /**
+   * A track the engine had to skip. Recoverable by definition — playback moved
+   * on — so it is a notice, not an error: it explains the gap and is dismissible.
+   */
+  notice: { title: string; message: string } | null;
   /** True while a transport command is in flight (guards double clicks). */
   busy: boolean;
 
@@ -70,6 +75,7 @@ interface PlaybackStore {
   previewVolumeDb: (db: number) => void;
   setMuted: (muted: boolean) => Promise<void>;
   clearError: () => void;
+  clearNotice: () => void;
 }
 
 /**
@@ -150,6 +156,7 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
   index: 0,
   pendingVolumeDb: null,
   error: null,
+  notice: null,
   busy: false,
 
   hydrate: async () => {
@@ -205,6 +212,15 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
       }
       case "underrun": {
         set({ status: { ...base, underruns: event.total } });
+        break;
+      }
+      case "trackSkipped": {
+        set({
+          notice: {
+            title: event.title.length > 0 ? event.title : event.trackId,
+            message: event.reason,
+          },
+        });
         break;
       }
       default: {
@@ -352,5 +368,9 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
 
   clearError: () => {
     set({ error: null });
+  },
+
+  clearNotice: () => {
+    set({ notice: null });
   },
 }));

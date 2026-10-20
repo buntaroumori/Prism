@@ -482,6 +482,13 @@ export const EngineEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("outputError"), message: z.string() }),
   z.object({ type: z.literal("underrun"), total: z.number().int().nonnegative() }),
+  z.object({
+    type: z.literal("trackSkipped"),
+    trackId: z.string().min(1),
+    title: z.string(),
+    artist: z.string(),
+    reason: z.string(),
+  }),
 ]);
 export type EngineEvent = z.infer<typeof EngineEventSchema>;
 

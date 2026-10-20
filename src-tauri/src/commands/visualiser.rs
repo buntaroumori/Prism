@@ -52,7 +52,9 @@ pub async fn visualiser_set_enabled(
 /// Returns `None` until a full analysis window exists, which is the honest
 /// answer while the transport is stopped.
 #[tauri::command]
-pub async fn visualiser_frame(state: State<'_, AppState>) -> Result<Option<SpectrumFrame>, PrismError> {
+pub async fn visualiser_frame(
+    state: State<'_, AppState>,
+) -> Result<Option<SpectrumFrame>, PrismError> {
     let analyzer = state.engine().analyzer();
     let mut smoother = BandSmoother::default();
     Ok(analyzer.frame(&mut smoother))
@@ -65,8 +67,7 @@ pub async fn visualiser_frame(state: State<'_, AppState>) -> Result<Option<Spect
 pub fn spawn_emitter(handle: AppHandle, analyzer: Arc<Analyzer>) {
     tauri::async_runtime::spawn(async move {
         let mut smoother = BandSmoother::default();
-        let mut interval =
-            tokio::time::interval(Duration::from_millis(1_000 / VISUALISER_FPS));
+        let mut interval = tokio::time::interval(Duration::from_millis(1_000 / VISUALISER_FPS));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut silent_tick: u64 = 0;
         let silent_every = VISUALISER_FPS.div_ceil(SILENT_FPS).max(1);
