@@ -99,7 +99,7 @@ ringbuf = "0.4"
 libc = "0.2"
 
 # --- Extensibility (opt-in via `lua-plugins` / `wasm-plugins` features) --------
-mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
+mlua = { version = "0.12", features = ["lua54", "vendored", "serialize", "send"] }
 wasmtime = { version = "26", default-features = true }
 
 # --- Platform-specific -----------------------------------------------------------
