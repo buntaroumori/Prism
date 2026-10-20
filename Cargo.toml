@@ -95,7 +95,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "serde"] }
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
-ringbuf = "0.4"
+ringbuf = "0.5"
 libc = "0.2"
 
 # --- Extensibility (opt-in via `lua-plugins` / `wasm-plugins` features) --------
