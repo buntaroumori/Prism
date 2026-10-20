@@ -245,6 +245,28 @@ def check_artefacts(report: Report, workflow: dict) -> None:
             f"copies from {directory}",
         )
 
+    # The workspace root owns `target/`: staging from `src-tauri/target` is a
+    # silent trap (the directory exists but is empty), so it is refused.
+    wrong_target = "src-tauri/target" in bodies
+    report.add(
+        "staging reads the workspace target dir",
+        not wrong_target,
+        "target/release" if not wrong_target else "references src-tauri/target",
+    )
+
+    staging_guards = 0
+    for job_name, step in steps:
+        if job_name != "bundle" or not (step.get("name") or "").startswith("Stage"):
+            continue
+        script = step.get("run") or ""
+        guarded = "[ ! -e" in script and "exit 1" in script
+        staging_guards += 1 if guarded else 0
+        report.add(
+            f"{step.get('name')} fails loudly",
+            guarded,
+            "asserts every artefact exists",
+        )
+
     staged = sorted(set(re.findall(r"Prism_\$\{VERSION\}_[\w.]*\.(?:msi|exe|AppImage|deb)", bodies)))
     published_globs = [
         pattern.rsplit("/", 1)[-1]
@@ -345,11 +367,8 @@ def run_licence_audit(report: Report) -> None:
     except (OSError, subprocess.TimeoutExpired) as error:  # pragma: no cover
         report.add("licence audit", False, str(error))
         return
-    report.add(
-        "licence audit passes",
-        result.returncode == 0,
-        (result.stdout.strip().splitlines() or ["no output"])[-1],
-    )
+    output = (result.stdout.strip() or result.stderr.strip()).splitlines() or ["no output"]
+    report.add("licence audit passes", result.returncode == 0, output[-1])
 
 
 def main(argv: list[str]) -> int:

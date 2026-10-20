@@ -187,6 +187,15 @@ def run() -> None:
         "SELECT available_tracks, format FROM v_album_summary"
     ).fetchone()
     check(albums[0] == 1 and albums[1] == "flac", "v_album_summary aggregates")
+
+    # The Home view sorts albums by the newest track they contain; without this
+    # column every fresh launch failed with `no such column: added_at`.
+    album_columns = [row[1] for row in conn.execute("PRAGMA table_info(v_album_summary)")]
+    check("added_at" in album_columns, "v_album_summary exposes added_at")
+    recent = conn.execute(
+        "SELECT id FROM v_album_summary ORDER BY added_at DESC, id ASC LIMIT 5"
+    ).fetchall()
+    check(len(recent) >= 1, "v_album_summary sorts by added_at")
     playlists = conn.execute("SELECT * FROM v_playlist_summary").fetchall()
     check(playlists == [], "v_playlist_summary empty-safe")
 

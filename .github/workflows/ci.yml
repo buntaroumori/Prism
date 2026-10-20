@@ -44,7 +44,15 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: node scripts/check-version.mjs
       - run: pnpm check
+
+      # The bundle is built twice on purpose: `pnpm build` is the contract test,
+      # and the smoke test then loads that same `dist/` in a Tauri-shaped
+      # runtime (production CSP, `freezePrototype`, stubbed IPC). This is the
+      # job that would have caught the black-window release.
       - run: pnpm build
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Boot smoke test
+        run: node scripts/smoke-ui.mjs --no-build
 
   database:
     name: SQLite schema & FTS5
@@ -163,15 +171,9 @@ jobs:
   #  its frame budget.
   # ---------------------------------------------------------------------------
   qa:
-    name: Undefined behaviour (${{ matrix.tool }})
+    name: Memory safety (valgrind)
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - tool: miri
-          - tool: valgrind
     steps:
       - uses: actions/checkout@v4
 
@@ -195,42 +197,39 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.tool == 'miri' && 'nightly' || env.RUST_VERSION }}
-          components: ${{ matrix.tool == 'miri' && 'miri' || 'rustfmt, clippy' }}
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: qa-${{ matrix.tool }}
+          key: qa-valgrind
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
 
-      # Miri interprets the code instead of executing it, so only pure logic is
-      # practical: the ring buffer, the sample-format writers, the LRC parser and
-      # the CUE span arithmetic. Anything that opens a device or a socket is out
-      # of scope by construction.
-      - name: Miri — ring buffer and format conversion
-        if: matrix.tool == 'miri'
-        env:
-          MIRIFLAGS: -Zmiri-disable-isolation
+      # Valgrind is the memory gate that fits in a pull request. It runs the
+      # audio kernel — the ring the real-time thread reads, the sample
+      # conversions, the decoder, the CUE span arithmetic — because that is the
+      # code that owns raw memory. The engine supervisor tests are excluded on
+      # purpose: they assert on wall-clock deadlines, and a 20x interpreter
+      # slowdown turns a correct implementation into a red build. Those run at
+      # full speed in the `rust` job.
+      #
+      # Miri covers the same surface more deeply but cannot finish a crate that
+      # links WebKitGTK inside a CI timeout; it runs weekly in `miri.yml`.
+      - name: Valgrind — audio kernel
         run: |
-          cargo miri setup
-          cargo miri test --lib audio::ring
-          cargo miri test --lib audio::format
-          cargo miri test --lib lyrics::
-
-      # Valgrind catches what Miri cannot reach: the real allocator, the real
-      # threads and the real sockets. The stress suite is the target because it
-      # is the only suite that opens and closes endpoints repeatedly.
-      - name: Valgrind — stress suite
-        if: matrix.tool == 'valgrind'
-        run: |
-          cargo test --test stress --no-run --message-format=json \
-            | jq -r 'select(.profile.test == true) | .executable' > /tmp/stress-bin
-          BIN="$(tail -1 /tmp/stress-bin)"
+          set -euo pipefail
+          cargo test --lib --no-run --message-format=json \
+            | jq -r 'select(.profile.test == true) | .executable' \
+            | grep -v '^$' | tail -1 > /tmp/lib-bin
+          BIN="$(cat /tmp/lib-bin)"
+          if [ ! -x "$BIN" ]; then
+            echo "::error::the test binary was not produced ($BIN)"; exit 1
+          fi
           valgrind --tool=memcheck --error-exitcode=1 --leak-check=no \
             --errors-for-leak-kinds=definite --track-origins=yes \
-            "$BIN" --test-threads=1
+            "$BIN" --test-threads=1 audio:: --skip audio::engine
 
   performance:
     name: Frame budget (500 000 rows)
@@ -251,7 +250,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec playwright install --with-deps chromium
       - name: Scroll 500 000 rows
-        run: node scripts/perf-audit.mjs
+        run: node scripts/perf-audit.mjs --ci
 
       - uses: actions/upload-artifact@v4
         if: always()

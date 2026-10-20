@@ -271,13 +271,36 @@ function dependencySets(metadata) {
   };
 }
 
+/**
+ * `pnpm` is not always on PATH — Corepack installs it as a shim, and CI images
+ * differ from developer machines. Try the binary, then the Corepack shim, and
+ * report which failed instead of dying with ENOENT.
+ */
+function pnpmJsonArguments() {
+  const attempts = [
+    ["pnpm", ["licenses", "list", "--json", "--prod"]],
+    ["corepack", ["pnpm", "licenses", "list", "--json", "--prod"]],
+  ];
+  for (const [command, args] of attempts) {
+    try {
+      return execFileSync(command, args, {
+        cwd: ROOT,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("neither `pnpm` nor `corepack pnpm` is available on PATH");
+}
+
 function npmPackages() {
-  const raw = execFileSync("pnpm", ["licenses", "list", "--json", "--prod"], {
-    cwd: ROOT,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const raw = pnpmJsonArguments();
   const grouped = JSON.parse(raw);
   const packages = [];
   for (const [license, entries] of Object.entries(grouped)) {

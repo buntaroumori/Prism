@@ -240,3 +240,112 @@ fixtures that the CUE and decoder tests need.
   `pnpm licenses` and committing the regenerated inventory, which is a reviewable diff.
 - **`docs/RELEASE.md` is the procedure.** If the pipeline and the document disagree, the validator
   fails and one of them is wrong — which is the point.
+
+---
+
+## 10. Post-delivery round — 0.1.1
+
+The first public build installed, launched and showed **a black window** on Windows and Linux. That
+is a defect of the delivery, not of the feature set: every gate was green because no gate reproduced
+the runtime the WebView provides. This section is the account of what was wrong, how it was found,
+and what now prevents it.
+
+### 10.1 Root cause: `freezePrototype` versus a module-scope assignment
+
+`tauri.conf.json` shipped `"freezePrototype": true`. Tauri executes
+`Object.freeze(Object.prototype)` in every frame **before** the page's scripts run. The validation
+layer assigns a shadowing property on a plain object at module scope:
+
+```js
+errorUtil.errToObj = (message) => …;
+errorUtil.toString = (message) => …;   // ← TypeError once Object.prototype is frozen
+```
+
+In a strict-mode ES module that assignment throws, evaluation of the entry module aborts, React never
+mounts, and the shell shows an empty window with a healthy process. Nothing is logged where a user
+would look, which is why the symptom is "black window" rather than an error.
+
+It is platform-independent, which is why both Windows and Linux were affected.
+
+**Evidence.** Reproduced in the real artefact: a `--features tauri/custom-protocol` build with the
+frontend embedded, run under Xvfb. Then isolated A/B on the _same_ `dist/`, with and without the
+freeze:
+
+| Runtime                                        | Mounted                                                   |
+| :--------------------------------------------- | :-------------------------------------------------------- |
+| `Object.freeze(Object.prototype)` (as shipped) | **no** — `Cannot assign to read only property 'toString'` |
+| without the freeze                             | **yes**                                                   |
+
+**Fix.** `freezePrototype: false`. The option is a hardening measure against prototype pollution in
+the page; the CSP (`script-src 'self'`, no inline, no `eval`), the asset allowlist, the minimal
+capability set and the plugin capability bridge are unchanged, and the application still freezes its
+own objects where it matters.
+
+### 10.2 A read model that broke the Home view on every fresh install
+
+With the window rendering, the next failure was immediate and reproducible: `Request failed ·
+database — no such column: added_at`. `library_albums({ sort: "added" })` orders
+`v_album_summary` by `added_at`, and that view never exposed the column.
+
+**Fix.** Migration `0002` recreates the view with `MAX(t.added_at)` — an album counts as added when
+its newest track arrived — and adds a covering index for the sort. `scripts/validate_schema.py` now
+asserts both the column and the ordering, so the harness fails if the view regresses.
+
+### 10.3 The release pipeline staged from the wrong directory
+
+`src-tauri/target/release` was assumed to hold the bundles. This is a Cargo **workspace**, so
+artefacts land in `./target/release`; the `src-tauri/target` path exists but stays empty. The result
+was a published release with no installers, and `fail_on_unmatched_files` turning that into a red
+publish job.
+
+**Fix.** Staging reads the workspace target, `find`s each artefact, and exits with a GitHub error
+annotation plus a directory listing when one is missing. `scripts/validate_release.py` gained two
+checks (staging path, and that every staging step fails loudly), which is what makes the mistake
+unrepeatable rather than merely fixed.
+
+### 10.4 Two gates that made CI red for reasons unrelated to the code
+
+| Job              | Why it failed                                                                                                                                                                                                                                                                                    | What changed                                                                                                                                                                                      |
+| :--------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `qa` (Miri)      | Interpreting a crate that links WebKitGTK, tokio and rustls does not fit a CI timeout; the job died on the clock, every time.                                                                                                                                                                    | Miri moved to `miri.yml`, weekly and on demand. Valgrind stays in `qa` as the pull-request memory gate.                                                                                           |
+| `performance`    | The frame _rate_ on a shared runner is noise: a rented vCPU and a software compositor produced intermittent verdicts.                                                                                                                                                                            | `--ci` enforces the deterministic properties (bounded DOM, CLS 0, input off the paint path, clean console) and reports the timing ones as advisory. `pnpm perf` locally still enforces all seven. |
+| `rust` (Windows) | `stress::a_cue_image_over_one_gigabyte_expands_without_being_read` asserted that the 1.5 GB fixture occupied under 4 MB **on disk** — true of a sparse file on ext4, false on NTFS, where `set_len` allocates the range and `metadata().len()` reports it. A test that could only pass on Linux. | The sparse-file assertion is `#[cfg(unix)]`; cross-platform CUE coverage lives in `tests/library.rs`, and the reason is written next to the attribute.                                            |
+| `qa`             | Valgrind ran the integration stress suite, whose supervisor tests assert on wall-clock deadlines. At 20× slowdown a correct implementation misses them.                                                                                                                                          | Valgrind runs the **audio kernel** (`audio::` lib tests, `--skip audio::engine`): the ring, the conversions, the decoder, the CUE spans — the code that actually owns raw memory.                 |
+
+### 10.5 The gate that would have caught it
+
+`scripts/smoke-ui.mjs` (`pnpm smoke`) loads the **built** bundle in a Tauri-shaped runtime:
+
+- the production CSP, with inline-script hashes injected the way `tauri-codegen` injects them;
+- `freezePrototype`, read from `tauri.conf.json` and applied as the shell applies it;
+- a stubbed `__TAURI_INTERNALS__` that fails every command, which is exactly a first launch;
+- the window sized as the configuration says.
+
+It asserts that React committed a tree, that the boot watchdog did not fire, and that no unexpected
+error was reported. Verified in both directions — with the option restored to `true` it reproduces
+the black window and names the error; with the fix it passes.
+
+The `frontend` job runs it on every pull request, after building the same `dist/` the release ships.
+
+### 10.6 A failure that is no longer silent
+
+`index.html` now carries a small inline watchdog: if the root has no children a few seconds after
+load, it renders a card with the first error, its file and line, and a reload button. It runs before
+any module, so it survives a bundle that throws during evaluation, and its hash is added to the CSP
+by Tauri — the policy stays strict. A startup failure is now a readable message instead of a black
+rectangle.
+
+### 10.7 Verification of this round
+
+| Gate                                      | Result                                                       |
+| :---------------------------------------- | :----------------------------------------------------------- |
+| Native binary, embedded assets, Xvfb      | **renders the shell** (screenshot captured before and after) |
+| `pnpm smoke`                              | rendered, watchdog quiet, no unexpected errors               |
+| `pnpm smoke` with `freezePrototype: true` | **fails** with the exact `TypeError`                         |
+| `cargo test --all-targets`                | 197 + 39 passed, 1 ignored                                   |
+| `cargo clippy --all-targets`              | exit 0                                                       |
+| `cargo fmt --check`                       | clean                                                        |
+| `pnpm check`                              | typecheck, ESLint, Prettier clean                            |
+| `python3 scripts/validate_schema.py`      | schema OK, including the new `added_at` assertions           |
+| `python3 scripts/validate_release.py`     | 33/33                                                        |
+| `node scripts/license-audit.mjs --check`  | 671 packages, document current                               |

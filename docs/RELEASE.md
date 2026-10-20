@@ -105,14 +105,19 @@ cancels, so two releases cannot race.
 | All      | `SHA256SUMS.txt`                   | `sha256sum` over the directory, regenerated after the copy |
 
 Bundling targets come from `bundle.targets` in `src-tauri/tauri.conf.json` (`nsis`, `msi`,
-`appimage`, `deb`). Release builds use **default features only**: `profiling` and `asio` are not
-enabled, so no debugger, no profiler and no SDK-dependent code enters an artefact.
+`appimage`, `deb`). Every path above is relative to the **workspace** `target/release/`: `src-tauri`
+is a member crate, so `cargo` never writes to `src-tauri/target/` — the directory exists and stays
+empty, which is exactly the trap that published a release with no installers. Staging now asserts
+each artefact exists and prints the directory listing when it does not.
+
+Release builds use **default features only**: `profiling` and `asio` are not enabled, so no
+debugger, no profiler and no SDK-dependent code enters an artefact.
 
 ## 6. What is validated before the tag exists
 
 `python3 scripts/validate_release.py` is a static validator, not a dry run: it cannot create a
 Windows bundle on a Linux box, but it can prove that the workflow would find what it expects.
-Thirty checks, in four groups:
+Thirty-three checks, in five groups:
 
 | Group          | Checks                                                                                                                                                                              |
 | :------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

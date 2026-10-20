@@ -26,6 +26,7 @@
  *   node scripts/perf-audit.mjs            # build, serve, measure, report
  *   node scripts/perf-audit.mjs --no-build # reuse .perf-dist
  *   node scripts/perf-audit.mjs --headed   # watch it run
+ *   node scripts/perf-audit.mjs --ci       # enforce the deterministic verdicts only
  *
  * Playwright is resolved from the project, then from `PLAYWRIGHT_MODULE`, then
  * from a global install. If no browser is installed, set
@@ -46,6 +47,7 @@ const args = new Set(process.argv.slice(2));
 const NO_BUILD = args.has("--no-build");
 const HEADED = args.has("--headed");
 const PROFILE = args.has("--profile");
+const CI = args.has("--ci");
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -413,6 +415,16 @@ async function main() {
     frames: 0,
   };
   const vsync = runs.vsync.scroll ?? { overBudget: 0, frames: 0 };
+  // On a shared CI runner the frame *rate* is noise: the vCPU is rented, the
+  // compositor is software, and a neighbour's garbage collection lands in our
+  // long-task window. The deterministic properties — a bounded DOM, zero layout
+  // shift, input that stays off the paint path, a clean console — are what a
+  // pull request is allowed to be blocked on. The timing verdicts are still
+  // measured, printed and uploaded; they fail a local run (`pnpm perf`) and are
+  // advisory in `--ci`.
+  const CI_ADVISORY = new Set(["headroom120", "vsyncClean", "noStalls"]);
+  const isCi = CI;
+
   const verdict = {
     // A virtualised list keeps the DOM bounded; the row count is the proof that
     // the 500 000 rows are not in the document.
@@ -429,8 +441,18 @@ async function main() {
 
   console.log("\nverdict");
   console.log("─".repeat(58));
+  const failing = [];
   for (const [key, value] of Object.entries(verdict)) {
-    console.log(`${key.padEnd(24)} ${value ? "PASS" : "FAIL"}`);
+    const advisory = isCi && CI_ADVISORY.has(key);
+    const label = value ? "PASS" : advisory ? "WARN (advisory in CI)" : "FAIL";
+    console.log(`${key.padEnd(24)} ${label}`);
+    if (!value && !advisory) {
+      failing.push(key);
+    }
+  }
+  if (isCi) {
+    console.log("\nci mode: headroom120, vsyncClean and noStalls are reported, not enforced —");
+    console.log("a shared runner cannot be a frame-budget reference machine.");
   }
 
   await writeFile(
@@ -448,7 +470,8 @@ async function main() {
   );
   console.log(`\nwrote ${REPORT}`);
 
-  if (Object.values(verdict).some((value) => !value)) {
+  if (failing.length > 0) {
+    console.error(`\nfailed: ${failing.join(", ")}`);
     process.exitCode = 1;
   }
 }

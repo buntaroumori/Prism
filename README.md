@@ -60,9 +60,10 @@ screen is sample data.
 
 Reproducible screenshots are generated from the running app with
 [`scripts/capture-screenshots.sh`](scripts/capture-screenshots.sh) (Xvfb + D-Bus + ImageMagick) and
-published under `docs/media/`. They are captured on developer workstations and CI runners with a
-GPU-backed WebView; headless containers without a compositor cannot rasterise WebKitGTK, so no
-synthetic or mocked screenshot is shipped.
+published under [`docs/media/`](docs/media/). WebKitGTK rasterises in a headless container with
+`WEBKIT_DISABLE_COMPOSITING_MODE=1`, so the committed frames —
+[`home-fresh-install.png`](docs/media/home-fresh-install.png), for one — come from the release binary
+itself. No synthetic or mocked screenshot is shipped.
 
 ---
 
@@ -380,10 +381,13 @@ database and asserts triggers, cascades, constraints and views still behave.
 
 ## CI/CD
 
-- **`ci.yml`** — frontend contract (typecheck, ESLint, Prettier, production build), SQLite schema
-  harness, Rust format/clippy/tests on **Linux and Windows**, the dependency-licence audit and the
-  release-pipeline validator; plus the `qa` (Miri + valgrind) and `performance` (120 FPS budget)
-  jobs described in [`docs/PHASE-6.md`](docs/PHASE-6.md).
+- **`ci.yml`** — six jobs: the frontend contract (typecheck, ESLint, Prettier, production build and a
+  **boot smoke test** that loads the built bundle in a Tauri-shaped runtime), the SQLite schema
+  harness, the dependency-licence audit and release-pipeline validator, Rust format/clippy/tests on
+  **Linux and Windows**, valgrind over the audio kernel, and the measured 120 FPS budget.
+- **`miri.yml`** — weekly and on demand: interprets the pure-logic modules (`audio::ring`,
+  `audio::format`, `lyrics`) for undefined behaviour. It is deliberately outside the pull-request
+  path: interpreting a crate that links WebKitGTK does not fit a CI timeout.
 - **`release.yml`** — triggered by `v*` tags:
   1. quality gate on Ubuntu 24.04: versions, licences, frontend contract, schema, and the static
      validation of this very workflow;
@@ -432,6 +436,18 @@ feature set is counted — the `profiling` tooling never enters a release artefa
 **652 permissive packages, 19 with a notice obligation, and no copyleft code in the binary**; the
 MPL-2.0 decoders and the OFL typeface are documented with their obligations in
 [`docs/LICENSES.md`](docs/LICENSES.md), which is also attached to every release.
+
+## Troubleshooting
+
+| Symptom                                     | Cause                                                                                                                                    | Fix                                                                                                                    |
+| :------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------- |
+| A black window instead of the interface     | The interface bundle threw before React mounted. Since the boot watchdog lands, this shows a failure card with the error, file and line. | Run `pnpm smoke` — it reproduces the shell's runtime (CSP, `freezePrototype`, stubbed IPC) against the built bundle.   |
+| `no such column: …` in the Home bar         | The database was created by an older build. Migrations are embedded and forward-only.                                                    | Restart once; migrations apply at boot. If it persists, the log file under the app data directory names the migration. |
+| No sound, but the transport moves           | The output device is exclusive and held by another application, or the selected device disappeared.                                      | Settings → Output: pick another device. The engine reports the reason and reopens the device.                          |
+| Linux reports a missing `libwebkit2gtk-4.1` | Tauri's WebView runtime is not installed.                                                                                                | `sudo apt install libwebkit2gtk-4.1-0` (the `.deb` declares it as a dependency).                                       |
+| The release has no installers               | Staging read `src-tauri/target/` in a workspace whose artefacts land in `./target/`.                                                     | Fixed: staging reads the workspace target and fails loudly if an artefact is missing.                                  |
+
+A crash, a panic or a failed migration is logged to `<app data>/logs/` with a 14-day rotation.
 
 ## Contributing
 
