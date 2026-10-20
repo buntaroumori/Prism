@@ -45,7 +45,7 @@ jobs:
             libayatana-appindicator3-dev libclang-dev
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 
@@ -132,7 +132,7 @@ jobs:
             libayatana-appindicator3-dev libclang-dev libfuse2t64
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 

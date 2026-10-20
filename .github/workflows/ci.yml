@@ -32,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 
@@ -61,7 +61,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 
@@ -122,7 +122,7 @@ jobs:
             libasound2-dev libpipewire-0.3-dev libxdo-dev \
             libayatana-appindicator3-dev libclang-dev
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 
@@ -184,7 +184,7 @@ jobs:
             libasound2-dev libpipewire-0.3-dev libxdo-dev \
             libayatana-appindicator3-dev libclang-dev valgrind
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 
@@ -239,7 +239,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: ${{ env.PNPM_VERSION }}
 
