@@ -70,6 +70,20 @@ jobs:
       - name: Verify version consistency
         run: node scripts/check-version.mjs
 
+      # The release is the moment a licence mistake becomes a legal problem, so
+      # the audit runs before anything is compiled, together with the static
+      # checks on this workflow itself.
+      - name: Audit dependency licences
+        run: node scripts/license-audit.mjs --check
+
+      # PyYAML ships with most runner images; installing it only when missing
+      # avoids both a needless network hop and the PEP 668 refusal on 24.04.
+      - name: Ensure PyYAML
+        run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet --break-system-packages pyyaml
+
+      - name: Validate the release pipeline
+        run: python3 scripts/validate_release.py
+
       - name: Frontend typecheck, lint and format
         run: pnpm check
 
@@ -204,6 +218,11 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # The inventory is generated, so it is copied rather than rewritten: the
+      # published file is byte-identical to docs/LICENSES.md.
+      - name: Attach the third-party licence inventory
+        run: cp docs/LICENSES.md artifacts/THIRD-PARTY-LICENSES.md
+
       - name: Generate checksums
         run: |
           cd artifacts
@@ -226,6 +245,7 @@ jobs:
             artifacts/*.exe
             artifacts/*.AppImage
             artifacts/*.deb
+            artifacts/THIRD-PARTY-LICENSES.md
             artifacts/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

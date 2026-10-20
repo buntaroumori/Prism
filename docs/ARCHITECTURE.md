@@ -444,7 +444,13 @@ u32) -> Result<OpenedSink>` that the production build points at `backend::open_s
 - Tauri v2 bundles: NSIS + WiX (MSI) + portable EXE on Windows; DEB + AppImage on Linux.
 - WebView2 uses the download bootstrapper (silent); Linux DEB dependencies use the Ubuntu 24.04
   `t64` names with alternatives for older releases.
-- Release CI builds natively on both operating systems, generates `SHA256SUMS.txt`, and publishes a
-  changelog derived from Conventional Commits.
+- Release CI builds natively on both operating systems, generates `SHA256SUMS.txt`, and publishes
+  release notes taken from the curated changelog section with the commit list appended. The full
+  procedure, including rollback, lives in `docs/RELEASE.md`.
+- The pipeline validates itself before it runs: `scripts/validate_release.py` checks tag/manifest
+  agreement, staging coverage against `bundle.targets`, action pinning and the artefacts the release
+  publishes. A broken workflow fails on a pull request instead of during a tag.
+- Distribution carries its licence obligations: `THIRD-PARTY-LICENSES.md`, generated from the
+  lockfiles by `scripts/license-audit.mjs`, is attached to every release alongside the binaries.
 - The updater is deliberately deferred until signing keys exist; unsigned auto-updates are a
   supply-chain risk.

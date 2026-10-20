@@ -24,7 +24,9 @@
     "schema:validate": "python3 scripts/validate_schema.py",
     "icons": "tauri icon assets/icon.png",
     "perf": "vite build --config vite.bench.config.ts && node scripts/perf-audit.mjs --no-build",
-    "perf:build": "vite build --config vite.bench.config.ts"
+    "perf:build": "vite build --config vite.bench.config.ts",
+    "licenses": "node scripts/license-audit.mjs",
+    "licenses:check": "node scripts/license-audit.mjs --check"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.5",
