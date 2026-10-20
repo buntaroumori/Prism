@@ -261,7 +261,8 @@ scanner benchmark excluded from the count); **205** lib tests with `--features l
 - `src-tauri/tests/stress.rs` — the seven device/decoder stress tests.
 - `src-tauri/examples/profile_hot_path.rs` + `profiling` feature — CPU profiling.
 - `scripts/perf-audit.mjs`, `perf.html`, `vite.bench.config.ts`, `src/perf/*` — the 120 FPS audit.
-- `.github/workflows/ci.yml` — `qa` job (Miri + valgrind) and `performance` job (frame budget, with
+- `.github/workflows/ci.yml` — `qa` job (valgrind; Miri moved to `miri.yml` in 0.1.1, see
+  `docs/PHASE-7.md` §10.4) and `performance` job (frame budget, with
   the report and a screenshot uploaded as artefacts).
 
 ### Deliberate limitations, stated rather than hidden

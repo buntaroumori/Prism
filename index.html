@@ -20,10 +20,192 @@
         min-height: 100%;
         background-color: #08080a;
       }
+      /* Boot watchdog. Inline so it runs even when the bundle throws while
+         being evaluated; Tauri hashes inline scripts into the CSP, so it is
+         allowed to run under `script-src 'self'`. */
+      #boot-failure {
+        position: fixed;
+        inset: 0;
+        display: none;
+        place-items: center;
+        padding: 32px;
+        background: #08080a;
+        color: #f5f5f7;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          Helvetica,
+          Arial,
+          sans-serif;
+      }
+      #boot-failure article {
+        width: 100%;
+        max-width: 620px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 24px;
+        padding: 28px 30px;
+        background: rgba(255, 255, 255, 0.03);
+      }
+      #boot-failure h1 {
+        margin: 14px 0 0;
+        font-size: 21px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      #boot-failure p {
+        margin: 10px 0 0;
+        font-size: 13.5px;
+        line-height: 1.6;
+        color: rgba(255, 255, 255, 0.55);
+      }
+      #boot-failure pre {
+        margin: 16px 0 0;
+        max-height: 190px;
+        overflow: auto;
+        border-radius: 12px;
+        padding: 14px;
+        background: rgba(0, 0, 0, 0.45);
+        color: #ff8a8a;
+        font:
+          12px/1.55 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      #boot-failure .eyebrow {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: rgba(255, 122, 122, 0.9);
+      }
+      #boot-failure button {
+        margin-top: 20px;
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 20px;
+        background: #7c8cff;
+        color: #07070b;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      #boot-failure button:focus-visible {
+        outline: 2px solid #fff;
+        outline-offset: 3px;
+      }
     </style>
   </head>
   <body>
     <div id="root"></div>
+
+    <!--
+      Boot watchdog.
+
+      A desktop app that fails before React mounts used to present a black
+      window with no explanation: the shell is visible, the process is healthy,
+      and the only diagnostic was on a console nobody sees. This script turns
+      that silence into a readable failure card — the message, the file and the
+      line — and it runs before any module so it survives a bundle that throws
+      during evaluation.
+
+      It is deliberately dependency-free and inline: Tauri hashes inline
+      scripts into the production CSP, so it is permitted without weakening the
+      policy, and it cannot itself fail to load.
+    -->
+    <script>
+      (function () {
+        var problems = [];
+        var shown = false;
+
+        function describe(value) {
+          if (value === null || value === undefined) return "unknown error";
+          if (typeof value === "string") return value;
+          if (value.stack) return String(value.stack).split("\n").slice(0, 6).join("\n");
+          if (value.message) return String(value.message);
+          try {
+            return JSON.stringify(value);
+          } catch (error) {
+            return String(value);
+          }
+        }
+
+        function render() {
+          if (shown) return;
+          var root = document.getElementById("root");
+          if (root && root.childElementCount > 0) return;
+          shown = true;
+
+          var host = document.createElement("div");
+          host.id = "boot-failure";
+          host.setAttribute("role", "alert");
+          host.style.display = "grid";
+
+          var card = document.createElement("article");
+          var eyebrow = document.createElement("p");
+          eyebrow.className = "eyebrow";
+          eyebrow.style.margin = "0";
+          eyebrow.textContent = "Prism · startup failure";
+
+          var title = document.createElement("h1");
+          title.textContent = "The interface could not start.";
+
+          var body = document.createElement("p");
+          body.textContent =
+            "The native engine is running, but the interface bundle failed before it rendered. The details below are the first errors reported by the WebView.";
+
+          var detail = document.createElement("pre");
+          detail.textContent =
+            problems.length > 0 ? problems.join("\n\n") : "No error was reported.";
+
+          var hint = document.createElement("p");
+          hint.textContent =
+            "This is a bug, not a configuration problem: report it with the text above. Reloading restarts the interface without touching your library.";
+
+          var button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "Reload Prism";
+          button.addEventListener("click", function () {
+            window.location.reload();
+          });
+
+          card.appendChild(eyebrow);
+          card.appendChild(title);
+          card.appendChild(body);
+          card.appendChild(detail);
+          card.appendChild(hint);
+          card.appendChild(button);
+          host.appendChild(card);
+          document.body.appendChild(host);
+        }
+
+        window.addEventListener("error", function (event) {
+          var where = event.filename
+            ? " (" + event.filename + ":" + event.lineno + ":" + event.colno + ")"
+            : "";
+          problems.push(describe(event.error || event.message) + where);
+        });
+
+        window.addEventListener("unhandledrejection", function (event) {
+          problems.push("Unhandled rejection: " + describe(event.reason));
+        });
+
+        // If React has not committed anything after four seconds, the bundle is
+        // not coming: show the card rather than an empty window.
+        window.setTimeout(render, 4000);
+        window.addEventListener("load", function () {
+          window.setTimeout(render, 2500);
+        });
+      })();
+    </script>
+
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

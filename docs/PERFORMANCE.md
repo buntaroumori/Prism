@@ -183,7 +183,8 @@ CI enforces what a runner can measure reliably:
 - **`performance` job** — `node scripts/perf-audit.mjs` over the 500 000-row harness. Fails on any
   regressed verdict (`headroom120`, `inputUnder16ms`, `clsZero`, `noStalls`, `virtualised`,
   `vsyncClean`, `noConsoleErrors`) and uploads `perf-report.json` plus a screenshot as artefacts.
-- **`qa` job** — Miri over the pure-logic modules and valgrind over the stress suite.
+- **`qa` job** — valgrind over the audio kernel (`audio::` lib tests, engine supervisor excluded
+  because it asserts on wall-clock deadlines). Miri runs weekly in `miri.yml`.
 - **`rust` job** — `cargo test --all-targets`, which includes the seven device/decoder stress tests.
 
 The budgets that need real hardware — idle RSS, idle CPU, cold start on Windows/Linux, audio callback

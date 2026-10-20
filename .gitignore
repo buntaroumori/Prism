@@ -104,6 +104,17 @@ Thumbs.db
 desktop.ini
 .history/
 
+# --- Release staging (release.yml writes here) -------------------------------------
+/artifacts/
+
+# --- Patch and scratch leftovers ----------------------------------------------------
+*.orig
+*.rej
+*.bak
+*.tmp
+.pnpm-debug.log*
+.direnv/
+
 # --- Scratch / local artefacts ----------------------------------------------------
 /scratch/
 /tmp/

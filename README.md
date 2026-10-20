@@ -32,15 +32,15 @@ This repository is built in public, phase by phase, with every module implemente
 standards — no mocks, no `TODO`s, no placeholder logic. The table below is the honest status of the
 implementation, not the ambition.
 
-| Phase | Scope                                                                                           | Status          |
-| :---- | :---------------------------------------------------------------------------------------------- | :-------------- |
-| **1** | Repository, toolchain, SQLite schema + FTS5, Tauri shell, IPC contract, CI/CD, release pipeline | ✅ **Complete** |
-| **2** | Audio engine, device backends (WASAPI/ASIO/PipeWire/ALSA), gapless + RAM Play, DSP graph        | ✅ **Complete** |
-| **3** | Metadata scanner + incremental indexing, FTS5 search & read models, cover art, Discord RPC      | ✅ **Complete** |
-| **4** | React shell, PlayerBar, artwork palette engine, ambient canvas, IPC hooks and stores            | ✅ **Complete** |
-| **5** | Virtualised library views, FFT visualiser, synced lyrics, modular layouts, plugin runtime       | ✅ **Complete** |
-| **6** | Stress, fuzzing, memory and latency audits, 120 FPS profiling                                   | ✅ **Complete** |
-| **7** | Repository hardening, documentation, signed public release                                      | 🟡 Next         |
+| Phase | Scope                                                                                           | Status       |
+| :---- | :---------------------------------------------------------------------------------------------- | :----------- |
+| **1** | Repository, toolchain, SQLite schema + FTS5, Tauri shell, IPC contract, CI/CD, release pipeline | **Complete** |
+| **2** | Audio engine, device backends (WASAPI/ASIO/PipeWire/ALSA), gapless + RAM Play, DSP graph        | **Complete** |
+| **3** | Metadata scanner + incremental indexing, FTS5 search & read models, cover art, Discord RPC      | **Complete** |
+| **4** | React shell, PlayerBar, artwork palette engine, ambient canvas, IPC hooks and stores            | **Complete** |
+| **5** | Virtualised library views, FFT visualiser, synced lyrics, modular layouts, plugin runtime       | **Complete** |
+| **6** | Stress, fuzzing, memory and latency audits, 120 FPS profiling                                   | **Complete** |
+| **7** | Repository hardening, licence audit, professional documentation, validated release pipeline     | **Complete** |
 
 The current build ships a **working desktop player**: a native Rust engine that talks to WASAPI
 Exclusive, ASIO, PipeWire and ALSA; an incremental catalogue over WAL-mode SQLite with FTS5; and a
@@ -60,9 +60,10 @@ screen is sample data.
 
 Reproducible screenshots are generated from the running app with
 [`scripts/capture-screenshots.sh`](scripts/capture-screenshots.sh) (Xvfb + D-Bus + ImageMagick) and
-published under `docs/media/`. They are captured on developer workstations and CI runners with a
-GPU-backed WebView; headless containers without a compositor cannot rasterise WebKitGTK, so no
-synthetic or mocked screenshot is shipped.
+published under [`docs/media/`](docs/media/). WebKitGTK rasterises in a headless container with
+`WEBKIT_DISABLE_COMPOSITING_MODE=1`, so the committed frames —
+[`home-fresh-install.png`](docs/media/home-fresh-install.png), for one — come from the release binary
+itself. No synthetic or mocked screenshot is shipped.
 
 ---
 
@@ -327,29 +328,31 @@ Useful environment variables:
 
 ```text
 prism/
-├── src/                          React 19 shell (FASE 4 baseline)
-│   ├── components/               Shell, diagnostics sections, UI primitives
-│   ├── hooks/                    Snapshot loading, async actions
+├── src/                          React 19 shell
+│   ├── components/               Shell, library, now-playing, UI primitives
+│   ├── hooks/                    Paged track window, async actions, snapshots
 │   ├── lib/                      IPC client, formatting, error normalisation
-│   ├── stores/                   Zustand shell preferences
+│   ├── perf/                     120 FPS harness (benchmark + synthetic catalogue)
+│   ├── plugins/                  Plugin panel and host bridge
+│   ├── stores/                   Zustand slices (playback, library, shell, plugins)
 │   ├── styles/globals.css        Tailwind v4 entry + OLED design tokens
 │   └── types/ipc.ts              Zod contracts mirroring Rust structs
 ├── src-tauri/
 │   ├── migrations/               Embedded SQL migrations (sqlx)
+│   ├── examples/                 profile_hot_path — pprof flamegraphs and throughput
 │   ├── src/
-│   │   ├── db/                   Pool, PRAGMAs, migrations, health pragmas
-│   │   ├── commands/             Tauri command surface (typed errors)
-│   │   ├── state.rs              App paths + shared pool
-│   │   ├── logging.rs            Dual-sink, non-blocking, retention
-│   │   └── error.rs              Serializable error taxonomy
+│   │   ├── audio/                Engine, decoder, DSP, backends, ring buffer
+│   │   ├── metadata/             Tag reader, scanner, CUE expansion
+│   │   ├── plugins/              Lua and WASM runtimes, capability bridge
+│   │   ├── discord/              RPC transport and backoff policy
+│   │   ├── db/                   Pool, PRAGMAs, migrations, read models
+│   │   └── commands/             Tauri command surface (typed errors)
+│   ├── tests/                    database, library, engine, stress, discord, palette
 │   ├── capabilities/             Tauri v2 ACL (one window, minimal grants)
-│   ├── icons/                    Generated native icon set
-│   ├── tests/database.rs         WAL/FTS5/constraint integration tests
-│   ├── tauri.conf.json           Bundler, CSP, Windows/Linux packaging
-│   └── Cargo.toml                Crate configuration
-├── .github/workflows/            ci.yml + release.yml (matrix, changelog, checksums)
-├── scripts/                      Version audit, changelog, schema harness
-├── docs/                         Architecture, performance, development notes
+│   └── tauri.conf.json           Bundler, CSP, Windows/Linux packaging
+├── .github/workflows/            ci.yml (5 jobs) + release.yml (quality → bundle → publish)
+├── docs/                         ARCHITECTURE, PERFORMANCE, RELEASE, LICENSES, PHASE-1…6
+├── scripts/                      Version audit, licence audit, release validator, 120 FPS audit
 └── Cargo.toml                    Rust workspace, release profile (LTO fat, CU 1)
 ```
 
@@ -378,18 +381,25 @@ database and asserts triggers, cascades, constraints and views still behave.
 
 ## CI/CD
 
-- **`ci.yml`** — frontend contract (typecheck, ESLint, Prettier, production build), SQLite schema
-  harness, and Rust format/clippy/tests on **Linux and Windows**.
+- **`ci.yml`** — six jobs: the frontend contract (typecheck, ESLint, Prettier, production build and a
+  **boot smoke test** that loads the built bundle in a Tauri-shaped runtime), the SQLite schema
+  harness, the dependency-licence audit and release-pipeline validator, Rust format/clippy/tests on
+  **Linux and Windows**, valgrind over the audio kernel, and the measured 120 FPS budget.
+- **`miri.yml`** — weekly and on demand: interprets the pure-logic modules (`audio::ring`,
+  `audio::format`, `lyrics`) for undefined behaviour. It is deliberately outside the pull-request
+  path: interpreting a crate that links WebKitGTK does not fit a CI timeout.
 - **`release.yml`** — triggered by `v*` tags:
-  1. quality gate on Ubuntu 24.04;
+  1. quality gate on Ubuntu 24.04: versions, licences, frontend contract, schema, and the static
+     validation of this very workflow;
   2. native bundles on `windows-latest` and `ubuntu-24.04` (MSI + NSIS + portable EXE; AppImage + DEB);
-  3. structured changelog generated from Conventional Commits;
-  4. GitHub Release with all artifacts and `SHA256SUMS.txt`.
+  3. release notes from the curated `CHANGELOG.md` section, with the commit list appended;
+  4. GitHub Release with all artefacts, `THIRD-PARTY-LICENSES.md` and `SHA256SUMS.txt`.
 
-Cut a release:
+Cut a release — the whole procedure is in [`docs/RELEASE.md`](docs/RELEASE.md):
 
 ```bash
-node scripts/check-version.mjs          # all manifests agree
+node scripts/check-version.mjs          # every manifest agrees on the version
+python3 scripts/validate_release.py     # 30 static checks over release.yml
 git tag -a v0.1.0 -m "Release v0.1.0"
 git push origin v0.1.0
 ```
@@ -410,9 +420,34 @@ unsigned local builds are expected.
 
 ## Licence & dependency policy
 
-MIT © 2026 Prism Contributors. Every Rust and npm dependency is reviewed for licence compatibility
-(MIT/BSD/Apache-2.0); GPL code is not linked. `cargo deny` and a licence audit run in the release
-checklist.
+MIT © 2026 Prism Contributors — see [`LICENSE`](LICENSE).
+
+Prism ships **671 third-party packages** (651 Rust crates linked into the binary, 20 npm packages
+bundled into the WebView). Every one of them is classified by a generated audit:
+
+```bash
+pnpm licenses        # regenerate docs/LICENSES.md from Cargo.lock + pnpm-lock.yaml
+pnpm licenses:check  # CI: fail if the inventory or the policy drifts
+```
+
+The policy is enforced, not aspirational: GPL, AGPL, SSPL, EPL, CDDL and the Commons Clause are
+refused, dual-licensed crates are resolved to their least demanding branch, and only the default
+feature set is counted — the `profiling` tooling never enters a release artefact. Today that yields
+**652 permissive packages, 19 with a notice obligation, and no copyleft code in the binary**; the
+MPL-2.0 decoders and the OFL typeface are documented with their obligations in
+[`docs/LICENSES.md`](docs/LICENSES.md), which is also attached to every release.
+
+## Troubleshooting
+
+| Symptom                                     | Cause                                                                                                                                    | Fix                                                                                                                    |
+| :------------------------------------------ | :--------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------- |
+| A black window instead of the interface     | The interface bundle threw before React mounted. Since the boot watchdog lands, this shows a failure card with the error, file and line. | Run `pnpm smoke` — it reproduces the shell's runtime (CSP, `freezePrototype`, stubbed IPC) against the built bundle.   |
+| `no such column: …` in the Home bar         | The database was created by an older build. Migrations are embedded and forward-only.                                                    | Restart once; migrations apply at boot. If it persists, the log file under the app data directory names the migration. |
+| No sound, but the transport moves           | The output device is exclusive and held by another application, or the selected device disappeared.                                      | Settings → Output: pick another device. The engine reports the reason and reopens the device.                          |
+| Linux reports a missing `libwebkit2gtk-4.1` | Tauri's WebView runtime is not installed.                                                                                                | `sudo apt install libwebkit2gtk-4.1-0` (the `.deb` declares it as a dependency).                                       |
+| The release has no installers               | Staging read `src-tauri/target/` in a workspace whose artefacts land in `./target/`.                                                     | Fixed: staging reads the workspace target and fails loudly if an artefact is missing.                                  |
+
+A crash, a panic or a failed migration is logged to `<app data>/logs/` with a 14-day rotation.
 
 ## Contributing
 

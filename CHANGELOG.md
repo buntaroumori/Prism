@@ -1,12 +1,93 @@
 # Changelog
 
-All notable changes to Prism are documented here. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to
-[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), the project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html), and every entry is
+traceable to the delivery document of the phase that introduced it (`docs/PHASE-*.md`).
 
-## [0.1.0] — 2026-10-19
+## [Unreleased]
+
+_No unreleased changes._
+
+## [0.1.1] — 2026-10-20
+
+A correctness and pipeline release. `0.1.0` built and installed, but the window
+stayed black on Windows and Linux: the interface bundle threw before React
+mounted. This release fixes that, one database read model that broke the Home
+view on a fresh install, and the release pipeline that published without its
+installers.
+
+### Fixed
+
+- **The library list actually loads**: `useTrackWindow` bootstraps page 0 when its query generation
+  changes — previously the total was only known after the first page, which was never requested, so
+  a fresh mount showed an empty list forever.
+- **A corrupt first track no longer takes the album down**: `start_queue` probed the head of the
+  queue and propagated the error, so an album whose first rip was truncated would not play at all.
+  The supervisor now walks forward, emits `TrackSkipped` per dead file and starts on the first
+  playable track; an all-dead queue stops cleanly instead of spinning.
+- **Discord handshake read `ev`, Discord sends `evt`**: a rejected client id was therefore parsed as
+  "unknown event, the pipe is alive, connected", the socket then dropped and the settings pane showed
+  a spinner that never resolved. The event name is now read as `evt` with `ev` as a fallback, and the
+  state reports `Unavailable` with Discord's reason.
+- **CLS = 0 with zero shift entries**: the audit reported one 0.0000037 shift, from the harness chrome
+  swapping the text "loading" for "ready" inside a fixed-width pill — a label whose text changes is a
+  layout-shift source. The state is now a coloured dot, the audit names the element and its rects if a
+  shift ever returns, and CLS is exactly zero.
+- **Black window on launch, Windows and Linux alike**: `app.security.freezePrototype` froze
+  `Object.prototype` before the bundle ran, and the validation layer assigns a shadowing `toString`
+  at module scope. Under the frozen prototype that assignment throws a `TypeError` in strict mode,
+  the entry module never finishes evaluating, and the window stays black with the process perfectly
+  healthy. Reproduced in the real binary under Xvfb, isolated by A/B against the same bundle with and
+  without the freeze, and fixed by disabling the option — the CSP, the capability set, the IPC
+  allowlist and `Object.freeze` on the app's own objects are unaffected.
+- **`Home` failed on every fresh install with `no such column: added_at`**: the album grid sorts by
+  the newest track it contains, but `v_album_summary` never exposed `added_at`. Migration `0002`
+  recreates the read model with `MAX(t.added_at)` and adds a covering index; the schema harness now
+  asserts both the column and the ordering.
+- **Release staging read the wrong `target/` directory**: this is a Cargo workspace, so artefacts
+  land in `./target/release`, not `./src-tauri/target/release`. Every bundle job staged from the
+  second path, which exists but is empty, and the release published without installers. Staging now
+  reads the workspace target, fails loudly when an artefact is missing, and the release validator
+  refuses the old path.
+
+### Testing and CI
+
+- **Boot smoke test** (`scripts/smoke-ui.mjs`, `pnpm smoke`): loads the production bundle in a
+  Tauri-shaped runtime — the real CSP from `tauri.conf.json` with inline-script hashes injected the
+  way `tauri-codegen` injects them, `freezePrototype` applied as the app applies it, and a stubbed
+  IPC that fails every command like a first launch does — then asserts that React committed a tree
+  and that no unexpected error was reported. Verified in both directions: it fails on the exact
+  configuration that shipped the black window.
+- **Boot watchdog** (`index.html`): an inline, dependency-free script that renders a readable failure
+  card — message, file, line — if the bundle has not mounted after a few seconds, instead of an
+  empty black window. It runs before any module, so it survives a bundle that throws while being
+  evaluated, and Tauri hashes it into the CSP so the policy stays strict.
+- **Miri moved out of the pull-request path** into `miri.yml` (weekly and on demand): interpreting a
+  crate that links WebKitGTK does not fit a CI timeout, and a gate that always times out is not a
+  gate. Valgrind remains the memory gate in `qa`, pointed at the **audio kernel** — the ring, the
+  sample conversions, the decoder, the CUE span arithmetic — rather than at the engine supervisor
+  tests, which assert on wall-clock deadlines and cannot survive a 20× interpreter slowdown.
+- **The 1.5 GB CUE stress test no longer assumes a filesystem**: it is `#[cfg(unix)]`, because the
+  sparse-file precondition it checks (`blocks() * 512`) has no Windows counterpart — on NTFS
+  `set_len` allocates the range and the test would have failed on `windows-latest` on every run.
+  Where the filesystem does not sparsify at all (overlayfs, some network mounts), it now reports
+  the fact and relies on the elapsed-time assertion, which is the real proof: a code path that
+  read the image end to end would take minutes. CUE expansion is covered on both platforms by
+  `tests/library.rs`.
+- **Frame-budget verdicts split by determinism**: the `performance` job runs the audit with `--ci`,
+  where the deterministic properties (bounded DOM, CLS 0, input off the paint path, clean console)
+  fail the build and the timing-derived ones (headroom, frame cadence, stalls) are reported as
+  advisory, because a shared runner is not a reference machine. `pnpm perf` locally still enforces
+  all seven.
+
+## [0.1.0] — 2026-10-20
+
+First public release: a bit-perfect audio engine, a catalogue that survives 500 000 tracks,
+and a keyboard-first interface measured against a 120 Hz frame budget.
 
 ### Added
+
+#### Foundation (FASE 1)
 
 - Rust workspace (edition 2024, MSRV 1.88) with release profile tuned for throughput
   (`lto = "fat"`, `codegen-units = 1`, `panic = "abort"`).
@@ -33,7 +114,7 @@ All notable changes to Prism are documented here. The format follows
 - Test suites: real-SQLite schema harness (FTS5 integrity, cascades, constraints, views) and Rust
   integration tests for WAL, foreign keys, FTS cascade coherence and aggregate views.
 
-### Audio engine (FASE 2)
+#### Audio engine (FASE 2)
 
 - Sample-format layer: S16/S24/S24-in-32/S32/F32/F64, allocation-free interleaved conversion,
   channel remapping and saturation-safe writers; DoP frame encoder with alternating `0x05`/`0xFA`
@@ -59,7 +140,7 @@ All notable changes to Prism are documented here. The format follows
   device enumeration) plus a `player://event` push channel (state, track, position, format, device,
   underrun, error).
 
-### Library, search and rich presence (FASE 3)
+#### Library, search and rich presence (FASE 3)
 
 - Metadata reader (`metadata/tags.rs`): one normalised `TrackTags` per file across FLAC, Vorbis, Opus,
   MP3/ID3v2, MP4 ilst, APEv2, RIFF INFO and AIFF, plus the technical properties the UI badges
@@ -92,7 +173,7 @@ All notable changes to Prism are documented here. The format follows
   missing sweeps, FTS ranking, diacritic folding, hostile query input, artwork normalisation,
   embedded-art precedence, negative caching and a real Discord IPC round trip.
 
-### Desktop interface (FASE 4)
+#### Desktop interface (FASE 4)
 
 - Artwork palette engine (`palette/`): deterministic median cut over a 128 px downsample, swatch
   population recovered by re-counting sampled pixels, accent scoring by saturation × mid-lightness
@@ -126,7 +207,7 @@ All notable changes to Prism are documented here. The format follows
 - Tests: 189 Rust tests (157 unit + 32 integration across database, engine, library, artwork,
   Discord and palette).
 
-### Virtualised library, spectrum, lyrics and plugins (FASE 5)
+#### Virtualised library, spectrum, lyrics and plugins (FASE 5)
 
 - Lyrics (`lyrics/`): embedded `USLT` → sidecar `.lrc` → empty resolution, a dialect-tolerant LRC
   parser (1–3 fraction digits, `mm:ss:ff`, multi-timestamp lines, metadata tags, BOM/CRLF, unsorted
@@ -159,7 +240,7 @@ All notable changes to Prism are documented here. The format follows
 - Tests: 34 new unit tests (9 lyrics, 9 analysis, 16 plugin manifest/runtime), 191 lib tests in the
   default build and 199 with `--features lua-plugins`.
 
-### Quality engineering (FASE 6)
+#### Quality engineering (FASE 6)
 
 - **Device stress** (`tests/stress.rs`): a loopback endpoint injected through `Engine::with_opener`
   — the same seam production points at `backend::open_sink` — drives seven tests: five mid-track hot
@@ -170,40 +251,47 @@ All notable changes to Prism are documented here. The format follows
   succeeds, and swap/stop churn leaving no live device thread.
 - **Corrupt-file recovery end to end**: `SkippedTrack` in the decoder, `EngineEvent::TrackSkipped`
   through the supervisor, a `track_skipped` plugin event, a `notice` slice in `playbackStore` and a
-  dismissible `AppShell` banner naming the file and the reason. A queue that starts with an
-  unreadable file now skips forward instead of refusing to play.
-- **The library list actually loads**: `useTrackWindow` bootstraps page 0 when its query generation
-  changes — previously the total was only known after the first page, which was never requested, so
-  a fresh mount showed an empty list forever.
+  dismissible `AppShell` banner naming the file and the reason.
+
 - **120 FPS audit** (`scripts/perf-audit.mjs`, `vite.bench.config.ts`, `src/perf/*`): the production
   `VirtualTrackList` over 500 000 synthetic rows in Chromium, two scroll workloads, main-thread
   milliseconds per painted frame via `Performance.getMetrics`, CLS with its sources, long tasks, DOM
   count and heap. Seven pass/fail verdicts; `pnpm perf` fails the build on regression; CI runs it on
   every pull request and uploads the report.
-- **Virtualiser fix**: `estimateSize`/`getItemKey`/`getScrollElement` hoisted out of render. Inline
-  arrows invalidated `@tanstack/react-virtual`'s measurement memo, rebuilding a 500 000-entry array
-  on every scroll frame (21–30 % of JS samples). **18.92 ms → 3.02 ms** of main-thread work per
-  frame; 51 → 293 fps unpinned.
-- **Rows**: `TrackRowItem` is a `memo` component subscribing to `playbackStore` through boolean
-  selectors, so a track change re-renders two rows instead of the list and scrolling re-renders none.
-- **CLS = 0**: measured exactly zero with no shift sources after reserving the width of a status
-  label in the harness chrome.
 - **Discord RPC offline fallback**: reconnect schedule as a value (`BackoffPolicy`, 1 s start,
   ×1.5 growth, 60 s ceiling, additive jitter) and six tests against a real UNIX socket — unavailable
   state with a reason, rate-limited retries, rejection by client id, pending activity flushed on
-  reconnect, the growth curve, and a missing socket that is an error rather than a panic. Fixes a
-  handshake that read `ev` instead of Discord's `evt` and turned a rejected client id into an
-  infinite reconnect loop.
+  reconnect, the growth curve, and a missing socket that is an error rather than a panic.
+
 - **Memory and UB tooling**: `valgrind --tool=memcheck` over the stress suite and 105 `audio::*`
   tests reports **0 errors from 0 contexts**; a nightly Miri job covers `audio::ring`,
   `audio::format` and `lyrics::` in CI.
 - **CPU profiling**: `pprof` behind the `profiling` feature and `examples/profile_hot_path.rs`, with
   two flamegraphs committed under `docs/media/`. Measured in a debug build: **656× real time**
   bit-perfect (0.018 ms per 512-frame block) and **25× real time** resampling 44.1 → 48 kHz.
+
 - **CI**: new `qa` job (Miri + valgrind) and `performance` job (frame budget with artefact upload);
   `docs/PERFORMANCE.md` now carries the measured numbers, the profiling recipes and a withdrawn
   `loom` plan instead of a promise.
 - Tests: **197 lib + 39 integration** (32 + 7 stress) = 236 in the default build; 205 lib with
   `--features lua-plugins`.
 
+### Performance
+
+- **Virtualiser fix**: `estimateSize`/`getItemKey`/`getScrollElement` hoisted out of render. Inline
+  arrows invalidated `@tanstack/react-virtual`'s measurement memo, rebuilding a 500 000-entry array
+  on every scroll frame (21–30 % of JS samples). **18.92 ms → 3.02 ms** of main-thread work per
+  frame; 51 → 262–305 fps unpinned.
+- **Rows**: `TrackRowItem` is a `memo` component subscribing to `playbackStore` through boolean
+  selectors, so a track change re-renders two rows instead of the list and scrolling re-renders none.
+
+### Security
+
+- **A webview that cannot leave its sandbox**: strict CSP with an explicit artwork and metadata
+  allowlist, a minimal Tauri capability set, frozen prototypes, no `unsafe-eval` outside the dev
+  CSP, and a plugin runtime that gates every host call behind a declared capability with memory
+  and instruction budgets (FASE 1, FASE 5).
+
 [0.1.0]: https://github.com/prism-audio/prism/releases/tag/v0.1.0
+[0.1.1]: https://github.com/prism-audio/prism/releases/tag/v0.1.1
+[Unreleased]: https://github.com/prism-audio/prism/compare/v0.1.0...HEAD

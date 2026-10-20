@@ -70,6 +70,20 @@ jobs:
       - name: Verify version consistency
         run: node scripts/check-version.mjs
 
+      # The release is the moment a licence mistake becomes a legal problem, so
+      # the audit runs before anything is compiled, together with the static
+      # checks on this workflow itself.
+      - name: Audit dependency licences
+        run: node scripts/license-audit.mjs --check
+
+      # PyYAML ships with most runner images; installing it only when missing
+      # avoids both a needless network hop and the PEP 668 refusal on 24.04.
+      - name: Ensure PyYAML
+        run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet --break-system-packages pyyaml
+
+      - name: Validate the release pipeline
+        run: python3 scripts/validate_release.py
+
       - name: Frontend typecheck, lint and format
         run: pnpm check
 
@@ -147,6 +161,11 @@ jobs:
       - name: Build native bundles
         run: pnpm tauri build
 
+      # The workspace root owns `target/`: `src-tauri` is a member crate, so
+      # `cargo` writes to `./target`, not `./src-tauri/target`. Both staging
+      # steps assert that every artefact exists before copying — a missing
+      # bundle fails here, with the directory listing, instead of producing a
+      # release with a silently absent installer.
       - name: Stage Windows artifacts
         if: matrix.platform == 'windows'
         shell: bash
@@ -154,9 +173,27 @@ jobs:
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
           mkdir -p artifacts
-          cp src-tauri/target/release/prism.exe "artifacts/Prism_${VERSION}_x64_portable.exe"
-          cp src-tauri/target/release/bundle/msi/*.msi "artifacts/Prism_${VERSION}_x64.msi"
-          cp src-tauri/target/release/bundle/nsis/*.exe "artifacts/Prism_${VERSION}_x64_setup.exe"
+
+          require() {
+            if [ ! -e "$1" ]; then
+              echo "::error::expected artefact '$1' was not produced"
+              ls -R target/release | head -80 || true
+              exit 1
+            fi
+          }
+
+          BIN=target/release/prism.exe
+          require "$BIN"
+          cp "$BIN" "artifacts/Prism_${VERSION}_x64_portable.exe"
+
+          MSI=$(find target/release/bundle/msi -maxdepth 1 -name '*.msi' -print -quit 2>/dev/null || true)
+          require "${MSI:-target/release/bundle/msi}"
+          cp "$MSI" "artifacts/Prism_${VERSION}_x64.msi"
+
+          SETUP=$(find target/release/bundle/nsis -maxdepth 1 -name '*.exe' -print -quit 2>/dev/null || true)
+          require "${SETUP:-target/release/bundle/nsis}"
+          cp "$SETUP" "artifacts/Prism_${VERSION}_x64_setup.exe"
+
           ls -lh artifacts
 
       - name: Stage Linux artifacts
@@ -166,9 +203,24 @@ jobs:
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
           mkdir -p artifacts
-          cp src-tauri/target/release/bundle/appimage/*.AppImage "artifacts/Prism_${VERSION}_amd64.AppImage"
-          cp src-tauri/target/release/bundle/deb/*.deb "artifacts/Prism_${VERSION}_amd64.deb"
-          chmod +x artifacts/*.AppImage
+
+          require() {
+            if [ ! -e "$1" ]; then
+              echo "::error::expected artefact '$1' was not produced"
+              ls -R target/release | head -80 || true
+              exit 1
+            fi
+          }
+
+          APPIMAGE=$(find target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' -print -quit 2>/dev/null || true)
+          require "${APPIMAGE:-target/release/bundle/appimage}"
+          cp "$APPIMAGE" "artifacts/Prism_${VERSION}_amd64.AppImage"
+          chmod +x "artifacts/Prism_${VERSION}_amd64.AppImage"
+
+          DEB=$(find target/release/bundle/deb -maxdepth 1 -name '*.deb' -print -quit 2>/dev/null || true)
+          require "${DEB:-target/release/bundle/deb}"
+          cp "$DEB" "artifacts/Prism_${VERSION}_amd64.deb"
+
           ls -lh artifacts
 
       - name: Upload bundles
@@ -204,6 +256,11 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # The inventory is generated, so it is copied rather than rewritten: the
+      # published file is byte-identical to docs/LICENSES.md.
+      - name: Attach the third-party licence inventory
+        run: cp docs/LICENSES.md artifacts/THIRD-PARTY-LICENSES.md
+
       - name: Generate checksums
         run: |
           cd artifacts
@@ -226,6 +283,7 @@ jobs:
             artifacts/*.exe
             artifacts/*.AppImage
             artifacts/*.deb
+            artifacts/THIRD-PARTY-LICENSES.md
             artifacts/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
