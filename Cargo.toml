@@ -100,7 +100,7 @@ libc = "0.2"
 
 # --- Extensibility (opt-in via `lua-plugins` / `wasm-plugins` features) --------
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
-wasmtime = { version = "26", default-features = true }
+wasmtime = { version = "38", default-features = true }
 
 # --- Platform-specific -----------------------------------------------------------
 [workspace.dependencies.windows]
