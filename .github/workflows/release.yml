@@ -168,9 +168,9 @@ jobs:
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
           mkdir -p artifacts
-          cp src-tauri/target/release/prism.exe "artifacts/Prism_${VERSION}_x64_portable.exe"
-          cp src-tauri/target/release/bundle/msi/*.msi "artifacts/Prism_${VERSION}_x64.msi"
-          cp src-tauri/target/release/bundle/nsis/*.exe "artifacts/Prism_${VERSION}_x64_setup.exe"
+          cp target/release/prism.exe "artifacts/Prism_${VERSION}_x64_portable.exe"
+          cp target/release/bundle/msi/*.msi "artifacts/Prism_${VERSION}_x64.msi"
+          cp target/release/bundle/nsis/*.exe "artifacts/Prism_${VERSION}_x64_setup.exe"
           ls -lh artifacts
 
       - name: Stage Linux artifacts
@@ -180,8 +180,8 @@ jobs:
           set -euo pipefail
           VERSION=$(node -p "require('./package.json').version")
           mkdir -p artifacts
-          cp src-tauri/target/release/bundle/appimage/*.AppImage "artifacts/Prism_${VERSION}_amd64.AppImage"
-          cp src-tauri/target/release/bundle/deb/*.deb "artifacts/Prism_${VERSION}_amd64.deb"
+          cp target/release/bundle/appimage/*.AppImage "artifacts/Prism_${VERSION}_amd64.AppImage"
+          cp target/release/bundle/deb/*.deb "artifacts/Prism_${VERSION}_amd64.deb"
           chmod +x artifacts/*.AppImage
           ls -lh artifacts
 
