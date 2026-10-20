@@ -253,7 +253,7 @@ jobs:
       - name: Scroll 500 000 rows
         run: node scripts/perf-audit.mjs
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: perf-report
