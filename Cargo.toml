@@ -69,7 +69,7 @@ rubato = "0.16"
 realfft = "3"
 
 # --- Metadata ----------------------------------------------------------------
-lofty = "0.22"
+lofty = "0.24"
 
 # --- Profiling (FASE 6, opt-in) ----------------------------------------------
 # Sampling profiler with an SVG flamegraph writer. In-process, so it needs no
