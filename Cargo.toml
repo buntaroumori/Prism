@@ -115,7 +115,7 @@ features = [
 ]
 
 [workspace.dependencies.alsa]
-version = "0.9"
+version = "0.10"
 
 [workspace.dependencies.pipewire]
 version = "0.8"
