@@ -2,22 +2,11 @@ import { useEffect, type JSX } from "react";
 import { Check, ChevronUp, Cpu, Headphones, Loader2, Radio } from "lucide-react";
 
 import { Popover } from "@/components/ui/Popover";
-import { Segmented } from "@/components/ui/Segmented";
+import { formatAudioFormat } from "@/lib/audio";
 import { formatSampleRate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { BUFFER_CHOICES, useOutputStore } from "@/stores/outputStore";
-import type { BackendKind, OutputMode, PlayerStatus } from "@/types/ipc";
-
-const MODE_OPTIONS = [
-  { value: "auto", label: "Auto", hint: "Prefer an exclusive endpoint, fall back to the mixer" },
-  {
-    value: "exclusive",
-    label: "Exclusive",
-    hint: "Bypass the OS mixer (WASAPI Exclusive / ALSA hw)",
-  },
-  { value: "shared", label: "Shared", hint: "Coexist with other applications" },
-  { value: "asio", label: "ASIO", hint: "Steinberg driver (Windows, when installed)" },
-] as const satisfies readonly { value: OutputMode; label: string; hint: string }[];
+import type { BackendKind, PlayerStatus } from "@/types/ipc";
 
 const BACKEND_ICON: Record<BackendKind, typeof Radio> = {
   wasapiExclusive: Cpu,
@@ -38,29 +27,29 @@ const BACKEND_LABEL: Record<BackendKind, string> = {
 };
 
 /**
- * Output-device and engine-mode selector.
+ * Output-device selector.
  *
- * The trigger shows what is *actually* open (the engine's device name and
- * backend), not what was requested — those differ whenever a driver refuses an
- * exclusive format and the supervisor falls back. The popover lists every
- * endpoint the chosen mode can reach, marks the OS default, and exposes the
- * buffer size because latency is a listening decision, not a hidden constant.
+ * The trigger shows what is *actually* open — the engine's endpoint name and
+ * the driver stack — not what was requested. The popover lists every physical
+ * playback endpoint, marks the system default and prints the format the driver
+ * reports for it, because that is the number a listener compares against the
+ * OS panel. There is no engine-mode switch: the product standard is shared
+ * mode, and a player that can silently take the endpoint away from every other
+ * application needs a better reason than a dropdown.
  */
 export function OutputSelector({ status }: { status: PlayerStatus | null }): JSX.Element {
-  const mode = useOutputStore((state) => state.mode);
   const deviceId = useOutputStore((state) => state.deviceId);
   const bufferFrames = useOutputStore((state) => state.bufferFrames);
   const devices = useOutputStore((state) => state.devices);
   const loading = useOutputStore((state) => state.loading);
   const error = useOutputStore((state) => state.error);
   const loadDevices = useOutputStore((state) => state.loadDevices);
-  const setMode = useOutputStore((state) => state.setMode);
   const setDevice = useOutputStore((state) => state.setDevice);
   const setBufferFrames = useOutputStore((state) => state.setBufferFrames);
 
   useEffect(() => {
     void loadDevices();
-  }, [loadDevices, mode]);
+  }, [loadDevices]);
 
   const activeName = status?.deviceName ?? "No device";
   const activeBackend =
@@ -109,21 +98,6 @@ export function OutputSelector({ status }: { status: PlayerStatus | null }): JSX
       )}
     >
       <div className="space-y-3 p-2">
-        <div>
-          <p className="mb-1.5 px-1 text-[10px] font-semibold tracking-[0.16em] text-white/30 uppercase">
-            Engine mode
-          </p>
-          <Segmented
-            label="Engine mode"
-            layoutId="output-mode"
-            options={MODE_OPTIONS}
-            value={mode}
-            onChange={(next) => {
-              void setMode(next);
-            }}
-          />
-        </div>
-
         <div>
           <div className="mb-1 flex items-center justify-between px-1">
             <p className="text-[10px] font-semibold tracking-[0.16em] text-white/30 uppercase">
@@ -175,7 +149,6 @@ export function OutputSelector({ status }: { status: PlayerStatus | null }): JSX
                             device.sampleRates[device.sampleRates.length - 1] ?? null,
                           )}`
                         : "rates unknown"}
-                      {device.supportsExclusive ? " · exclusive" : ""}
                       {device.isDefault ? " · default" : ""}
                     </span>
                   </span>
@@ -219,6 +192,9 @@ export function OutputSelector({ status }: { status: PlayerStatus | null }): JSX
           </div>
           <p className="mt-1.5 px-1 text-[10px] leading-relaxed text-white/25">
             Frames per device period. Smaller is tighter; larger survives a busy machine.
+            {status?.deviceFormat === null || status?.deviceFormat === undefined
+              ? ""
+              : ` The system mixes at ${formatAudioFormat(status.deviceFormat)}; the endpoint's own depth is set in the OS sound panel.`}
           </p>
         </div>
 

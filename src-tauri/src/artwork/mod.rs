@@ -196,6 +196,49 @@ impl ArtworkService {
         asset
     }
 
+    /// An HTTPS URL for `(artist, album)`, for surfaces that cannot read a file.
+    ///
+    /// Discord Rich Presence is the reason this exists: `large_image` accepts a
+    /// public URL or an asset key uploaded to the application, never a local
+    /// path. Embedded and folder artwork — the two providers that actually fire
+    /// for a normal library — carry no URL, so a presence built only from the
+    /// cached asset silently lost its cover. This asks the catalogue providers
+    /// for a *URL* (no download, no cache write) and returns the first match.
+    ///
+    /// Returns `None` when offline or when nothing matches, which the caller
+    /// treats as "no artwork", not as an error.
+    pub async fn remote_url(&self, artist: &str, album: &str) -> Option<String> {
+        if self.offline || artist.trim().is_empty() || album.trim().is_empty() {
+            return None;
+        }
+        // A cached network cover already knows its URL: trust it first.
+        if let Some(asset) = self.cached(&Self::key(artist, album)).await
+            && let Some(url) = asset.remote_url
+            && url.starts_with("https://")
+        {
+            return Some(url);
+        }
+
+        let term = format!("{artist} {album}");
+        let response = self
+            .http
+            .get(ITUNES_ENDPOINT)
+            .query(&[
+                ("term", term.as_str()),
+                ("entity", "album"),
+                ("limit", "10"),
+                ("media", "music"),
+            ])
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?;
+        let json: serde_json::Value = response.json().await.ok()?;
+        let (url, _collection) = select_itunes_result(&json, artist, album)?;
+        url.starts_with("https://").then_some(url)
+    }
+
     /// Read a fresh success row from the cache.
     async fn cached(&self, key: &str) -> Option<CoverAsset> {
         let row: Option<(

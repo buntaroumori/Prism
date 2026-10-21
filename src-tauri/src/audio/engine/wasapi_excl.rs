@@ -568,6 +568,12 @@ fn run(
         // as the wait bound so a stalled endpoint cannot wedge the thread.
         match control.recv_timeout(std::time::Duration::from_millis(0)) {
             Ok(Control::Stop) | Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                // `Stop` ends the stream on the spot, so the frames still
+                // queued in the endpoint — up to a whole period, audible as a
+                // click — would be discarded. Let them play out first.
+                if playing {
+                    drain(&client);
+                }
                 break Ok(());
             }
             Ok(Control::Pause) => {
@@ -595,30 +601,43 @@ fn run(
             continue;
         }
 
-        consumer.pop_or_silence(&mut scratch);
-        if let Err(error) = write_samples_f32(&scratch, stream_format.sample_format, &mut bytes) {
+        // An event-driven exclusive stream signals a *period*, not a whole
+        // buffer: everything still queued must not be overwritten, or the tail
+        // of the previous period is replaced by new audio before it is heard.
+        // Writing `buffer_frames` on every wake-up did exactly that, and it is
+        // the reason exclusive mode on Windows sounded like a broken radio.
+        // SAFETY: the stream is initialised and running.
+        let padding = unsafe { client.GetCurrentPadding() }.unwrap_or(0);
+        let free = buffer_frames.saturating_sub(padding);
+        if free == 0 {
+            continue;
+        }
+
+        let window = &mut scratch[..free as usize * channels];
+        consumer.pop_or_silence(window);
+        if let Err(error) = write_samples_f32(window, stream_format.sample_format, &mut bytes) {
             break Err(error);
         }
-        if bytes.len() != buffer_frames as usize * frame_size {
+        if bytes.len() != free as usize * frame_size {
             break Err(AudioError::Device(
                 "the WASAPI buffer size changed underneath the writer".into(),
             ));
         }
 
-        // SAFETY: `buffer_frames` was requested from GetBufferSize and the
-        // slice covers exactly that many frames.
-        let data = unsafe { render.GetBuffer(buffer_frames) }
+        // SAFETY: `free` never exceeds the buffer size reported by
+        // GetBufferSize, and the slice covers exactly those frames.
+        let data = unsafe { render.GetBuffer(free) }
             .map_err(|error| AudioError::Device(format!("cannot map the render buffer: {error}")));
         let data = match data {
             Ok(data) => data,
             Err(error) => break Err(error),
         };
-        // SAFETY: WASAPI hands us a writable region of `buffer_frames × frame_size`.
+        // SAFETY: WASAPI hands us a writable region of `free × frame_size`.
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
         }
         // SAFETY: matching the GetBuffer call above.
-        if let Err(error) = unsafe { render.ReleaseBuffer(buffer_frames, 0) } {
+        if let Err(error) = unsafe { render.ReleaseBuffer(free, 0) } {
             break Err(AudioError::Device(format!(
                 "cannot release the render buffer: {error}"
             )));
@@ -632,6 +651,23 @@ fn run(
         let _ = client.Stop();
     }
     outcome
+}
+
+/// Let the frames already queued in the endpoint play before stopping.
+///
+/// WASAPI has no drain call for exclusive streams: `Stop` truncates the buffer
+/// immediately. Polling `GetCurrentPadding` until it reaches zero keeps the
+/// last milliseconds of the file — and the end of every record — intact; the
+/// deadline is a guard so a stalled endpoint can never wedge the writer.
+fn drain(client: &IAudioClient) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    while std::time::Instant::now() < deadline {
+        // SAFETY: the stream is initialised; a query cannot invalidate it.
+        match unsafe { client.GetCurrentPadding() } {
+            Ok(0) | Err(_) => break,
+            Ok(_) => std::thread::sleep(std::time::Duration::from_millis(2)),
+        }
+    }
 }
 
 fn frames_to_hns(frames: u64, rate: u32) -> i64 {

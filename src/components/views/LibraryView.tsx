@@ -1,139 +1,255 @@
-import { Search, SlidersHorizontal, X } from "lucide-react";
-import { useEffect, useMemo, useState, type JSX } from "react";
+import { Image as ImageIcon, LayoutGrid, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 
-import { VirtualTrackList } from "@/components/library/VirtualTrackList";
-import { SectionHeading } from "@/components/SectionHeading";
+import { AlbumCard } from "@/components/library/AlbumCard";
 import { Segmented } from "@/components/ui/Segmented";
 import { formatCount } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
+import { cn } from "@/lib/utils";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
-import { PAGE_SIZE } from "@/hooks/useTrackWindow";
-import type { TrackQuery, TrackSort } from "@/types/ipc";
+import { COVER_SIZE_MAX, COVER_SIZE_MIN, useUiStore } from "@/stores/uiStore";
+import type { AlbumRow, AlbumSort } from "@/types/ipc";
 
-const SORTS: readonly { value: TrackSort; label: string }[] = [
-  { value: "title", label: "Title" },
-  { value: "artist", label: "Artist" },
-  { value: "album", label: "Album" },
-  { value: "added", label: "Added" },
+/** The eight orderings the backend exposes, worded the way a library reads. */
+const SORTS: readonly { value: AlbumSort; label: string }[] = [
+  { value: "added", label: "Newest" },
+  { value: "addedAsc", label: "Oldest" },
+  { value: "artist", label: "Artist A–Z" },
+  { value: "artistDesc", label: "Artist Z–A" },
+  { value: "title", label: "Album A–Z" },
+  { value: "titleDesc", label: "Album Z–A" },
+  { value: "year", label: "Year ↓" },
+  { value: "yearAsc", label: "Year ↑" },
 ];
 
+const PAGE_SIZE = 120;
+
 /**
- * The library browser.
+ * The library, as a mosaic of records.
  *
- * A 500 000-track catalogue on screen at once is the headline requirement, so the
- * page is built around one rule: never materialise the library. The list
- * virtualises, the data layer pages, and "play from here" queues one bounded
- * window instead of pretending a 500k-item queue fits through IPC.
- *
- * Search is debounced locally (250 ms) and executed by SQLite FTS5 in the
- * backend, so typing never blocks the list.
+ * A track table is the wrong shape for browsing a collection: it answers "what
+ * do I own" a line at a time. The mosaic answers it a record at a time, which
+ * is how music is filed — and the track list is one click away on every album
+ * page. Cover size is a user setting because the same grid has to serve a
+ * laptop and a 4K desk.
  */
 export function LibraryView(): JSX.Element {
   const stats = useLibraryStore((state) => state.stats);
+  const query = useLibraryStore((state) => state.query);
+  const setQuery = useLibraryStore((state) => state.setQuery);
+  const coverSize = useUiStore((state) => state.coverSize);
+  const setAppearance = useUiStore((state) => state.setAppearance);
   const playTracks = usePlaybackStore((state) => state.playTracks);
-  const [text, setText] = useState("");
-  const [debounced, setDebounced] = useState("");
-  const [sort, setSort] = useState<TrackSort>("title");
+
+  const [sort, setSort] = useState<AlbumSort>("artist");
+  const [albums, setAlbums] = useState<AlbumRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busyAlbum, setBusyAlbum] = useState<string | null>(null);
+  const sentinel = useRef<HTMLDivElement | null>(null);
+
+  // Reset the window whenever the query or the ordering changes: a stale
+  // offset against a new filter is how grids end up with holes.
+  useEffect(() => {
+    setAlbums([]);
+    setOffset(0);
+    setLoading(true);
+  }, [query, sort]);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setDebounced(text.trim());
-    }, 250);
+    let active = true;
+    void libraryApi
+      .albums({
+        ...(query.length > 0 ? { text: query } : {}),
+        sort,
+        limit: PAGE_SIZE,
+        offset,
+      })
+      .then((page) => {
+        if (!active) {
+          return;
+        }
+        setTotal(page.total);
+        setAlbums((current) =>
+          offset === 0
+            ? page.items
+            : [
+                ...current,
+                ...page.items.filter((next) => !current.some((album) => album.id === next.id)),
+              ],
+        );
+        setError(null);
+      })
+      .catch((cause: unknown) => {
+        if (active) {
+          setError(cause instanceof Error ? cause.message : "Cannot read the catalogue");
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLoading(false);
+        }
+      });
     return () => {
-      window.clearTimeout(timer);
+      active = false;
     };
-  }, [text]);
+  }, [query, sort, offset]);
 
-  const query = useMemo<TrackQuery>(
-    () => ({
-      text: debounced.length > 0 ? debounced : null,
-      sort,
-      includeMissing: true,
-    }),
-    [debounced, sort],
-  );
-
-  /**
-   * Queue the page the row belongs to, starting at the row.
-   *
-   * Playing a 500k-track queue would mean shipping 500k `TrackRequest` objects
-   * through IPC and pinning them in the engine; one page is the honest unit and
-   * matches what the viewport can actually show.
-   */
-  const playFromIndex = async (index: number): Promise<void> => {
-    const offset = Math.floor(index / PAGE_SIZE) * PAGE_SIZE;
-    const page = await libraryApi.search({ ...query, limit: PAGE_SIZE, offset });
-    if (page.items.length === 0) {
+  // Infinite scroll: the mosaic is the only surface in the app that may grow
+  // unbounded, so it pages instead of virtualising (cards are cheap, rows are
+  // not — and a virtualised mosaic cannot animate into place).
+  useEffect(() => {
+    const node = sentinel.current;
+    if (node === null) {
       return;
     }
-    await playTracks(page.items, index - offset);
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting) && !loading && albums.length < total) {
+          setOffset(albums.length);
+        }
+      },
+      { rootMargin: "600px" },
+    );
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+    };
+  }, [albums.length, loading, total]);
+
+  const playAlbum = async (album: AlbumRow): Promise<void> => {
+    setBusyAlbum(album.id);
+    try {
+      const page = await libraryApi.search({ albumId: album.id, sort: "album", limit: 500 });
+      if (page.items.length === 0) {
+        return;
+      }
+      const ordered = [...page.items].sort((a, b) => {
+        const disc = (a.discNo ?? 1) - (b.discNo ?? 1);
+        return disc !== 0 ? disc : (a.trackNo ?? 0) - (b.trackNo ?? 0);
+      });
+      await playTracks(ordered, 0);
+    } finally {
+      setBusyAlbum(null);
+    }
   };
 
-  return (
-    <div className="mx-auto flex h-full w-full max-w-[1420px] flex-col px-8 pt-8 pb-6">
-      <SectionHeading
-        eyebrow="Library"
-        title={stats === null ? "Tracks" : `${formatCount(stats.trackCount)} tracks`}
-        description="Every row is fetched on demand and painted at a fixed height: the list stays at 60 rows in the DOM whether the catalogue holds hundreds or half a million."
-        action={
-          <Segmented
-            options={SORTS}
-            value={sort}
-            onChange={setSort}
-            label="Sort tracks"
-            layoutId="library-sort"
-          />
-        }
-      />
+  const columns = useMemo(
+    () => `repeat(auto-fill, minmax(${String(coverSize)}px, 1fr))`,
+    [coverSize],
+  );
 
-      <div className="mt-6 flex items-center gap-3">
-        <div className="group relative flex h-10 flex-1 items-center rounded-full border border-white/[0.08] bg-white/[0.03] px-4 focus-within:border-accent/40">
-          <Search className="h-4 w-4 shrink-0 text-white/30" aria-hidden="true" />
-          <input
-            value={text}
-            onChange={(event) => {
-              setText(event.target.value);
-            }}
-            placeholder="Search titles, artists, albums, genres…"
-            aria-label="Search the library"
-            className="ml-2.5 h-full w-full bg-transparent text-[13px] text-white placeholder:text-white/25 focus:outline-none"
-          />
-          {text.length > 0 ? (
+  return (
+    <div className="mx-auto w-full max-w-[1560px] px-8 pt-7 pb-10">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="flex items-center gap-2 text-[26px] leading-none font-semibold tracking-[-0.03em] text-white">
+            <LayoutGrid className="h-5 w-5 text-white/25" aria-hidden="true" strokeWidth={1.5} />
+            Library
+          </h1>
+          <p className="mt-1.5 text-[12.5px] text-white/40">
+            {stats === null
+              ? "Reading the catalogue…"
+              : `${formatCount(total)} albums · ${formatCount(stats.trackCount)} tracks · ${formatCount(stats.artistCount)} artists`}
+            {query.length > 0 ? (
+              <>
+                {" · filtered by "}
+                <span className="text-white/70">“{query}”</span>
+              </>
+            ) : null}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 rounded-full border border-white/[0.07] bg-white/[0.03] px-3 py-1.5">
+            <ImageIcon className="h-3.5 w-3.5 text-white/30" aria-hidden="true" />
+            <input
+              type="range"
+              min={COVER_SIZE_MIN}
+              max={COVER_SIZE_MAX}
+              step={4}
+              value={coverSize}
+              aria-label="Cover size"
+              onChange={(event) => {
+                setAppearance({ coverSize: Number(event.target.value) });
+              }}
+              className="h-1 w-24 cursor-pointer appearance-none rounded-full bg-white/15 accent-white [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+            />
+            <span className="tabular w-8 text-right text-[10px] text-white/35">{coverSize}</span>
+          </div>
+
+          {query.length > 0 ? (
             <button
               type="button"
-              aria-label="Clear search"
               onClick={() => {
-                setText("");
+                setQuery("");
               }}
-              className="grid h-6 w-6 place-items-center rounded-full text-white/30 hover:bg-white/[0.06] hover:text-white/70"
+              className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-[11px] text-white/50 hover:text-white"
             >
-              <X className="h-3.5 w-3.5" aria-hidden="true" />
+              <X className="h-3 w-3" aria-hidden="true" />
+              Clear
             </button>
           ) : null}
         </div>
-        <div className="hidden items-center gap-1.5 rounded-full border border-white/[0.06] px-3 py-2 text-[11px] text-white/30 sm:flex">
-          <SlidersHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
-          FTS5 · indexed
-        </div>
+      </header>
+
+      <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+        <Segmented
+          options={SORTS}
+          value={sort}
+          onChange={setSort}
+          label="Sort albums"
+          layoutId="library-album-sort"
+        />
       </div>
 
-      <VirtualTrackList
-        query={query}
-        className="mt-4 flex-1"
-        onActivate={(_row, index) => {
-          void playFromIndex(index);
-        }}
-        onPlayFrom={(index) => {
-          void playFromIndex(index);
-        }}
-        emptyTitle={debounced.length > 0 ? "Nothing matches that search" : "The library is empty"}
-        emptyBody={
-          debounced.length > 0
-            ? "Try a shorter query, or clear the search to browse everything."
-            : "Add a folder in Settings and run a scan; Prism reads embedded tags, CUE sheets and artwork."
-        }
-      />
+      {error !== null ? (
+        <p role="alert" className="mt-4 text-[12px] text-critical">
+          {error}
+        </p>
+      ) : null}
+
+      {total === 0 && !loading ? (
+        <div className="mt-10 rounded-2xl border border-dashed border-white/[0.09] px-6 py-14 text-center">
+          <p className="text-[13px] font-medium text-white/55">
+            {query.length > 0 ? "No album matches that search" : "The catalogue is empty"}
+          </p>
+          <p className="mx-auto mt-1 max-w-md text-[11.5px] leading-relaxed text-white/30">
+            {query.length > 0
+              ? "Try a shorter query. Search runs over titles, artists and track names."
+              : "Add a folder in Settings → Library and run a scan."}
+          </p>
+        </div>
+      ) : (
+        <div
+          className="mt-5 grid gap-x-5 gap-y-7"
+          style={{ gridTemplateColumns: columns }}
+          data-cover-size={coverSize}
+        >
+          {albums.map((album) => (
+            <AlbumCard
+              key={album.id}
+              album={album}
+              busy={busyAlbum === album.id}
+              onPlay={(target) => {
+                void playAlbum(target);
+              }}
+            />
+          ))}
+        </div>
+      )}
+
+      <div ref={sentinel} aria-hidden="true" className="h-8" />
+
+      {loading ? (
+        <div className={cn("mt-2 flex items-center gap-2 text-[11px] text-white/30")}>
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/40" />
+          Reading the catalogue…
+        </div>
+      ) : null}
     </div>
   );
 }

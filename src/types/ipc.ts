@@ -90,6 +90,21 @@ export const TrackSortSchema = z.enum([
 ]);
 export type TrackSort = z.infer<typeof TrackSortSchema>;
 
+/** Orderings accepted by `library_albums` (mirrors Rust `AlbumSort`). */
+export const AlbumSortSchema = z.enum([
+  "added",
+  "addedAsc",
+  "year",
+  "yearAsc",
+  "artist",
+  "artistDesc",
+  "title",
+  "titleDesc",
+  "played",
+  "tracks",
+]);
+export type AlbumSort = z.infer<typeof AlbumSortSchema>;
+
 /** One row of the virtualized track list. */
 export const TrackRowSchema = z.object({
   id: z.string().min(1),
@@ -138,6 +153,8 @@ export const AlbumRowSchema = z.object({
   sortTitle: z.string(),
   year: z.number().int().nullable(),
   albumArtist: z.string(),
+  /** Album artist id, so the name is a link wherever it appears. */
+  artistId: z.string().nullable(),
   isCompilation: z.boolean(),
   discCount: z.number().int().nonnegative(),
   trackCount: z.number().int().nonnegative(),
@@ -208,6 +225,41 @@ export const FacetsSchema = z.object({
   decades: z.array(FacetSchema),
 });
 export type Facets = z.infer<typeof FacetsSchema>;
+
+/** Every Home rail, built by one backend call. */
+export const HomeRailsSchema = z.object({
+  recentlyAdded: z.array(AlbumRowSchema),
+  recentlyPlayed: z.array(AlbumRowSchema),
+  mostPlayed: z.array(AlbumRowSchema),
+  highResolution: z.array(AlbumRowSchema),
+  recentReleases: z.array(AlbumRowSchema),
+  rediscover: z.array(AlbumRowSchema),
+});
+export type HomeRails = z.infer<typeof HomeRailsSchema>;
+
+/** One album page: identity plus its ordered tracks. */
+export const AlbumDetailSchema = z.object({
+  album: AlbumRowSchema,
+  tracks: pageSchema(TrackRowSchema),
+});
+export type AlbumDetail = z.infer<typeof AlbumDetailSchema>;
+
+/** One artist page: identity plus every album we hold. */
+export const ArtistDetailSchema = z.object({
+  artist: ArtistRowSchema,
+  albums: pageSchema(AlbumRowSchema),
+});
+export type ArtistDetail = z.infer<typeof ArtistDetailSchema>;
+
+/** What removing a library root took out of the catalogue. */
+export const RootRemovalSchema = z.object({
+  removedRoot: z.boolean(),
+  tracksRemoved: z.number().int().nonnegative(),
+  albumsRemoved: z.number().int().nonnegative(),
+  artistsRemoved: z.number().int().nonnegative(),
+  cueSheetsRemoved: z.number().int().nonnegative(),
+});
+export type RootRemoval = z.infer<typeof RootRemovalSchema>;
 
 export const GlobalSearchSchema = z.object({
   query: z.string(),
@@ -409,6 +461,8 @@ export const PlayerStatusSchema = z.object({
   outputFormat: AudioFormatSchema.nullable(),
   backend: BackendKindSchema.nullable(),
   deviceName: z.string().nullable(),
+  /** Endpoint configuration as the driver reports it right now. */
+  deviceFormat: AudioFormatSchema.nullable(),
   bitPerfect: z.boolean(),
   dop: z.boolean(),
   volumeDb: z.number(),

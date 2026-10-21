@@ -96,6 +96,59 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             );
             app.manage(state);
 
+            // --- Startup maintenance -----------------------------------------
+            // Two jobs that must happen before the UI asks anything:
+            //   1. A `scan_runs` row left in `running` by a crash or a forced
+            //      quit is a lie the shell would keep polling forever. Stamp it
+            //      failed so the ledger is honest.
+            //   2. Every album without a cover gets one, in the background, so
+            //      the grid paints artwork on first open instead of waiting for
+            //      the listener to visit each record.
+            if let Some(state) = app.try_state::<AppState>() {
+                let scanner = state.scanner().clone();
+                let pool = state.pool().clone();
+                let artwork = std::sync::Arc::clone(state.artwork());
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = scanner.recover_stale_runs().await {
+                        tracing::warn!(%error, "cannot recover interrupted scans");
+                    }
+                    // Keyset sweep: every album is visited once, even when a
+                    // page contains only records with no artwork anywhere.
+                    // Resolved covers are attached as the sweep advances, so the
+                    // grid paints them without the listener opening anything.
+                    let mut cursor: Option<String> = None;
+                    loop {
+                        match commands::library::backfill_covers(
+                            &pool,
+                            &artwork,
+                            32,
+                            cursor.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(page) => {
+                                if page.resolved > 0 {
+                                    tracing::debug!(
+                                        resolved = page.resolved,
+                                        examined = page.examined,
+                                        "cover sweep progress"
+                                    );
+                                }
+                                match page.next {
+                                    Some(next) => cursor = Some(next),
+                                    None => break,
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "cover sweep stopped");
+                                break;
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+                    }
+                });
+            }
+
             // --- Rich presence bridge -----------------------------------------
             // Presence follows the engine, not the React tree: minimising to
             // the tray keeps Discord accurate.
@@ -286,6 +339,11 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::library::library_artists,
             commands::library::library_facets,
             commands::library::library_global_search,
+            commands::library::library_home,
+            commands::library::library_album_detail,
+            commands::library::library_artist_detail,
+            commands::library::library_note_play,
+            commands::library::library_index_covers,
             commands::library::library_album_cover,
             commands::library::library_track_cover,
             commands::library::library_cover_palette,
@@ -308,6 +366,7 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::player::player_set_output,
             commands::player::player_set_ram_play,
             commands::player::player_devices,
+            commands::player::player_device_format,
             commands::player::player_event_channel,
             commands::player::player_tick_channel,
             commands::lyrics::lyrics_get,

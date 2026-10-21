@@ -7,6 +7,13 @@ import { cn } from "@/lib/utils";
 interface CoverArtProps {
   /** Absolute path of the cached JPEG, or `null` when there is no artwork. */
   path: string | null;
+  /**
+   * Remote fallback (the provider URL stored in `cover_cache`). Only used when
+   * no local file exists: a library without extracted artwork still shows the
+   * cover the catalogue knows about, and a network hiccup never removes a
+   * local image.
+   */
+  url?: string | null;
   alt: string;
   className?: string;
   /** Rendered icon size when the album has no cover. */
@@ -24,13 +31,22 @@ interface CoverArtProps {
  */
 export function CoverArt({
   path,
+  url = null,
   alt,
   className,
   fallbackClassName,
   rounded = "rounded-2xl",
 }: CoverArtProps): JSX.Element {
-  const [failed, setFailed] = useState(false);
-  const src = coverSrc(path);
+  // Failures are remembered *per URL*, not per component. A virtualised grid
+  // reuses the same instance for a different album when a row scrolls away; a
+  // boolean flag would then hide the next album's perfectly good cover for the
+  // rest of the session. Keyed by source, a retry after the backend attaches
+  // artwork also clears itself.
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  const local = coverSrc(path);
+  const remote = url?.startsWith("https://") === true ? url : null;
+  const src =
+    [local, remote].find((candidate) => candidate !== null && !failed.has(candidate)) ?? null;
 
   return (
     <div
@@ -52,7 +68,7 @@ export function CoverArt({
         />
       </div>
 
-      {src !== null && !failed ? (
+      {src !== null ? (
         <img
           src={src}
           alt={alt}
@@ -60,7 +76,7 @@ export function CoverArt({
           decoding="async"
           draggable={false}
           onError={() => {
-            setFailed(true);
+            setFailed((previous) => new Set(previous).add(src));
           }}
           className="absolute inset-0 h-full w-full object-cover"
         />

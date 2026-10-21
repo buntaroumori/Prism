@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -49,6 +49,20 @@ use crate::metadata::{AUDIO_EXTENSIONS, clean, is_audio_file, parse_year, sort_k
 
 /// Files parsed per rayon chunk.
 pub const PARSE_CHUNK: usize = 512;
+
+/// Wall-clock budget for one chunk of [`PARSE_CHUNK`] files.
+///
+/// Tag readers are third-party parsers over arbitrary bytes: a truncated FLAC
+/// or a file on a flaky mount can block inside the reader forever. Without a
+/// budget the whole scan waits with it — which is exactly the "stops at 1024
+/// files and never advances" report: two 512-file chunks complete, the third
+/// wedges on one file, and the pipeline never reaches the next progress tick.
+/// 90 s is ~40× the slowest healthy chunk measured on a spinning disk.
+const PARSE_BUDGET: Duration = Duration::from_secs(90);
+
+/// Budget for a single file when a chunk had to be re-parsed one file at a
+/// time after a timeout.
+const PARSE_FILE_BUDGET: Duration = Duration::from_secs(15);
 
 /// Minimum interval between progress callbacks, in milliseconds.
 const PROGRESS_INTERVAL_MS: u64 = 200;
@@ -262,10 +276,77 @@ impl Scanner {
         };
         self.cancel.store(false, Ordering::SeqCst);
         self.files_done.store(0, Ordering::SeqCst);
+        let started = Instant::now();
 
         let result = self.scan_inner(config, trigger, &on_progress).await;
         drop(guard);
+
+        // A scan that fails half-way must leave the ledger in a terminal state.
+        // Otherwise `scan_runs` keeps a row with `status = 'running'`, the UI
+        // polls it forever, and every later attempt reports "already running"
+        // while nothing is running at all. The failure is recorded with the
+        // error message so the next launch can explain it.
+        if let Err(error) = &result {
+            tracing::error!(%error, "library scan failed");
+            if let Err(record) = self
+                .record_failure(
+                    &format!("{error}"),
+                    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                )
+                .await
+            {
+                tracing::warn!(%record, "cannot record the failed scan");
+            }
+            let failed = ScanProgress {
+                run_id: String::new(),
+                phase: ScanPhase::Failed,
+                files_seen: 0,
+                files_indexed: 0,
+                files_skipped: 0,
+                files_failed: 0,
+                bytes_read: 0,
+                percent: None,
+                current_path: None,
+            };
+            on_progress(failed);
+        }
         result
+    }
+
+    /// Stamp every stale `running` row as failed.
+    ///
+    /// Called once at startup: if the process dies mid-scan the row survives it,
+    /// and a row that claims to be running is what makes the shell show a
+    /// scanner that will never advance.
+    pub async fn recover_stale_runs(&self) -> Result<u64, PrismError> {
+        let affected = sqlx::query(
+            "UPDATE scan_runs SET status = 'failed', \
+                error_message = COALESCE(error_message, 'interrupted: the application exited mid-scan'), \
+                finished_at = COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%fZ','now')) \
+             WHERE status = 'running'",
+        )
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        if affected > 0 {
+            tracing::warn!(runs = affected, "recovered interrupted scans");
+        }
+        Ok(affected)
+    }
+
+    /// Record a run that failed outside `finish()`.
+    async fn record_failure(&self, message: &str, elapsed_ms: u64) -> Result<(), PrismError> {
+        sqlx::query(
+            "UPDATE scan_runs SET status = 'failed', error_message = ?1, \
+                finished_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'), \
+                duration_ms = ?2 \
+             WHERE status = 'running'",
+        )
+        .bind(truncate(message, 1024))
+        .bind(i64::try_from(elapsed_ms).unwrap_or(i64::MAX))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     async fn scan_inner<F>(
@@ -467,28 +548,57 @@ impl Scanner {
                 break;
             }
             let chunk_owned = chunk.to_vec();
-            let fingerprints = Arc::clone(&fingerprints);
+            let chunk_fingerprints = Arc::clone(&fingerprints);
             let full = config.full;
-            let run_id = run_id.clone();
-            let parsed = tokio::task::spawn_blocking(move || {
+            let chunk_run = run_id.clone();
+            let task = tokio::task::spawn_blocking(move || {
                 chunk_owned
                     .par_iter()
                     .map(|entry| {
                         (
                             entry.clone(),
-                            parse_file(entry, &run_id, full, &fingerprints),
+                            parse_file(entry, &chunk_run, full, &chunk_fingerprints),
                         )
                     })
                     .collect::<Vec<(WalkEntry, Result<Option<TrackRecord>, ScanErrorRecord>)>>()
-            })
-            .await
-            .map_err(|error| PrismError::Internal(format!("parser task panicked: {error}")))?;
+            });
+
+            // A hung tag parser must never freeze the scan. On timeout the
+            // chunk is abandoned and re-parsed file by file with a much
+            // smaller budget, so exactly the offending file is recorded as
+            // failed and everything behind it still gets indexed.
+            let parsed = match tokio::time::timeout(PARSE_BUDGET, task).await {
+                Ok(result) => result.map_err(|error| {
+                    PrismError::Internal(format!("parser task panicked: {error}"))
+                })?,
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        files = chunk.len(),
+                        timeout_s = PARSE_BUDGET.as_secs(),
+                        "tag parsing exceeded its budget; retrying file by file"
+                    );
+                    self.reparse_individually(
+                        chunk,
+                        &run_id,
+                        config.full,
+                        Arc::clone(&fingerprints),
+                        &mut errors,
+                        config.max_errors,
+                    )
+                    .await
+                }
+            };
 
             for (entry, outcome) in parsed {
+                // `files_done` is advanced by `flush` with the number of rows
+                // actually written — a CUE sheet contributes one entry and many
+                // tracks, so counting entries here double-counted the library
+                // and made `files_indexed` disagree with the database.
                 match outcome {
                     Ok(Some(record)) => {
                         bytes = bytes.saturating_add(u64::try_from(record.file_size).unwrap_or(0));
                         seen.push(path_key(&record.path));
+                        progress.files_indexed = progress.files_indexed.saturating_add(1);
                         pending.push(record);
                         if pending.len() >= config.batch_size {
                             self.flush(&writer, &mut pending).await?;
@@ -589,6 +699,64 @@ impl Scanner {
         self.publish(&progress, on_progress);
 
         Ok(outcome)
+    }
+
+    /// Re-parse one chunk file by file, each under its own budget.
+    ///
+    /// Only used after a chunk blew [`PARSE_BUDGET`]. The stuck file keeps its
+    /// worker thread (a blocking read cannot be interrupted), but the scan
+    /// itself moves on: that is the difference between "one broken file" and
+    /// "the library never finishes indexing".
+    async fn reparse_individually(
+        &self,
+        chunk: &[WalkEntry],
+        run_id: &str,
+        full: bool,
+        fingerprints: Arc<HashMap<String, FileFingerprint>>,
+        errors: &mut Vec<ScanErrorRecord>,
+        max_errors: usize,
+    ) -> Vec<(WalkEntry, Result<Option<TrackRecord>, ScanErrorRecord>)> {
+        let mut parsed = Vec::with_capacity(chunk.len());
+        for entry in chunk {
+            let owned = entry.clone();
+            let run = run_id.to_string();
+            let index = Arc::clone(&fingerprints);
+            let task = tokio::task::spawn_blocking(move || {
+                parse_file(&owned, &run, full, &index).map_err(|error| (error, owned))
+            });
+            match tokio::time::timeout(PARSE_FILE_BUDGET, task).await {
+                Ok(Ok(Ok(record))) => parsed.push((entry.clone(), Ok(record))),
+                Ok(Ok(Err((error, _)))) => parsed.push((entry.clone(), Err(error))),
+                Ok(Err(error)) => {
+                    parsed.push((
+                        entry.clone(),
+                        Err(ScanErrorRecord {
+                            id: stable_id("err", &format!("{run_id}:panic:{entry:?}")),
+                            path: entry.path.to_string_lossy().into_owned(),
+                            code: "parser".to_string(),
+                            message: format!("parser task panicked: {error}"),
+                        }),
+                    ));
+                }
+                Err(_elapsed) => {
+                    let record = ScanErrorRecord {
+                        id: stable_id("err", &format!("{run_id}:timeout:{entry:?}")),
+                        path: entry.path.to_string_lossy().into_owned(),
+                        code: "parse_timeout".to_string(),
+                        message: format!(
+                            "reading tags took longer than {} s; the file was skipped",
+                            PARSE_FILE_BUDGET.as_secs()
+                        ),
+                    };
+                    tracing::warn!(path = %record.path, "tag parser timed out on a file");
+                    if errors.len() < max_errors {
+                        errors.push(record.clone());
+                    }
+                    parsed.push((entry.clone(), Err(record)));
+                }
+            }
+        }
+        parsed
     }
 
     /// Write `pending` (draining it) and account for the rows.

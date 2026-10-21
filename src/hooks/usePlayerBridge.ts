@@ -2,7 +2,13 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 
 import { hasBackend } from "@/lib/cover";
-import { parseEngineEvent, parsePlayerTick, EVENT_CHANNELS, playerApi } from "@/lib/ipc";
+import {
+  parseEngineEvent,
+  parsePlayerTick,
+  EVENT_CHANNELS,
+  libraryApi,
+  playerApi,
+} from "@/lib/ipc";
 import { usePlaybackStore } from "@/stores/playbackStore";
 
 /**
@@ -40,6 +46,16 @@ export function usePlayerBridge(): void {
           return;
         }
         usePlaybackStore.getState().applyEvent(event);
+        // The Home rails are stated in terms of listening ("recently played",
+        // "on repeat"), and those aggregates are maintained by the catalogue,
+        // not inferred in the renderer. A play is recorded when the engine
+        // announces it, once per track.
+        if (event.type === "trackChanged") {
+          void libraryApi.notePlay(event.track.trackId).catch(() => {
+            // A track that disappeared between queueing and playback has no row
+            // to count against; the engine already reported the skip.
+          });
+        }
       });
 
       const tickUnlisten = await listen<unknown>(EVENT_CHANNELS.playerTick, (message) => {

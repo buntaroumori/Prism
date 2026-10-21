@@ -76,6 +76,79 @@ impl TrackSort {
     }
 }
 
+/// Orderings offered for the album grid.
+///
+/// The UI exposes these as a menu, so every variant is a real listener
+/// intention: when a record was added, when it was made, who made it, what it
+/// is called, and how much it has been played. Closed set — the SQL fragment
+/// never carries user input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum AlbumSort {
+    /// Newest addition first.
+    #[default]
+    Added,
+    /// Oldest addition first.
+    AddedAsc,
+    /// Newest release first, undated albums last.
+    Year,
+    /// Oldest release first, undated albums last.
+    YearAsc,
+    /// Album artist, A→Z.
+    Artist,
+    /// Album artist, Z→A.
+    ArtistDesc,
+    /// Album title, A→Z.
+    Title,
+    /// Album title, Z→A.
+    TitleDesc,
+    /// Most recently played first; unplayed albums after the played ones.
+    Played,
+    /// Largest record first (track count).
+    Tracks,
+}
+
+impl AlbumSort {
+    /// `ORDER BY` fragment over `v_album_summary` (alias-less).
+    const fn order_by(self) -> &'static str {
+        match self {
+            Self::Added => "added_at DESC, sort_title COLLATE NOCASE ASC",
+            Self::AddedAsc => "added_at ASC, sort_title COLLATE NOCASE ASC",
+            Self::Year => "year DESC NULLS LAST, sort_title COLLATE NOCASE ASC",
+            Self::YearAsc => "year ASC NULLS LAST, sort_title COLLATE NOCASE ASC",
+            Self::Artist => {
+                "album_artist_name COLLATE NOCASE ASC, year ASC NULLS LAST, \
+                 sort_title COLLATE NOCASE ASC"
+            }
+            Self::ArtistDesc => {
+                "album_artist_name COLLATE NOCASE DESC, year DESC NULLS LAST, \
+                 sort_title COLLATE NOCASE DESC"
+            }
+            Self::Title => "sort_title COLLATE NOCASE ASC",
+            Self::TitleDesc => "sort_title COLLATE NOCASE DESC",
+            Self::Played => "last_played_at DESC NULLS LAST, sort_title COLLATE NOCASE ASC",
+            Self::Tracks => "track_count DESC, sort_title COLLATE NOCASE ASC",
+        }
+    }
+}
+
+/// Everything the Home screen renders, in one round-trip.
+///
+/// Six rails, each justified by a different reason to reach for a record:
+/// what just arrived, what was just played, what gets played most, what is
+/// high-resolution, what was made in the last few years, and a seeded pick.
+/// Empty rails are omitted by the UI rather than padded with filler.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeRails {
+    pub recently_added: Vec<AlbumRow>,
+    pub recently_played: Vec<AlbumRow>,
+    pub most_played: Vec<AlbumRow>,
+    pub high_resolution: Vec<AlbumRow>,
+    pub recent_releases: Vec<AlbumRow>,
+    pub rediscover: Vec<AlbumRow>,
+}
+
 /// One row of the track list. Field names and casing match
 /// `TrackRowSchema` in `src/types/ipc.ts`.
 #[derive(Debug, Clone, Serialize)]
@@ -130,6 +203,8 @@ pub struct AlbumRow {
     pub sort_title: String,
     pub year: Option<i64>,
     pub album_artist: String,
+    /// Identifier of the album artist, so every name can be a link.
+    pub artist_id: Option<String>,
     pub is_compilation: bool,
     pub disc_count: i64,
     pub track_count: i64,
@@ -447,7 +522,7 @@ pub async fn albums(
     pool: &SqlitePool,
     text: Option<&str>,
     artist_id: Option<&str>,
-    sort: TrackSort,
+    sort: AlbumSort,
     limit: u32,
     offset: u32,
 ) -> Result<Page<AlbumRow>, PrismError> {
@@ -473,19 +548,14 @@ pub async fn albums(
     }
     let total: i64 = count.build_query_scalar().fetch_one(pool).await?;
 
-    let order = match sort {
-        TrackSort::Year => "year DESC NULLS LAST, sort_title COLLATE NOCASE ASC",
-        TrackSort::Added => "added_at DESC",
-        TrackSort::Artist => "album_artist_name COLLATE NOCASE ASC, sort_title COLLATE NOCASE ASC",
-        _ => "sort_title COLLATE NOCASE ASC",
-    };
+    let order = sort.order_by();
 
-    let mut builder = QueryBuilder::<Sqlite>::new(
-        "SELECT id, title, sort_title, year, album_artist_name, is_compilation, disc_count, \
-                track_count, duration_ms, release_type, cover_id, cover_remote_url, \
-                cover_local_path, available_tracks, max_sample_rate, max_bit_depth, format \
-         FROM v_album_summary WHERE 1 = 1",
-    );
+    // The projected list is the shared constant, never a copy: a hand-written
+    // list here is how `artist_id` went missing and every album tile started
+    // failing to decode.
+    let mut builder = QueryBuilder::<Sqlite>::new(format!(
+        "SELECT {ALBUM_COLUMNS} FROM v_album_summary WHERE 1 = 1"
+    ));
     if let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) {
         builder
             .push(" AND (title LIKE ")
@@ -513,34 +583,7 @@ pub async fn albums(
     let rows = builder.build().fetch_all(pool).await?;
     let mut items = Vec::with_capacity(rows.len());
     for row in &rows {
-        let max_sample_rate: Option<i64> = row.try_get("max_sample_rate")?;
-        let max_bit_depth: Option<i64> = row.try_get("max_bit_depth")?;
-        let format: Option<String> = row.try_get("format")?;
-        items.push(AlbumRow {
-            id: row.try_get("id")?,
-            title: row.try_get("title")?,
-            sort_title: row.try_get("sort_title")?,
-            year: row.try_get("year")?,
-            album_artist: row.try_get("album_artist_name")?,
-            is_compilation: row.try_get::<i64, _>("is_compilation")? != 0,
-            disc_count: row.try_get("disc_count")?,
-            track_count: row.try_get("track_count")?,
-            duration_ms: row.try_get("duration_ms")?,
-            release_type: row.try_get("release_type")?,
-            cover_id: row.try_get("cover_id")?,
-            cover_path: row.try_get("cover_local_path")?,
-            cover_url: row.try_get("cover_remote_url")?,
-            available_tracks: row.try_get("available_tracks")?,
-            quality: quality_label(
-                max_bit_depth,
-                max_sample_rate,
-                None,
-                format.as_deref().unwrap_or(""),
-            ),
-            max_sample_rate,
-            max_bit_depth,
-            format,
-        });
+        items.push(album_from_row(row)?);
     }
 
     Ok(Page {
@@ -548,6 +591,162 @@ pub async fn albums(
         total,
         limit,
         offset,
+    })
+}
+
+/// Columns every album read model selects. One definition, so a rail can never
+/// drift from the grid and suddenly render a placeholder where a cover belongs.
+const ALBUM_COLUMNS: &str = "id, title, sort_title, year, album_artist_name, is_compilation, \
+     disc_count, track_count, duration_ms, release_type, cover_id, cover_remote_url, \
+     cover_local_path, available_tracks, max_sample_rate, max_bit_depth, format, artist_id";
+
+/// Map one `v_album_summary` row (or any query selecting [`ALBUM_COLUMNS`]).
+fn album_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<AlbumRow, PrismError> {
+    let max_sample_rate: Option<i64> = row.try_get("max_sample_rate")?;
+    let max_bit_depth: Option<i64> = row.try_get("max_bit_depth")?;
+    let format: Option<String> = row.try_get("format")?;
+    Ok(AlbumRow {
+        id: row.try_get("id")?,
+        title: row.try_get("title")?,
+        sort_title: row.try_get("sort_title")?,
+        year: row.try_get("year")?,
+        album_artist: row.try_get("album_artist_name")?,
+        artist_id: row.try_get("artist_id")?,
+        is_compilation: row.try_get::<i64, _>("is_compilation")? != 0,
+        disc_count: row.try_get("disc_count")?,
+        track_count: row.try_get("track_count")?,
+        duration_ms: row.try_get("duration_ms")?,
+        release_type: row.try_get("release_type")?,
+        cover_id: row.try_get("cover_id")?,
+        cover_path: row.try_get("cover_local_path")?,
+        cover_url: row.try_get("cover_remote_url")?,
+        available_tracks: row.try_get("available_tracks")?,
+        quality: quality_label(
+            max_bit_depth,
+            max_sample_rate,
+            None,
+            format.as_deref().unwrap_or(""),
+        ),
+        max_sample_rate,
+        max_bit_depth,
+        format,
+    })
+}
+
+/// One album by id, with the same shape the grid uses.
+pub async fn album(pool: &SqlitePool, id: &str) -> Result<Option<AlbumRow>, PrismError> {
+    let sql = format!("SELECT {ALBUM_COLUMNS} FROM v_album_summary WHERE id = ?1");
+    let row = sqlx::query(&sql).bind(id).fetch_optional(pool).await?;
+    row.as_ref().map(album_from_row).transpose()
+}
+
+/// One artist by id.
+pub async fn artist(pool: &SqlitePool, id: &str) -> Result<Option<ArtistRow>, PrismError> {
+    let row = sqlx::query(
+        "SELECT a.id, a.name, a.sort_name, \
+                COUNT(DISTINCT al.id) AS album_count, \
+                COALESCE(SUM(al.track_count), 0) AS track_count, \
+                COALESCE(SUM(al.duration_ms), 0) AS total_duration_ms, \
+                (SELECT al2.cover_id FROM albums al2 \
+                  WHERE al2.artist_id = a.id OR al2.album_artist_id = a.id \
+                  ORDER BY al2.year ASC NULLS LAST LIMIT 1) AS cover_id, \
+                (SELECT cc.local_path FROM albums al2 \
+                   JOIN cover_cache cc ON cc.id = al2.cover_id \
+                  WHERE al2.artist_id = a.id OR al2.album_artist_id = a.id \
+                  ORDER BY al2.year ASC NULLS LAST LIMIT 1) AS cover_path \
+         FROM artists a \
+         LEFT JOIN albums al ON al.artist_id = a.id OR al.album_artist_id = a.id \
+         WHERE a.id = ?1 \
+         GROUP BY a.id",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+    Ok(Some(ArtistRow {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        sort_name: row.try_get("sort_name")?,
+        album_count: row.try_get("album_count")?,
+        track_count: row.try_get("track_count")?,
+        total_duration_ms: row.try_get("total_duration_ms")?,
+        cover_id: row.try_get("cover_id")?,
+        cover_path: row.try_get("cover_path")?,
+    }))
+}
+
+/// Run one rail query. Rails are fixed SQL with a bound limit — no user input.
+async fn rail(
+    pool: &SqlitePool,
+    where_clause: &str,
+    order: &str,
+    limit: u32,
+) -> Result<Vec<AlbumRow>, PrismError> {
+    let sql = format!(
+        "SELECT {ALBUM_COLUMNS} FROM v_album_summary {where_clause} ORDER BY {order} LIMIT ?1"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(i64::from(limit.clamp(1, 60)))
+        .fetch_all(pool)
+        .await?;
+    rows.iter().map(album_from_row).collect()
+}
+
+/// Build every Home rail in one call.
+///
+/// `recently_played` and `most_played` are empty until playback has actually
+/// happened — `play_history` is written by `library_note_play` when the engine
+/// starts a track. The UI hides a rail it has no evidence for instead of
+/// inventing records, which is the difference between an editorial page and a
+/// mock-up.
+pub async fn home(pool: &SqlitePool, limit: u32) -> Result<HomeRails, PrismError> {
+    let limit = limit.clamp(1, 40);
+    let recently_added = rail(pool, "WHERE available_tracks > 0", "added_at DESC", limit).await?;
+    let recently_played = rail(
+        pool,
+        "WHERE last_played_at IS NOT NULL",
+        "last_played_at DESC",
+        limit,
+    )
+    .await?;
+    let most_played = rail(
+        pool,
+        "WHERE play_count > 0",
+        "play_count DESC, last_played_at DESC",
+        limit,
+    )
+    .await?;
+    let high_resolution = rail(
+        pool,
+        "WHERE max_sample_rate > 48000 OR max_bit_depth > 16",
+        "max_bit_depth DESC, max_sample_rate DESC, sort_title COLLATE NOCASE ASC",
+        limit,
+    )
+    .await?;
+    let recent_releases = rail(
+        pool,
+        "WHERE year IS NOT NULL AND year >= (SELECT MAX(year) - 12 FROM albums WHERE year IS NOT NULL)",
+        "year DESC, sort_title COLLATE NOCASE ASC",
+        limit,
+    )
+    .await?;
+    // Deterministic "rediscover": order by a hash of the id, so the rail is
+    // stable within a session but different from every curated one.
+    let rediscover = rail(
+        pool,
+        "WHERE available_tracks > 0",
+        "length(id) || substr(id, 3, 4) ASC",
+        limit,
+    )
+    .await?;
+
+    Ok(HomeRails {
+        recently_added,
+        recently_played,
+        most_played,
+        high_resolution,
+        recent_releases,
+        rediscover,
     })
 }
 
@@ -646,7 +845,7 @@ pub async fn global(
         },
     )
     .await?;
-    let albums = albums(pool, Some(trimmed), None, TrackSort::Relevance, limit, 0)
+    let albums = albums(pool, Some(trimmed), None, AlbumSort::Title, limit, 0)
         .await?
         .items;
     let artists = artists(pool, Some(trimmed), limit, 0).await?.items;

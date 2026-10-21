@@ -84,11 +84,15 @@ impl BackendKind {
 }
 
 /// Endpoint family the engine should target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OutputMode {
     /// Best exclusive endpoint, falling back to a mixed one.
-    #[default]
+    ///
+    /// Kept for the engine's internal negotiation; the desktop shell no longer
+    /// offers it, because a player that takes the device away from every other
+    /// application by default is a player people stop using. The default is
+    /// [`OutputMode::Shared`].
     Auto,
     /// Force an exclusive endpoint (WASAPI Exclusive, ALSA `hw:`, ASIO).
     Exclusive,
@@ -96,6 +100,19 @@ pub enum OutputMode {
     Shared,
     /// Force the ASIO driver (Windows only).
     Asio,
+}
+
+impl Default for OutputMode {
+    /// Share the device with the rest of the system.
+    ///
+    /// Prism is a desktop player: music, a video call and a browser tab have to
+    /// be able to coexist. The system mixer already runs at the endpoint's
+    /// configured resolution, and the engine resamples before the device, so
+    /// shared output loses nothing the listener can hear while keeping every
+    /// other application working.
+    fn default() -> Self {
+        Self::Shared
+    }
 }
 
 impl OutputMode {
@@ -294,9 +311,17 @@ pub fn enumerate_devices(mode: OutputMode) -> Result<Vec<OutputDevice>, AudioErr
         }
     }
 
-    // Deduplicate by endpoint id, keeping the first (best) occurrence.
-    let mut seen = std::collections::HashSet::new();
-    devices.retain(|device| seen.insert(device.id.clone()));
+    // Deduplicate by id *and* by name: the same physical endpoint is visible
+    // through more than one host (WASAPI shared and the default host, PipeWire
+    // and ALSA), and a device picker that lists "Speakers" three times is a
+    // device picker nobody trusts. The first occurrence wins, and the candidate
+    // order puts the closest-to-hardware stack first.
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut seen_names = std::collections::HashSet::new();
+    devices.retain(|device| {
+        let name = device.name.to_lowercase();
+        seen_ids.insert(device.id.clone()) && seen_names.insert(name)
+    });
 
     if devices.is_empty() {
         if let Some(error) = last_error {
@@ -406,6 +431,22 @@ fn start(
         BackendKind::Asio => platform::start_asio(negotiation, consumer, refill, stats),
         BackendKind::AlsaHw => platform::start_alsa(negotiation, consumer, refill, stats),
         BackendKind::PipeWire => platform::start_pipewire(negotiation, consumer, refill, stats),
+    }
+}
+
+/// The endpoint's live configuration, queried at runtime.
+///
+/// Only the cpal-hosted backends can answer this without opening a stream:
+/// exclusive backends take the format they were granted, so their "live"
+/// configuration *is* the negotiated one and [`Negotiation::format`] already
+/// carries it.
+#[must_use]
+pub fn live_device_format(kind: BackendKind, device: Option<&str>) -> Option<AudioFormat> {
+    match kind {
+        BackendKind::WasapiShared | BackendKind::CpalShared => {
+            crate::audio::engine::cpal_out::live_format(kind, device)
+        }
+        _ => None,
     }
 }
 

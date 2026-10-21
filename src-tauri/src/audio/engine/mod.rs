@@ -51,7 +51,11 @@ mod tests {
         assert_eq!(OutputMode::Exclusive.id(), "exclusive");
         assert_eq!(OutputMode::Shared.id(), "shared");
         assert_eq!(OutputMode::Asio.id(), "asio");
-        assert_eq!(OutputMode::default(), OutputMode::Auto);
+        assert_eq!(
+            OutputMode::default(),
+            OutputMode::Shared,
+            "the desktop default must share the device with the rest of the system"
+        );
     }
 
     #[test]
@@ -61,6 +65,16 @@ mod tests {
             candidates.first().is_some_and(|kind| kind.is_exclusive()),
             "Auto must try to own the device before falling back to mixing"
         );
+    }
+
+    #[test]
+    fn shared_mode_never_takes_the_device_exclusively() {
+        let candidates = backend::preferred_kinds(OutputMode::Shared);
+        assert!(
+            candidates.iter().all(|kind| !kind.is_exclusive()),
+            "Shared must never open an endpoint exclusively: {candidates:?}"
+        );
+        assert!(candidates.contains(&BackendKind::CpalShared));
     }
 
     #[test]

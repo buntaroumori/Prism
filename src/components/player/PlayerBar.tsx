@@ -42,6 +42,8 @@ export function PlayerBar(): JSX.Element {
   const previewVolumeDb = usePlaybackStore((state) => state.previewVolumeDb);
   const setMuted = usePlaybackStore((state) => state.setMuted);
   const setRoute = useUiStore((state) => state.setRoute);
+  const openAlbum = useUiStore((state) => state.openAlbum);
+  const openArtist = useUiStore((state) => state.openArtist);
 
   const [coverPath, setCoverPath] = useState<string | null>(null);
   const trackId = status?.track?.trackId ?? null;
@@ -83,6 +85,13 @@ export function PlayerBar(): JSX.Element {
   const coverAlt = track !== null && track.album.length > 0 ? track.album : "Album art";
   const title = track?.title ?? "";
   const artist = track !== null && track.artist.length > 0 ? track.artist : "Unknown artist";
+  // The names in the bar are links, like every other name in the product: the
+  // queue entry carries the catalogue ids the engine does not need. The index is
+  // a fallback for the instant between a track change and the store catching up.
+  const entry =
+    queue.find((item) => item.trackId === status?.track?.trackId) ?? queue[index] ?? null;
+  const albumId = entry?.albumId ?? null;
+  const artistId = entry?.artistId ?? null;
   const canSkip = queue.length > 0 && index + 1 < queue.length;
   const volumeDb = pendingVolumeDb ?? status?.volumeDb ?? 0;
 
@@ -137,11 +146,33 @@ export function PlayerBar(): JSX.Element {
               </button>
 
               <div className="min-w-0">
-                <p className="truncate text-[13px] font-semibold tracking-tight text-white">
+                <button
+                  type="button"
+                  disabled={albumId === null}
+                  onClick={() => {
+                    if (albumId !== null) {
+                      openAlbum(albumId);
+                    }
+                  }}
+                  className="block max-w-full truncate text-left text-[13px] font-semibold tracking-tight text-white focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none enabled:hover:underline enabled:hover:decoration-white/30 enabled:hover:underline-offset-2 disabled:cursor-default"
+                  aria-label={albumId === null ? undefined : `Open ${coverAlt}`}
+                >
                   {title}
-                </p>
-                <p className="truncate text-[11.5px] text-white/45">{artist}</p>
-                <div className="mt-1 flex items-center gap-1.5">
+                </button>
+                <button
+                  type="button"
+                  disabled={artistId === null}
+                  onClick={() => {
+                    if (artistId !== null) {
+                      openArtist(artistId);
+                    }
+                  }}
+                  className="block max-w-full truncate text-left text-[11.5px] text-white/45 focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none enabled:hover:text-white/70 enabled:hover:underline enabled:hover:decoration-white/20 enabled:hover:underline-offset-2 disabled:cursor-default"
+                  aria-label={artistId === null ? undefined : `Open ${artist}`}
+                >
+                  {artist}
+                </button>
+                <div className="mt-1 flex max-w-full items-center gap-1.5 overflow-hidden">
                   {status !== null ? <QualityBadge status={status} /> : null}
                   {status?.dop === true ? (
                     <span className="rounded-full border border-spectrum-violet/30 bg-spectrum-violet/[0.10] px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.12em] text-spectrum-violet uppercase">
@@ -184,11 +215,14 @@ export function PlayerBar(): JSX.Element {
             {/* ----------------------------------------------------- Right -- */}
             <div className="flex min-w-0 items-center justify-end gap-4">
               <div className="hidden min-w-0 flex-col items-end xl:flex">
-                <span className="flex items-center gap-1.5 text-[10px] tracking-[0.1em] text-white/30 uppercase">
-                  <AudioLines className="h-3 w-3" aria-hidden="true" />
-                  {formatAudioFormat(status?.outputFormat ?? null)}
+                <span
+                  className="flex items-center gap-1.5 text-[10px] tracking-[0.1em] whitespace-nowrap text-white/30 uppercase"
+                  title="Endpoint configuration reported by the driver, not the container the engine writes"
+                >
+                  <AudioLines className="h-3 w-3 shrink-0" aria-hidden="true" />
+                  {formatAudioFormat(status?.deviceFormat ?? status?.outputFormat ?? null)}
                 </span>
-                <span className="tabular text-[10px] text-white/20">
+                <span className="tabular max-w-[180px] truncate text-[10px] text-white/20">
                   {status?.deviceName ?? "—"}
                 </span>
               </div>

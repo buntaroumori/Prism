@@ -8,6 +8,114 @@ traceable to the delivery document of the phase that introduced it (`docs/PHASE-
 
 _No unreleased changes._
 
+## [0.1.2] — 2026-10-21
+
+A product and accuracy release. `0.1.1` proved the pipelines and the window; this
+one makes the library navigable (albums, artists, one search box everywhere),
+makes the interface configurable enough to be someone's own, and fixes the two
+defects that made the build feel unfinished: Windows played every file through a
+format the endpoint never agreed to, and a large scan stopped at 1024 tracks.
+
+### Added
+
+- **Album pages** (`album` route): disc-then-track ordering, Play and Shuffle, the record's
+  quality summary, and every track row linking back to its artist.
+- **Artist pages** (`artist` route): round portrait, discography as a grid at the user's cover
+  size, and `Play artist` over the whole catalogue.
+- **One search box, in the top bar, in every view** (`Ctrl`/`Cmd`+`K`): 180 ms debounce,
+  grouped tracks/albums/artists, arrow-key navigation, `Enter` filters the library. There is no
+  scan button in the top bar — scanning belongs to Settings and nowhere else.
+- **Home is a catalogue, not a landing page**: the reference-listening hero is gone; the view is
+  six curated rails (recently added, recently played, most played, and three collection rails) from
+  `library_home`, refreshed when the catalogue or the current track changes.
+- **Rails move the way media rails move**: mouse drag with inertia, plus arrow buttons in the
+  rail's corner that disable — never hide — at the ends.
+- **The library is a mosaic**: cover, title, artist and year per album, with a cover-size control
+  (120–260 px), eight orderings (date, artist, album, each ascending and descending, plus plays and
+  track count) and infinite scroll in pages of 120.
+- **Appearance is a panel, not a toggle**: accent colour with source selection (artwork / fixed),
+  accent intensity, glass opacity, corner radius, row density, module visibility and layout presets,
+  all persisted and all applied through CSS custom properties.
+- **Cover artwork is resolved by the backend**: a keyset sweep walks every album that has no cover,
+  extracts embedded artwork (then folder artwork, then a provider URL if enabled) and attaches it to
+  the album row. Opening a record is no longer what makes its cover exist.
+
+### Changed
+
+- **Shared mode is the standard output path**: it coexists with other applications, keeps the OS
+  mixer and delivers the endpoint's own format. The Engine Mode selector is gone from Settings — a
+  choice between "works with everything" and "works with everything but breaks other apps" is not a
+  user-facing decision.
+- **The Now Playing deck lost its Signal Path block**, and its layout presets were rebuilt around the
+  modules that remain: Editorial (artwork, lyrics), Listening (artwork, lyrics, spectrum), Analysis
+  (spectrum, queue).
+- **The output list shows real endpoints only** — one entry per playback device, not one per driver
+  in the stack — and states the endpoint's live format next to it.
+- **Buffer size is explained, not just exposed**: the hint names the current period, the resulting
+  latency and the trade-off (smaller = tighter timing and more CPU wake-ups, larger = more tolerant
+  of load and less responsive).
+- **Volume is a percentage with a mute button**; the dB value survives only in the tooltip.
+- **The quality badge is emoji-free, sized for narrow windows**, and collapses its tail
+  (`· Processed`) below 1180 px instead of forcing the bar to wrap.
+- **Every track and artist name is a link**: mosaic tiles, track rows, the album page, the artist
+  page, search results and the player bar (the queue keeps the catalogue ids the engine does not
+  need), all resolving to the album page or the artist's discography.
+
+### Fixed
+
+- **Windows distortion in every track**: shared mode asked cpal for the _file's_ format, so a
+  44.1/16 stream was opened into a 24/192 mix graph and the OS converter mangled it. The supervisor
+  now queries the endpoint's live default configuration and asks for exactly that; the DSP chain
+  resamples the file into it, and the quality badge reports what the endpoint is really doing.
+- **WASAPI exclusive wrote a full buffer on every callback**: `GetCurrentPadding` is now consulted,
+  so only the free frames are written and queued audio is never overwritten; `Stop` drains the
+  endpoint (bounded at 500 ms) instead of truncating the last period mid-sample.
+- **The end of every track was truncated**: the DSP chain now flushes the resampler's delay line at
+  end of stream, so the final milliseconds of a file — and the tail of every track on a gapless
+  album — are emitted instead of dropped.
+- **The scan no longer stops at 1024 tracks**: tag parsing runs in bounded chunks with a wall-clock
+  budget, a chunk that blows it is re-parsed file by file with a per-file budget, and a single hung
+  reader can no longer wedge the pipeline behind two completed chunks. Progress also stops being
+  double-counted (entries versus rows), so `files_indexed` matches the database again.
+- **Removing a library folder deletes its tracks**: `library_remove_root` purges the folder's rows
+  in one transaction and reports how many tracks, albums and artists went with it; the Settings pane
+  states the counts instead of leaving the catalogue to drift.
+- **Discord shows the cover**: the presence publishes the album art as an external `https://` asset
+  after resolving it (embedded art has no URL, so providers are asked for the same record), and the
+  activity is re-sent when the artwork arrives.
+- **The scrubber tells the truth**: the playhead rescales elapsed _output_ frames by
+  `source_rate / output_rate` before publishing, so a 44.1 kHz file on a 192 kHz endpoint no longer
+  crosses the track in ten seconds; dragging holds a preview and releases on the engine's own
+  position instead of snapping back.
+- **Stop is final**: `player_stop` tears the queue down, clears the playhead and publishes an empty
+  status in one step, and the bar leaves without leaving a stale position behind.
+- **A dragged rail no longer opens an album**: the drag hook suppresses the click that follows a
+  gesture (in the capture phase) while still allowing a plain click to navigate.
+- **`CoverArt` forgets a failed URL instead of the component**: failures are remembered per source,
+  so a recycled tile in the virtualised grid cannot hide the next record's cover.
+- **The cover sweep can no longer stop on its first page**: it advances by keyset cursor, so a first
+  page of records with no artwork anywhere does not end the sweep before it reaches the rest of the
+  library.
+- **Albums actually point at their artist**: `ensure_albums` inserted records without
+  `album_artist_id`, so the column migration `0004` exposes was null for the entire catalogue and no
+  album tile could link anywhere. The write path now resolves the link in the same transaction, and
+  `migrate()` repairs existing databases once per launch.
+
+### Data
+
+- Migration `0004_album_artist_link` recreates `v_album_summary` with the album artist's
+  `artist_id`, so album pages and tiles can link by identifier instead of by name. Every previous
+  column keeps its name, type and position.
+
+### Testing and CI
+
+- New integration tests: a 1 100-file scan (the smallest fixture that crosses the old 1024-file
+  ceiling), the album grid's artist identifiers and their filter, a root purge that proves a
+  title collision does not take the surviving album down, and the Discord activity's external
+  artwork asset. 241 tests pass across the workspace, and `cargo fmt --check`, `cargo clippy` with
+  the workflow's flag set (`correctness`, `suspicious`, `perf`), `pnpm check`, `pnpm build` and the
+  boot smoke test all stay green.
+
 ## [0.1.1] — 2026-10-20
 
 A correctness and pipeline release. `0.1.0` built and installed, but the window

@@ -4,69 +4,220 @@ import { createJSONStorage, persist } from "zustand/middleware";
 /**
  * Top-level destinations.
  *
- * Every route declared here is fully implemented. Album and artist detail
- * browsers are not routes yet, because a navigation entry that renders a "coming
- * soon" panel is exactly the placeholder this project forbids.
+ * Album and artist pages are real routes, not overlays: every track and artist
+ * name in the application is a link to one of them, and a link that cannot be
+ * deep-linked (or survives a reload) is not a link.
  */
-export type ShellRoute = "home" | "library" | "now-playing" | "settings" | "system";
+export type ShellRoute =
+  "home" | "library" | "now-playing" | "settings" | "system" | "album" | "artist";
+
+/** Detail payload for the parameterised routes. */
+export interface RouteParams {
+  albumId: string | null;
+  artistId: string | null;
+}
 
 /** Ambient canvas intensity, persisted per user. */
 export type AmbientIntensity = "off" | "subtle" | "full";
 
+/** How far the shell rounds its large surfaces. */
+export type CornerStyle = "sharp" | "soft" | "round";
+
+/** Vertical rhythm of every list and grid. */
+export type Density = "comfortable" | "compact";
+
+/** Accent policy: follow the artwork, or pin a colour. */
+export type AccentSource = "artwork" | "fixed";
+
 interface UiState {
   sidebarCollapsed: boolean;
   route: ShellRoute;
+  params: RouteParams;
   ambientIntensity: AmbientIntensity;
   /** Palette key currently driving the shell (`null` = neutral). */
   paletteKey: string | null;
+
+  /* ------------------------------------------------------------ appearance */
+  accentSource: AccentSource;
+  accentColor: string;
+  /** 0–100: opacity of the frosted surfaces over the OLED black. */
+  glassOpacity: number;
+  /** 0–100: how strongly the cover palette bleeds into the surface tint. */
+  tintStrength: number;
+  corners: CornerStyle;
+  density: Density;
+  /** Cover edge length, in CSS pixels, of the library mosaic. */
+  coverSize: number;
+  showRailArrows: boolean;
+  showHomeStats: boolean;
+  showSpectrum: boolean;
+
+  /* ------------------------------------------------------------ navigation */
   toggleSidebar: () => void;
+  navigate: (route: ShellRoute, params?: Partial<RouteParams>) => void;
+  openAlbum: (albumId: string) => void;
+  openArtist: (artistId: string) => void;
   setRoute: (route: ShellRoute) => void;
+  back: () => void;
+
   setAmbientIntensity: (intensity: AmbientIntensity) => void;
   setPaletteKey: (key: string | null) => void;
+  setAppearance: (patch: Partial<AppearanceState>) => void;
+  resetAppearance: () => void;
 }
+
+/** The subset of the store the appearance panel writes. */
+export type AppearanceState = Pick<
+  UiState,
+  | "accentSource"
+  | "accentColor"
+  | "glassOpacity"
+  | "tintStrength"
+  | "corners"
+  | "density"
+  | "coverSize"
+  | "ambientIntensity"
+  | "showRailArrows"
+  | "showHomeStats"
+  | "showSpectrum"
+>;
+
+const DEFAULT_APPEARANCE: AppearanceState = {
+  accentSource: "artwork",
+  accentColor: "#7dd3fc",
+  glassOpacity: 62,
+  tintStrength: 45,
+  corners: "soft",
+  density: "comfortable",
+  coverSize: 176,
+  ambientIntensity: "full",
+  showRailArrows: true,
+  showHomeStats: true,
+  showSpectrum: true,
+};
+
+/** Bounds the slider can produce; the store clamps every write. */
+export const COVER_SIZE_MIN = 120;
+export const COVER_SIZE_MAX = 260;
 
 /**
  * Persisted shell preferences.
  *
- * Only layout lives here. Playback, library data and the playhead have their own
- * stores so that toggling the sidebar can never invalidate a 500k-row list.
+ * Layout and appearance live here. Playback, catalogue data and the playhead
+ * have their own stores so toggling the sidebar can never invalidate a
+ * 500 000-row list. `route` is deliberately *not* persisted: restoring a deep
+ * link into an album that no longer exists is a worse first impression than
+ * starting at Home.
  */
 export const useUiStore = create<UiState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       sidebarCollapsed: false,
       route: "home",
-      ambientIntensity: "full",
+      params: { albumId: null, artistId: null },
       paletteKey: null,
+      ...DEFAULT_APPEARANCE,
+
       toggleSidebar: () => {
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed }));
       },
-      setRoute: (route) => {
-        set({ route });
+
+      navigate: (route, params) => {
+        set((state) => ({
+          route,
+          params: {
+            albumId: params?.albumId ?? null,
+            artistId: params?.artistId ?? null,
+          },
+          ...(route === "home" ? { paletteKey: state.paletteKey } : {}),
+        }));
       },
+
+      openAlbum: (albumId) => {
+        set({ route: "album", params: { albumId, artistId: null } });
+      },
+
+      openArtist: (artistId) => {
+        set({ route: "artist", params: { albumId: null, artistId } });
+      },
+
+      setRoute: (route) => {
+        set({ route, params: { albumId: null, artistId: null } });
+      },
+
+      back: () => {
+        // One level only: detail pages go back to the browse surface that owns
+        // them. A full history stack would be a router, and this is not one.
+        const route = get().route;
+        if (route === "album" || route === "artist") {
+          set({ route: "library", params: { albumId: null, artistId: null } });
+        }
+      },
+
       setAmbientIntensity: (ambientIntensity) => {
         set({ ambientIntensity });
       },
+
       setPaletteKey: (paletteKey) => {
         set({ paletteKey });
+      },
+
+      setAppearance: (patch) => {
+        set((state) => {
+          const next: AppearanceState = { ...state, ...patch };
+          return {
+            accentSource: next.accentSource,
+            accentColor: next.accentColor,
+            glassOpacity: clamp(Math.round(next.glassOpacity), 0, 100),
+            tintStrength: clamp(Math.round(next.tintStrength), 0, 100),
+            corners: next.corners,
+            density: next.density,
+            coverSize: clamp(Math.round(next.coverSize), COVER_SIZE_MIN, COVER_SIZE_MAX),
+            ambientIntensity: next.ambientIntensity,
+            showRailArrows: next.showRailArrows,
+            showHomeStats: next.showHomeStats,
+            showSpectrum: next.showSpectrum,
+          };
+        });
+      },
+
+      resetAppearance: () => {
+        set({ ...DEFAULT_APPEARANCE });
       },
     }),
     {
       name: "prism.shell.preferences",
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
+      partialize: (state): AppearanceState & { sidebarCollapsed: boolean } => ({
         sidebarCollapsed: state.sidebarCollapsed,
-        route: state.route,
+        accentSource: state.accentSource,
+        accentColor: state.accentColor,
+        glassOpacity: state.glassOpacity,
+        tintStrength: state.tintStrength,
+        corners: state.corners,
+        density: state.density,
+        coverSize: state.coverSize,
         ambientIntensity: state.ambientIntensity,
+        showRailArrows: state.showRailArrows,
+        showHomeStats: state.showHomeStats,
+        showSpectrum: state.showSpectrum,
       }),
-      // v1 stored `activeSection` anchored sections; v2 is a real router.
+      // v1 stored `activeSection`; v2 introduced the router; v3 splits the
+      // appearance knobs out of the ambient switch and adds the mosaic size.
       migrate: (persisted, version) => {
         if (version < 2) {
-          return { sidebarCollapsed: false, route: "home", ambientIntensity: "full" };
+          return { ...DEFAULT_APPEARANCE, sidebarCollapsed: false };
+        }
+        if (version < 3) {
+          return { ...DEFAULT_APPEARANCE, ...(persisted as object) };
         }
         return persisted;
       },
     },
   ),
 );
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}

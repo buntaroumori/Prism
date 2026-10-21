@@ -13,6 +13,8 @@ import type {
 
 interface LibraryStore {
   stats: LibraryStats | null;
+  /** Global search text, owned by the top bar and consumed by every view. */
+  query: string;
   roots: LibraryRoot[];
   recent: AlbumRow[];
   scan: ScanStatus | null;
@@ -21,6 +23,7 @@ interface LibraryStore {
   loading: boolean;
 
   loadOverview: () => Promise<void>;
+  setQuery: (query: string) => void;
   refreshStats: () => Promise<void>;
   loadRoots: () => Promise<void>;
   loadRecent: (limit?: number) => Promise<void>;
@@ -45,6 +48,7 @@ interface LibraryStore {
  */
 export const useLibraryStore = create<LibraryStore>()((set, get) => ({
   stats: null,
+  query: "",
   roots: [],
   recent: [],
   scan: null,
@@ -74,6 +78,10 @@ export const useLibraryStore = create<LibraryStore>()((set, get) => ({
     } finally {
       set({ loading: false });
     }
+  },
+
+  setQuery: (query) => {
+    set({ query });
   },
 
   refreshStats: async () => {

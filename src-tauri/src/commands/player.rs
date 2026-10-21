@@ -10,6 +10,7 @@ use tauri::State;
 use crate::audio::decoder::TrackRequest;
 use crate::audio::dsp::DspSettings;
 use crate::audio::engine::{EngineStatus, OutputDevice, OutputMode, PlaybackState};
+use crate::audio::format::AudioFormat;
 use crate::error::PrismError;
 use crate::state::AppState;
 
@@ -183,6 +184,31 @@ pub fn player_devices(
     mode: OutputMode,
 ) -> Result<Vec<OutputDevice>, PrismError> {
     Ok(state.engine().devices(mode)?)
+}
+
+/// The endpoint's live configuration, queried from the driver.
+///
+/// Settings shows this next to the device list so the number on screen is the
+/// one the OS panel reports, not the container the engine happens to write.
+/// `None` means the backend cannot answer without opening a stream (exclusive
+/// endpoints), in which case the negotiated format in `player_status` is the
+/// device truth.
+#[tauri::command]
+pub fn player_device_format(
+    state: State<'_, AppState>,
+    mode: OutputMode,
+    device: Option<String>,
+) -> Result<Option<AudioFormat>, PrismError> {
+    let kinds = crate::audio::engine::backend::preferred_kinds(mode);
+    for kind in kinds {
+        if let Some(format) =
+            crate::audio::engine::backend::live_device_format(kind, device.as_deref())
+        {
+            return Ok(Some(format));
+        }
+    }
+    // Exclusive backends: the open stream already reports the device format.
+    Ok(state.engine().status().device_format)
 }
 
 /// Name of the event channel the engine pushes to.

@@ -29,6 +29,7 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use sqlx::Row;
 use sqlx::{QueryBuilder, Sqlite, SqlitePool, Transaction};
 
 use crate::error::PrismError;
@@ -320,6 +321,7 @@ impl CatalogWriter {
         let albums = ensure_albums(&mut transaction, batch).await?;
         upsert_tracks(&mut transaction, batch, &artists, &albums).await?;
         refresh_albums(&mut transaction, &albums).await?;
+        link_album_artists(&mut transaction, &albums).await?;
 
         transaction.commit().await?;
 
@@ -541,6 +543,157 @@ impl CatalogWriter {
     ///
     /// Only called on an explicit "prune" full scan, never automatically:
     /// keeping orphans preserves the user's playlists and history.
+    /// Remove every track that lives under `root`.
+    ///
+    /// Removing a library folder is a statement about the collection, not about
+    /// a list: the files are no longer scanned, so their rows must stop being
+    /// part of the library the moment the folder is removed. Doing it lazily
+    /// (on the next scan) would leave a hole in the catalogue that only a full
+    /// rescan could explain, so the purge happens inside the same call that
+    /// removes the root.
+    ///
+    /// Matching is done on the stored path and folder strings with an explicit
+    /// separator, so `/music` never matches `/music-archive`. CUE sheets are
+    /// removed with their images, and orphaned albums/artists are pruned after.
+    pub async fn purge_root(&self, root: &str) -> Result<PurgeOutcome, PrismError> {
+        let base = root.trim_end_matches(['/', '\\']);
+        let separator = if base.contains('\\') { '\\' } else { '/' };
+        let prefix = format!("{base}{separator}%");
+
+        let mut transaction = self.pool.begin().await?;
+        let tracks = sqlx::query(
+            "DELETE FROM tracks WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\' \
+             OR folder = ?1 OR folder LIKE ?2 ESCAPE '\\'",
+        )
+        .bind(base)
+        .bind(&prefix)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+
+        let sheets =
+            sqlx::query("DELETE FROM cue_sheets WHERE path = ?1 OR path LIKE ?2 ESCAPE '\\'")
+                .bind(base)
+                .bind(&prefix)
+                .execute(&mut *transaction)
+                .await?
+                .rows_affected();
+
+        // Orphans created by the purge, resolved in the same transaction so the
+        // catalogue is never observably inconsistent between two statements.
+        let albums = sqlx::query(
+            "DELETE FROM albums WHERE NOT EXISTS (SELECT 1 FROM tracks WHERE album_id = albums.id)",
+        )
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        let artists = sqlx::query(
+            "DELETE FROM artists WHERE NOT EXISTS (SELECT 1 FROM tracks WHERE artist_id = artists.id) \
+                AND NOT EXISTS (SELECT 1 FROM tracks WHERE album_artist_id = artists.id) \
+                AND NOT EXISTS (SELECT 1 FROM albums WHERE artist_id = artists.id) \
+                AND NOT EXISTS (SELECT 1 FROM albums WHERE album_artist_id = artists.id)",
+        )
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        transaction.commit().await?;
+
+        Ok(PurgeOutcome {
+            tracks,
+            cue_sheets: sheets,
+            albums,
+            artists,
+        })
+    }
+
+    /// Albums still waiting for cover extraction, in identifier order.
+    ///
+    /// Returns the album identity plus the first playable track, which is what
+    /// the artwork resolver needs to find embedded or folder artwork. The limit
+    /// keeps memory bounded, and `after` is a keyset cursor: an album whose
+    /// artwork cannot be resolved keeps its `cover_id` null by design, so an
+    /// offset-based sweep would either re-examine it forever or stop early the
+    /// moment a page happened to contain only such albums.
+    pub async fn albums_without_cover(
+        &self,
+        limit: u32,
+        after: Option<&str>,
+    ) -> Result<Vec<CoverCandidate>, PrismError> {
+        let rows = sqlx::query(
+            "SELECT al.id, al.title, al.album_artist_name, \
+                    (SELECT t.path FROM tracks t \
+                      WHERE t.album_id = al.id AND t.missing = 0 AND t.source = 'file' \
+                      ORDER BY t.disc_no ASC, t.track_no ASC LIMIT 1) AS track_path \
+             FROM albums al \
+             WHERE al.cover_id IS NULL AND (?1 IS NULL OR al.id > ?1) \
+             ORDER BY al.id ASC LIMIT ?2",
+        )
+        .bind(after)
+        .bind(i64::from(limit.clamp(1, 500)))
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            out.push(CoverCandidate {
+                album_id: row.try_get("id")?,
+                album: row.try_get("title")?,
+                artist: row.try_get("album_artist_name")?,
+                track_path: row.try_get("track_path")?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Attach a resolved cover to an album.
+    pub async fn attach_cover(&self, album_id: &str, cover_id: &str) -> Result<(), PrismError> {
+        sqlx::query("UPDATE albums SET cover_id = ?2 WHERE id = ?1")
+            .bind(album_id)
+            .bind(cover_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Record that a track started playing.
+    ///
+    /// The counters live on `tracks` (so the album view can aggregate them) and
+    /// the event itself lives in `play_history` (so the history is auditable and
+    /// a future stats view does not need a schema change). Both writes are one
+    /// transaction: a play is either recorded or it is not.
+    pub async fn note_play(
+        &self,
+        track_id: &str,
+        ms_played: i64,
+        completed: bool,
+    ) -> Result<bool, PrismError> {
+        let mut transaction = self.pool.begin().await?;
+        let updated = sqlx::query(
+            "UPDATE tracks SET play_count = play_count + 1, \
+                    last_played_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') \
+             WHERE id = ?1",
+        )
+        .bind(track_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected();
+        if updated == 0 {
+            return Ok(false);
+        }
+        sqlx::query(
+            "INSERT INTO play_history (id, track_id, ms_played, completed, source) \
+             VALUES (?1, ?2, ?3, ?4, 'queue')",
+        )
+        .bind(stable_id("ph", &format!("{track_id}:{}", now_nanos())))
+        .bind(track_id)
+        .bind(ms_played.max(0))
+        .bind(i64::from(u8::from(completed)))
+        .execute(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
     pub async fn prune_orphans(&self) -> Result<(u64, u64), PrismError> {
         let mut transaction = self.pool.begin().await?;
         let albums = sqlx::query(
@@ -561,6 +714,41 @@ impl CatalogWriter {
         transaction.commit().await?;
         Ok((albums, artists))
     }
+}
+
+/// Result of removing a library root from the catalogue.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurgeOutcome {
+    pub tracks: u64,
+    pub cue_sheets: u64,
+    pub albums: u64,
+    pub artists: u64,
+}
+
+impl PurgeOutcome {
+    /// True when the purge changed the catalogue at all.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.tracks == 0 && self.cue_sheets == 0 && self.albums == 0 && self.artists == 0
+    }
+}
+
+/// One album waiting for cover extraction.
+#[derive(Debug, Clone)]
+pub struct CoverCandidate {
+    pub album_id: String,
+    pub album: String,
+    pub artist: String,
+    pub track_path: Option<String>,
+}
+
+/// Monotonic-enough unique suffix for a history row.
+fn now_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
 }
 
 /// Stored mtime/size pair used for incremental scans.
@@ -791,6 +979,38 @@ async fn upsert_tracks(
     query.push(" ON CONFLICT(id) DO UPDATE SET ");
     query.push(TRACK_UPSERT_TAIL.as_str());
     query.build().execute(&mut **transaction).await?;
+    Ok(())
+}
+
+/// Point every album at the artist rows that own it.
+///
+/// `ensure_albums` inserts a record by title and album-artist *name*, without
+/// foreign keys — the artist rows exist by then, but the album has no way to
+/// know their ids. Without this statement `albums.album_artist_id` stayed null
+/// for the whole catalogue, so `v_album_summary.artist_id` was null too and no
+/// album tile could link to its artist at all.
+async fn link_album_artists(
+    transaction: &mut Transaction<'_, Sqlite>,
+    albums: &[(String, String, String)],
+) -> Result<(), PrismError> {
+    for chunk in albums.chunks(100) {
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "UPDATE albums SET \
+                album_artist_id = COALESCE(album_artist_id, \
+                    (SELECT ar.id FROM artists ar \
+                      WHERE ar.name = albums.album_artist_name COLLATE NOCASE LIMIT 1)), \
+                artist_id = COALESCE(artist_id, album_artist_id, \
+                    (SELECT ar.id FROM artists ar \
+                      WHERE ar.name = albums.album_artist_name COLLATE NOCASE LIMIT 1)) \
+             WHERE id IN (",
+        );
+        let mut separated = query.separated(", ");
+        for (id, _, _) in chunk {
+            separated.push_bind(id.clone());
+        }
+        separated.push_unseparated(")");
+        query.build().execute(&mut **transaction).await?;
+    }
     Ok(())
 }
 

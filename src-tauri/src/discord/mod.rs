@@ -288,7 +288,24 @@ impl DiscordService {
         if self.generation.load(Ordering::SeqCst) != generation {
             return;
         }
-        let Some(url) = cover.remote_url else { return };
+
+        // Local artwork has no URL, and Discord cannot display a file. When the
+        // cover came from an embedded tag or the album folder — the normal case
+        // for a private library — ask the providers for a public URL of the same
+        // record. Without this the presence showed text and a generic asset for
+        // every track a listener actually owned.
+        let url = match cover.remote_url {
+            Some(url) if url.starts_with("https://") => Some(url),
+            _ => {
+                self.artwork
+                    .remote_url(&presence.artist, &presence.album)
+                    .await
+            }
+        };
+        if self.generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
+        let Some(url) = url else { return };
 
         if let Some(activity) = self.activity_for(&config, Some(&presence), Some(url)) {
             self.push_if_changed(&rpc, activity);
@@ -469,6 +486,25 @@ mod tests {
         assert!(activity.start_timestamp.is_none());
         assert_eq!(activity.state, "Kid A · Paused");
         assert_eq!(activity.small_image.as_deref(), Some(ASSET_PAUSED));
+    }
+
+    #[tokio::test]
+    async fn a_resolved_cover_is_published_as_an_external_asset() {
+        let service = test_service();
+        let url = "https://is1-ssl.mzstatic.com/image/thumb/600x600bb.jpg";
+        let activity = service
+            .activity_for(
+                &DiscordConfig::default(),
+                Some(&presence()),
+                Some(url.to_string()),
+            )
+            .expect("activity");
+        let json = activity.to_json();
+        // Discord renders external artwork only from `assets.large_image`, and
+        // only when the value is the full HTTPS URL — this is the wire format
+        // that the presence has to carry for the cover to appear at all.
+        assert_eq!(json["assets"]["large_image"], serde_json::json!(url));
+        assert_eq!(json["assets"]["large_text"], serde_json::json!("Kid A"));
     }
 
     #[tokio::test]

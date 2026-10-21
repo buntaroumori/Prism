@@ -2,10 +2,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { ZodError, z, type ZodType } from "zod";
 
 import {
+  AlbumDetailSchema,
   AlbumRowSchema,
+  ArtistDetailSchema,
+  HomeRailsSchema,
+  RootRemovalSchema,
   AppInfoSchema,
   CoverPaletteSchema,
   EngineEventSchema,
+  AudioFormatSchema,
   OutputDeviceSchema,
   PlayerStatusSchema,
   PlayerTickSchema,
@@ -29,8 +34,11 @@ import {
   SpectrumFrameSchema,
   TrackRowSchema,
   pageSchema,
+  type AlbumDetail,
   type AlbumRow,
   type AppInfo,
+  type ArtistDetail,
+  type AudioFormat,
   type ArtistRow,
   type CoverAsset,
   type CoverPalette,
@@ -39,6 +47,7 @@ import {
   type DiscordStatus,
   type Facets,
   type GlobalSearch,
+  type HomeRails,
   type LibraryRoot,
   type LibraryStats,
   type LyricsDocument,
@@ -53,12 +62,13 @@ import {
   type ScanError,
   type ScanOptions,
   type ScanRun,
+  type RootRemoval,
   type ScanStatus,
   type SpectrumFrame,
   type TrackQuery,
   type TrackRequest,
   type TrackRow,
-  type TrackSort,
+  type AlbumSort,
 } from "@/types/ipc";
 
 /**
@@ -156,6 +166,7 @@ export const systemApi = {
 };
 
 const Z_BOOLEAN = z.boolean();
+const Z_NUMBER = z.number().int();
 const Z_ROOTS = z.array(LibraryRootSchema);
 const Z_SCAN_RUNS = z.array(ScanRunSchema);
 const Z_SCAN_ERRORS = z.array(ScanErrorSchema);
@@ -186,7 +197,8 @@ export const libraryApi = {
   roots: (): Promise<LibraryRoot[]> => command("library_roots", Z_ROOTS),
   addRoot: (path: string, name?: string): Promise<LibraryRoot> =>
     command("library_add_root", LibraryRootSchema, { path, name: name ?? null }),
-  removeRoot: (id: string): Promise<boolean> => command("library_remove_root", Z_BOOLEAN, { id }),
+  removeRoot: (id: string): Promise<RootRemoval> =>
+    command("library_remove_root", RootRemovalSchema, { id, purge: true }),
   setRootEnabled: (id: string, enabled: boolean): Promise<boolean> =>
     command("library_set_root_enabled", Z_BOOLEAN, { id, enabled }),
 
@@ -197,7 +209,7 @@ export const libraryApi = {
   albums: (options?: {
     text?: string;
     artistId?: string;
-    sort?: TrackSort;
+    sort?: AlbumSort;
     limit?: number;
     offset?: number;
   }): Promise<{ items: AlbumRow[]; total: number; limit: number; offset: number }> =>
@@ -221,6 +233,21 @@ export const libraryApi = {
   facets: (): Promise<Facets> => command("library_facets", FacetsSchema),
   globalSearch: (text: string, limit?: number): Promise<GlobalSearch> =>
     command("library_global_search", GlobalSearchSchema, { text, limit: limit ?? null }),
+
+  home: (limit?: number): Promise<HomeRails> =>
+    command("library_home", HomeRailsSchema, { limit: limit ?? null }),
+  albumDetail: (id: string): Promise<AlbumDetail> =>
+    command("library_album_detail", AlbumDetailSchema, { id }),
+  artistDetail: (id: string): Promise<ArtistDetail> =>
+    command("library_artist_detail", ArtistDetailSchema, { id }),
+  notePlay: (trackId: string, msPlayed?: number, completed?: boolean): Promise<boolean> =>
+    command("library_note_play", Z_BOOLEAN, {
+      trackId,
+      msPlayed: msPlayed ?? null,
+      completed: completed ?? null,
+    }),
+  indexCovers: (batch?: number): Promise<number> =>
+    command("library_index_covers", Z_NUMBER, { batch: batch ?? null }),
 
   coverPalette: (key: string): Promise<CoverPalette> =>
     command("library_cover_palette", CoverPaletteSchema, { key }),
@@ -266,6 +293,8 @@ export const playerApi = {
     commandVoidWithArgs("player_set_ram_play", { enabled }),
   devices: (mode: OutputMode): Promise<OutputDevice[]> =>
     command("player_devices", z.array(OutputDeviceSchema), { mode }),
+  deviceFormat: (mode: OutputMode, device: string | null): Promise<AudioFormat | null> =>
+    command("player_device_format", AudioFormatSchema.nullable(), { mode, device }),
 };
 
 /**

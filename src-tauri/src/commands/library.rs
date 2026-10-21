@@ -12,9 +12,11 @@ use sqlx::Row;
 use tauri::{Emitter, State};
 
 use crate::artwork::{CoverAsset, CoverHint};
+use crate::db::catalog::CatalogWriter;
 use crate::db::catalog::{path_key, stable_id};
 use crate::db::search::{
-    self, AlbumRow, ArtistRow, Facets, GlobalSearch, Page, TrackQuery, TrackRow, TrackSort,
+    self, AlbumRow, AlbumSort, ArtistRow, Facets, GlobalSearch, HomeRails, Page, TrackQuery,
+    TrackRow,
 };
 use crate::error::PrismError;
 use crate::metadata::scanner::{ScanConfig, ScanOutcome, ScanProgress, ScanTrigger};
@@ -423,18 +425,62 @@ pub async fn library_add_root(
     Ok(root_from_row(&row)?)
 }
 
-/// Remove a root. Indexed rows are kept: the user may only be moving a drive.
+/// Remove a root **and everything it contributed to the catalogue**.
+///
+/// A root is a statement about where the library lives. Once it is gone the
+/// files under it are no longer scanned, so their rows must not linger: leaving
+/// them behind produces a collection that keeps showing music the user has
+/// explicitly taken out of scope, and only a full rescan would explain the
+/// discrepancy. The purge runs in the same command, in one transaction.
 #[tauri::command]
 pub async fn library_remove_root(
     state: State<'_, AppState>,
     id: String,
-) -> Result<bool, PrismError> {
-    let affected = sqlx::query("DELETE FROM library_roots WHERE id = ?1")
-        .bind(id)
+    purge: Option<bool>,
+) -> Result<RootRemoval, PrismError> {
+    let row = sqlx::query("SELECT path FROM library_roots WHERE id = ?1")
+        .bind(&id)
+        .fetch_optional(state.pool())
+        .await?;
+    let Some(row) = row else {
+        return Ok(RootRemoval::default());
+    };
+    let path: String = row.try_get("path")?;
+
+    let removed = sqlx::query("DELETE FROM library_roots WHERE id = ?1")
+        .bind(&id)
         .execute(state.pool())
         .await?
         .rows_affected();
-    Ok(affected > 0)
+
+    if removed == 0 || purge == Some(false) {
+        return Ok(RootRemoval {
+            removed_root: removed > 0,
+            ..RootRemoval::default()
+        });
+    }
+
+    let outcome = CatalogWriter::new(state.pool().clone())
+        .purge_root(&path)
+        .await?;
+    Ok(RootRemoval {
+        removed_root: true,
+        tracks_removed: outcome.tracks,
+        albums_removed: outcome.albums,
+        artists_removed: outcome.artists,
+        cue_sheets_removed: outcome.cue_sheets,
+    })
+}
+
+/// What removing a root took out of the catalogue.
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RootRemoval {
+    pub removed_root: bool,
+    pub tracks_removed: u64,
+    pub albums_removed: u64,
+    pub artists_removed: u64,
+    pub cue_sheets_removed: u64,
 }
 
 /// Enable or disable a root without forgetting it.
@@ -475,7 +521,7 @@ pub async fn library_albums(
     state: State<'_, AppState>,
     text: Option<String>,
     artist_id: Option<String>,
-    sort: Option<TrackSort>,
+    sort: Option<AlbumSort>,
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Page<AlbumRow>, PrismError> {
@@ -483,11 +529,92 @@ pub async fn library_albums(
         state.pool(),
         text.as_deref(),
         artist_id.as_deref(),
-        sort.unwrap_or(TrackSort::Title),
+        sort.unwrap_or_default(),
         limit.unwrap_or(60),
         offset.unwrap_or(0),
     )
     .await
+}
+
+/// Every Home rail in one round-trip.
+#[tauri::command]
+pub async fn library_home(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<HomeRails, PrismError> {
+    search::home(state.pool(), limit.unwrap_or(18)).await
+}
+
+/// One album with its tracks, ready for the album page.
+#[tauri::command]
+pub async fn library_album_detail(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<AlbumDetail, PrismError> {
+    let album = search::album(state.pool(), &id)
+        .await?
+        .ok_or_else(|| PrismError::invalid("unknown album"))?;
+    let tracks = search::tracks(
+        state.pool(),
+        TrackQuery {
+            album_id: Some(id),
+            sort: TrackQuery::default().sort,
+            limit: 500,
+            include_missing: true,
+            ..TrackQuery::default()
+        },
+    )
+    .await?;
+    Ok(AlbumDetail { album, tracks })
+}
+
+/// One album page payload: identity plus ordered tracks.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumDetail {
+    pub album: AlbumRow,
+    pub tracks: Page<TrackRow>,
+}
+
+/// One artist with every album we hold.
+#[tauri::command]
+pub async fn library_artist_detail(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<ArtistDetail, PrismError> {
+    let artist = search::artist(state.pool(), &id)
+        .await?
+        .ok_or_else(|| PrismError::invalid("unknown artist"))?;
+    let albums = search::albums(state.pool(), None, Some(&id), AlbumSort::Year, 200, 0).await?;
+    Ok(ArtistDetail { artist, albums })
+}
+
+/// One artist page payload.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistDetail {
+    pub artist: ArtistRow,
+    pub albums: Page<AlbumRow>,
+}
+
+/// Record that a track started playing.
+///
+/// Called by the shell when the engine reports a new track; returns `false`
+/// when the id is unknown (a race after a re-scan), which the caller ignores.
+#[tauri::command]
+pub async fn library_note_play(
+    state: State<'_, AppState>,
+    track_id: String,
+    ms_played: Option<i64>,
+    completed: Option<bool>,
+) -> Result<bool, PrismError> {
+    CatalogWriter::new(state.pool().clone())
+        .note_play(
+            &track_id,
+            ms_played.unwrap_or(0),
+            completed.unwrap_or(false),
+        )
+        .await
 }
 
 /// Artist grid with aggregate counters.
@@ -571,6 +698,92 @@ pub async fn library_album_cover(
     }
 
     Ok(asset)
+}
+
+/// One page of the cover sweep.
+///
+/// `next` is the keyset cursor for the following page, or `None` when the sweep
+/// has reached the end of the catalogue. Returning the cursor — instead of
+/// relying on how many covers were resolved — is what keeps a library whose
+/// first albums simply have no artwork from stopping the sweep before it ever
+/// reaches the rest of the collection.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverSweep {
+    /// Albums examined in this page.
+    pub examined: u32,
+    /// Albums that received artwork.
+    pub resolved: u32,
+    /// Cursor for the next page; `None` when the sweep is complete.
+    pub next: Option<String>,
+}
+
+/// Resolve the covers of albums that do not have one yet.
+///
+/// The grid must be able to paint artwork the first time it is opened — asking
+/// a listener to click each record so its cover materialises is not a feature,
+/// it is a defect. Extraction runs here, in the backend, over albums that are
+/// missing artwork, and each resolved cover is attached to its album row so the
+/// next query joins it directly.
+///
+/// Bounded by design: `batch` albums per call, no network unless a provider is
+/// enabled, and a failure on one album (corrupt tag, unreadable file) is
+/// recorded and skipped rather than aborting the sweep. Albums are visited once
+/// per sweep through `after`, because an album with no artwork anywhere stays
+/// unresolved forever and must not be retried in a loop.
+pub async fn backfill_covers(
+    pool: &sqlx::SqlitePool,
+    artwork: &crate::artwork::ArtworkService,
+    batch: u32,
+    after: Option<&str>,
+) -> Result<CoverSweep, PrismError> {
+    let batch = batch.clamp(1, 500);
+    let writer = CatalogWriter::new(pool.clone());
+    let albums = writer.albums_without_cover(batch, after).await?;
+    let next = (albums.len() == batch as usize)
+        .then(|| albums.last().map(|candidate| candidate.album_id.clone()))
+        .flatten();
+    let examined = u32::try_from(albums.len()).unwrap_or(u32::MAX);
+    let mut resolved = 0_u32;
+    for candidate in albums {
+        let hint = CoverHint {
+            folder: candidate.track_path.as_ref().and_then(|path| {
+                std::path::Path::new(path)
+                    .parent()
+                    .map(std::path::Path::to_path_buf)
+            }),
+            track_path: candidate.track_path.map(PathBuf::from),
+        };
+        let asset = artwork
+            .ensure(&candidate.artist, &candidate.album, &hint)
+            .await;
+        if asset.is_placeholder() {
+            continue;
+        }
+        writer.attach_cover(&candidate.album_id, &asset.key).await?;
+        resolved += 1;
+    }
+    Ok(CoverSweep {
+        examined,
+        resolved,
+        next,
+    })
+}
+
+/// Frontend-triggered cover sweep (the Settings "refresh artwork" action).
+#[tauri::command]
+pub async fn library_index_covers(
+    state: State<'_, AppState>,
+    batch: Option<u32>,
+) -> Result<u32, PrismError> {
+    let sweep = backfill_covers(
+        &state.pool().clone(),
+        state.artwork(),
+        batch.unwrap_or(48),
+        None,
+    )
+    .await?;
+    Ok(sweep.resolved)
 }
 
 /// Ambient palette derived from a cached cover.

@@ -14,7 +14,18 @@ import tseslint from "typescript-eslint";
  */
 export default tseslint.config(
   {
-    ignores: ["dist", ".perf-dist", "node_modules", "src-tauri", "coverage", "scripts"],
+    ignores: [
+      "dist",
+      ".perf-dist",
+      "node_modules",
+      "src-tauri",
+      // The workspace target lives at the repository root, not under src-tauri:
+      // `tauri-codegen` writes generated JS assets there, and linting build
+      // artefacts turns a green local gate red for no reason.
+      "target",
+      "coverage",
+      "scripts",
+    ],
   },
   {
     files: ["**/*.{js,mjs,cjs}"],

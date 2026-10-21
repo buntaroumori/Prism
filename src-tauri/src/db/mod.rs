@@ -77,6 +77,24 @@ pub async fn connect(database_path: &Path) -> Result<SqlitePool, PrismError> {
 pub async fn migrate(pool: &SqlitePool) -> Result<(), PrismError> {
     sqlx::migrate!("./migrations").run(pool).await?;
 
+    // Repair the album → artist links of databases written before 0.1.2.
+    // `ensure_albums` used to insert records without `album_artist_id`, so every
+    // album in an existing library has a null link and no tile can reach its
+    // artist. Idempotent, bounded by the number of albums, and executed once per
+    // launch before anything reads the catalogue.
+    sqlx::query(
+        "UPDATE albums SET \
+            album_artist_id = COALESCE(album_artist_id, \
+                (SELECT ar.id FROM artists ar \
+                  WHERE ar.name = albums.album_artist_name COLLATE NOCASE LIMIT 1)), \
+            artist_id = COALESCE(artist_id, album_artist_id, \
+                (SELECT ar.id FROM artists ar \
+                  WHERE ar.name = albums.album_artist_name COLLATE NOCASE LIMIT 1)) \
+         WHERE album_artist_id IS NULL AND album_artist_name <> ''",
+    )
+    .execute(pool)
+    .await?;
+
     // A database that silently refused WAL would still work, but every
     // performance claim of the project would be a lie. Fail loudly instead.
     let mode: String = sqlx::query_scalar("PRAGMA journal_mode;")

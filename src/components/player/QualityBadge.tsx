@@ -1,5 +1,4 @@
 import type { JSX } from "react";
-import { Gem, TriangleAlert } from "lucide-react";
 
 import { displayBits } from "@/lib/audio";
 import { cn } from "@/lib/utils";
@@ -13,11 +12,11 @@ interface QualityBadgeProps {
 /**
  * The honesty badge.
  *
- * `HI-RES` is claimed only when the *source* is above CD quality (bit depth or
- * sample rate), and `BIT-PERFECT` only when the engine confirms an untouched
- * path to an exclusive endpoint. When the engine reports a bit-perfect-capable
- * source but the path is being altered, the badge says `PROCESSED` instead of
- * quietly implying purity — that distinction is the whole point of the product.
+ * `BIT-PERFECT` is claimed only when the engine confirms an untouched path to
+ * an exclusive endpoint; source resolution is stated separately, from the
+ * file's own format. Icon-free on purpose — a badge is a label, not a sticker —
+ * and it never wraps: in a narrow window the trailing word is dropped, not the
+ * whole badge, so the transport column keeps its geometry at every width.
  */
 export function QualityBadge({ status, className }: QualityBadgeProps): JSX.Element | null {
   const source = status.sourceFormat;
@@ -30,52 +29,80 @@ export function QualityBadge({ status, className }: QualityBadgeProps): JSX.Elem
   const bits = source === null ? null : displayBits(source.sampleFormat);
   const rate = source?.sampleRate ?? null;
   const hiRes = status.dop || (bits !== null && bits > 16) || (rate !== null && rate > 48_000);
+  const resolution = rate === null ? null : `${String(rate / 1_000)}k`;
 
   if (status.bitPerfect) {
     return (
-      <span
-        className={cn(
-          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em] uppercase",
-          "border-positive/35 bg-positive/[0.10] text-positive",
-          className,
-        )}
+      <Badge
+        tone="positive"
+        label={status.dop ? "DSD" : "Bit-perfect"}
+        tail={resolution}
         title={
           status.dop
-            ? `DoP ${String(rate ?? 0)} Hz — DSD markers reach the DAC untouched`
-            : "Exclusive endpoint, exact format match, no DSP, 0 dB"
+            ? `DoP at ${String(rate ?? 0)} Hz — the DSD markers reach the DAC untouched`
+            : "Exclusive endpoint, exact format match, no DSP, unity gain"
         }
-      >
-        <Gem className="h-3 w-3" aria-hidden="true" strokeWidth={2.2} />
-        {status.dop ? "DSD · Bit-perfect" : "Bit-perfect"}
-      </span>
+        className={className}
+      />
     );
   }
 
   if (hiRes) {
     return (
-      <span
-        className={cn(
-          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em] uppercase",
-          "border-white/15 bg-white/[0.06] text-white/70",
-          className,
-        )}
-        title="Source is above CD quality, but the current output path is not bit-perfect."
-      >
-        <TriangleAlert className="h-3 w-3 text-warning/80" aria-hidden="true" strokeWidth={2.2} />
-        Hi-Res · Processed
-      </span>
+      <Badge
+        tone="neutral"
+        label={bits === null ? "Hi-Res" : `${String(bits)}/${resolution ?? "—"}`}
+        tail="Processed"
+        title={`Source is ${bits === null ? "high resolution" : `${String(bits)}-bit`} at ${String(rate ?? 0)} Hz${
+          status.outputFormat === null
+            ? ""
+            : `, output ${String(status.outputFormat.sampleRate)} Hz`
+        }. The current path is not bit-perfect (shared mixer, resampling or DSP).`}
+        className={className}
+      />
     );
   }
 
   return (
+    <Badge
+      tone="muted"
+      label="CD"
+      tail={resolution}
+      title="CD-resolution source"
+      className={className}
+    />
+  );
+}
+
+function Badge({
+  tone,
+  label,
+  tail,
+  title,
+  className,
+}: {
+  tone: "positive" | "neutral" | "muted";
+  label: string;
+  tail: string | null;
+  title: string;
+  className?: string | undefined;
+}): JSX.Element {
+  return (
     <span
+      title={title}
       className={cn(
-        "inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em] text-white/45 uppercase",
+        "inline-flex max-w-full shrink-0 items-center gap-1 overflow-hidden rounded-full border px-2 py-0.5",
+        "text-[9.5px] leading-4 font-semibold tracking-[0.1em] whitespace-nowrap uppercase",
+        tone === "positive" && "border-positive/35 bg-positive/[0.10] text-positive",
+        tone === "neutral" && "border-white/15 bg-white/[0.06] text-white/70",
+        tone === "muted" && "border-white/10 bg-white/[0.04] text-white/45",
         className,
       )}
-      title="CD-resolution source"
     >
-      CD
+      <span className="truncate">{label}</span>
+      {tail === null ? null : (
+        <span className="hidden truncate text-white/30 min-[1180px]:inline">· {tail}</span>
+      )}
     </span>
   );
 }

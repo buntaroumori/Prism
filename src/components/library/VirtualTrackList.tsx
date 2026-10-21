@@ -20,6 +20,7 @@ import {
   type TrackWindow,
 } from "@/hooks/useTrackWindow";
 import { usePlaybackStore } from "@/stores/playbackStore";
+import { useUiStore } from "@/stores/uiStore";
 import type { TrackQuery, TrackRow } from "@/types/ipc";
 
 /** Fixed row height: the virtualiser only works because this never changes. */
@@ -369,8 +370,8 @@ const TrackRowItem = memo(function TrackRowItem({
         >
           {row.title}
         </p>
-        <p className="truncate text-[11px] text-white/35">
-          {row.artist.length > 0 ? row.artist : "Unknown artist"}
+        <p className="flex min-w-0 items-center gap-1.5 truncate text-[11px] text-white/35">
+          <ArtistButton id={row.artistId} name={row.artist} />
           {row.cueStartMs !== null ? (
             <span className="ml-1.5 rounded bg-white/[0.06] px-1 py-px text-[9px] tracking-wide text-white/40 uppercase">
               CUE
@@ -381,9 +382,7 @@ const TrackRowItem = memo(function TrackRowItem({
 
       <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-white/40">
         <Disc3 className="h-3 w-3 shrink-0 text-white/20" aria-hidden="true" />
-        <span className="truncate" title={row.album}>
-          {row.album.length > 0 ? row.album : "—"}
-        </span>
+        <AlbumButton id={row.albumId} title={row.album} />
       </div>
 
       <span className="tabular justify-self-end text-[11.5px] text-white/35">
@@ -404,3 +403,47 @@ const TrackRowItem = memo(function TrackRowItem({
     </div>
   );
 });
+
+/** Artist name inside a row: a link when the row knows its artist id. */
+function ArtistButton({ id, name }: { id: string | null; name: string }): JSX.Element {
+  const openArtist = useUiStore((state) => state.openArtist);
+  const label = name.length > 0 ? name : "Unknown artist";
+  if (id === null) {
+    return <span className="truncate">{label}</span>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        openArtist(id);
+      }}
+      className="max-w-full truncate text-left hover:text-white hover:underline hover:decoration-white/30 hover:underline-offset-2"
+      title={label}
+    >
+      {label}
+    </button>
+  );
+}
+
+/** Album name inside a row: a link when the row knows its album id. */
+function AlbumButton({ id, title }: { id: string | null; title: string }): JSX.Element {
+  const openAlbum = useUiStore((state) => state.openAlbum);
+  const label = title.length > 0 ? title : "—";
+  if (id === null) {
+    return <span className="truncate">{label}</span>;
+  }
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation();
+        openAlbum(id);
+      }}
+      className="min-w-0 truncate text-left hover:text-white hover:underline hover:decoration-white/30 hover:underline-offset-2"
+      title={label}
+    >
+      {label}
+    </button>
+  );
+}

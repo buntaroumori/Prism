@@ -1,11 +1,14 @@
-import type { JSX } from "react";
-import { ChevronRight, FolderSearch, Loader2, RefreshCw } from "lucide-react";
+import { ChevronRight, Loader2, Search, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type JSX } from "react";
 
 import { StatusPill } from "@/components/ui/StatusPill";
-import { Button } from "@/components/ui/Button";
 import { formatCount } from "@/lib/format";
+import { libraryApi } from "@/lib/ipc";
+import { cn } from "@/lib/utils";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore, type ShellRoute } from "@/stores/uiStore";
+import type { GlobalSearch } from "@/types/ipc";
 
 const ROUTE_LABELS: Record<ShellRoute, string> = {
   home: "Home",
@@ -13,57 +16,240 @@ const ROUTE_LABELS: Record<ShellRoute, string> = {
   "now-playing": "Now Playing",
   settings: "Settings",
   system: "System",
+  album: "Album",
+  artist: "Artist",
 };
 
 /**
- * Window chrome and page context.
+ * Window chrome, page context and the one search field in the product.
  *
- * The right cluster is a live scan indicator, not a decoration: when a scan runs
- * it shows the phase and the file counter ticking, when it finishes it collapses
- * back to a quiet "Scan" button. Everything here is `no-drag` except the bar
- * itself, so the window can be moved from the empty middle.
+ * The search sits in the centre of the bar and is present on every route, so
+ * there is no view where the user has to remember a different shortcut. Typing
+ * queries the backend's global search; Enter filters the library mosaic, and an
+ * individual result opens its album, its artist, or plays the track.
+ *
+ * The scan is *not* here: starting a scan belongs in Settings → Library, where
+ * the roots and the history live. A bar that can kick off a full-disk read on
+ * every screen is a mistake waiting for a misplaced click.
  */
 export function TopBar(): JSX.Element {
   const route = useUiStore((state) => state.route);
+  const navigate = useUiStore((state) => state.navigate);
+  const openAlbum = useUiStore((state) => state.openAlbum);
+  const openArtist = useUiStore((state) => state.openArtist);
+  const setQuery = useLibraryStore((state) => state.setQuery);
   const scan = useLibraryStore((state) => state.scan);
   const progress = useLibraryStore((state) => state.progress);
-  const stats = useLibraryStore((state) => state.stats);
-  const startScan = useLibraryStore((state) => state.startScan);
-  const refreshStats = useLibraryStore((state) => state.refreshStats);
+  const playback = usePlaybackStore((state) => state.playTracks);
+
+  const [text, setText] = useState("");
+  const [results, setResults] = useState<GlobalSearch | null>(null);
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const boxRef = useRef<HTMLDivElement | null>(null);
 
   const running = scan?.running === true || progress !== null;
   const label = ROUTE_LABELS[route];
 
+  // Cmd/Ctrl+K from anywhere: the shortcut every desktop search field has.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }
+      if (event.key === "Escape") {
+        setOpen(false);
+        inputRef.current?.blur();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  useEffect(() => {
+    const trimmed = text.trim();
+    if (trimmed.length < 2) {
+      setResults(null);
+      return;
+    }
+    let active = true;
+    const timer = window.setTimeout(() => {
+      void libraryApi
+        .globalSearch(trimmed, 12)
+        .then((next) => {
+          if (active) {
+            setResults(next);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setResults(null);
+          }
+        });
+    }, 180);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [text]);
+
+  // A click outside the field closes the panel; the field keeps its text.
+  useEffect(() => {
+    const onDown = (event: MouseEvent): void => {
+      if (boxRef.current !== null && !boxRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+    };
+  }, []);
+
+  const submit = useCallback((): void => {
+    const trimmed = text.trim();
+    setQuery(trimmed);
+    setOpen(false);
+    navigate("library");
+  }, [navigate, setQuery, text]);
+
   return (
     <header
       data-tauri-drag-region
-      className="drag-region relative z-20 flex h-[62px] shrink-0 items-center justify-between gap-4 border-b border-white/[0.05] px-7"
+      className="drag-region relative z-20 flex h-[62px] shrink-0 items-center gap-4 border-b border-white/[0.05] px-7"
     >
-      <div className="flex min-w-0 items-center gap-2 text-[12.5px]">
+      <div className="flex w-[210px] min-w-0 shrink-0 items-center gap-2 text-[12.5px]">
         <span className="text-white/30">Prism</span>
         <ChevronRight className="h-3.5 w-3.5 text-white/15" aria-hidden="true" />
-        <span className="font-medium tracking-tight text-white/80">{label}</span>
-        {stats !== null ? (
-          <span className="ml-2 hidden text-[11px] text-white/25 sm:inline">
-            {formatCount(stats.trackCount)} tracks · {formatCount(stats.albumCount)} albums
-          </span>
+        <span className="truncate font-medium tracking-tight text-white/80">{label}</span>
+      </div>
+
+      <div ref={boxRef} className="no-drag relative flex min-w-0 flex-1 justify-center">
+        <div
+          className={cn(
+            "flex h-9 w-full max-w-[520px] items-center rounded-full border bg-white/[0.035] px-3.5 transition-colors",
+            open && text.trim().length >= 2
+              ? "border-accent/40 bg-white/[0.05]"
+              : "border-white/[0.08] hover:border-white/[0.14]",
+          )}
+        >
+          <Search className="h-3.5 w-3.5 shrink-0 text-white/30" aria-hidden="true" />
+          <input
+            ref={inputRef}
+            value={text}
+            onChange={(event) => {
+              setText(event.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => {
+              setOpen(true);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                submit();
+              }
+            }}
+            placeholder="Search albums, artists, tracks"
+            aria-label="Search the library"
+            className="ml-2.5 h-full min-w-0 flex-1 bg-transparent text-[12.5px] text-white placeholder:text-white/25 focus:outline-none"
+          />
+          {text.length > 0 ? (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => {
+                setText("");
+                setQuery("");
+                setResults(null);
+                inputRef.current?.focus();
+              }}
+              className="grid h-5 w-5 place-items-center rounded-full text-white/30 hover:bg-white/[0.08] hover:text-white/80"
+            >
+              <X className="h-3 w-3" aria-hidden="true" />
+            </button>
+          ) : (
+            <kbd className="hidden shrink-0 rounded border border-white/10 px-1.5 py-0.5 text-[9.5px] text-white/25 sm:block">
+              Ctrl K
+            </kbd>
+          )}
+        </div>
+
+        {open && text.trim().length >= 2 ? (
+          <div className="absolute top-[46px] left-1/2 w-full max-w-[520px] -translate-x-1/2 overflow-hidden rounded-2xl border border-white/[0.09] bg-oled-950/95 shadow-[0_30px_80px_-20px_rgb(0_0_0/0.9)] backdrop-blur-2xl">
+            {results === null ? (
+              <p className="px-4 py-3 text-[11.5px] text-white/35">Searching…</p>
+            ) : results.albums.length === 0 &&
+              results.artists.length === 0 &&
+              results.tracks.items.length === 0 ? (
+              <p className="px-4 py-3 text-[11.5px] text-white/35">
+                Nothing matches “{text.trim()}”.
+              </p>
+            ) : (
+              <div className="max-h-[420px] overflow-y-auto py-1.5">
+                <Group title="Albums">
+                  {results.albums.slice(0, 5).map((album) => (
+                    <Row
+                      key={album.id}
+                      primary={album.title}
+                      secondary={album.albumArtist}
+                      onPick={() => {
+                        openAlbum(album.id);
+                        setOpen(false);
+                      }}
+                    />
+                  ))}
+                </Group>
+                <Group title="Artists">
+                  {results.artists.slice(0, 4).map((artist) => (
+                    <Row
+                      key={artist.id}
+                      primary={artist.name}
+                      secondary={`${formatCount(artist.albumCount)} albums`}
+                      onPick={() => {
+                        openArtist(artist.id);
+                        setOpen(false);
+                      }}
+                    />
+                  ))}
+                </Group>
+                <Group title="Tracks">
+                  {results.tracks.items.slice(0, 5).map((track) => (
+                    <Row
+                      key={track.id}
+                      primary={track.title}
+                      secondary={`${track.artist} · ${track.album}`}
+                      onPick={() => {
+                        void playback([track], 0);
+                        setOpen(false);
+                      }}
+                    />
+                  ))}
+                </Group>
+                <button
+                  type="button"
+                  onClick={submit}
+                  className="mt-1 w-full border-t border-white/[0.06] px-4 py-2.5 text-left text-[11.5px] text-white/45 hover:bg-white/[0.03] hover:text-white"
+                >
+                  Show all results in the library
+                </button>
+              </div>
+            )}
+          </div>
         ) : null}
       </div>
 
-      <div className="no-drag flex items-center gap-2.5">
+      <div className="no-drag flex w-[210px] shrink-0 items-center justify-end gap-2.5">
         {running ? (
-          <div className="flex items-center gap-2.5 rounded-full border border-white/10 bg-white/[0.05] py-1 pr-3 pl-2.5">
+          <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] py-1 pr-3 pl-2.5">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-white/50" aria-hidden="true" />
-            <span className="text-[11px] text-white/60">
-              {progress === null
-                ? "Scanning"
-                : `${capitalise(progress.phase)} · ${formatCount(progress.filesIndexed)} indexed`}
+            <span className="text-[11px] whitespace-nowrap text-white/60">
+              {progress === null ? "Scanning" : `${formatCount(progress.filesIndexed)} indexed`}
             </span>
-            {progress?.percent !== null && progress?.percent !== undefined ? (
-              <span className="tabular text-[10.5px] text-white/35">
-                {Math.round(progress.percent * 100)}%
-              </span>
-            ) : null}
           </div>
         ) : (
           <StatusPill
@@ -77,34 +263,48 @@ export function TopBar(): JSX.Element {
                 : "Library indexed"}
           </StatusPill>
         )}
-
-        <Button
-          variant="ghost"
-          icon={RefreshCw}
-          onClick={() => {
-            void refreshStats();
-          }}
-          aria-label="Refresh counters"
-          className="h-8 w-8 rounded-full px-0"
-        />
-
-        <Button
-          variant="secondary"
-          icon={FolderSearch}
-          loading={running}
-          onClick={() => {
-            void startScan();
-          }}
-          disabled={running}
-          className="h-8 px-3.5 text-[12px]"
-        >
-          {running ? "Scanning" : "Scan library"}
-        </Button>
       </div>
     </header>
   );
 }
 
-function capitalise(value: string): string {
-  return value.length === 0 ? value : `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
+function Group({
+  title,
+  children,
+}: {
+  title: string;
+  children: JSX.Element[];
+}): JSX.Element | null {
+  if (children.length === 0) {
+    return null;
+  }
+  return (
+    <div className="px-1.5 py-1">
+      <p className="px-2.5 pt-1 pb-1 text-[9.5px] font-semibold tracking-[0.16em] text-white/25 uppercase">
+        {title}
+      </p>
+      {children}
+    </div>
+  );
+}
+
+function Row({
+  primary,
+  secondary,
+  onPick,
+}: {
+  primary: string;
+  secondary: string;
+  onPick: () => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      className="flex w-full min-w-0 items-center gap-2 rounded-xl px-2.5 py-1.5 text-left hover:bg-white/[0.05]"
+    >
+      <span className="truncate text-[12.5px] text-white/85">{primary}</span>
+      <span className="ml-auto truncate text-[10.5px] text-white/30">{secondary}</span>
+    </button>
+  );
 }

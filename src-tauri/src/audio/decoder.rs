@@ -896,6 +896,15 @@ impl GaplessPlayer {
             }
 
             if read.end_of_stream {
+                // The chain owns the last few milliseconds of the track: a
+                // resampler cannot emit what is still inside its delay line
+                // until it is fed silence. Without this the tail of every track
+                // was dropped, which is audible as a click at a gapless
+                // boundary and as a truncated final chord.
+                let tail = track.chain.flush()?;
+                if !tail.is_empty() {
+                    chunk.samples.extend_from_slice(&tail);
+                }
                 let ended = track.request.track_id.clone();
                 self.current = None;
                 chunk.ended = Some(ended);

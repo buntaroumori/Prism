@@ -147,7 +147,13 @@
   /* The player bar and floating panels sit on this: a tinted, frosted film that
      keeps text legible even over a bright sleeve. */
   .glass-bar {
-    background-color: color-mix(in srgb, var(--prism-surface) 68%, transparent);
+    /* `--prism-glass` is written by the appearance panel (0.012–0.072); the
+       fallback keeps a usable surface before the store hydrates. */
+    background-color: color-mix(
+      in srgb,
+      var(--prism-surface) calc(var(--prism-glass, 0.06) * 1000%),
+      transparent
+    );
     backdrop-filter: blur(40px) saturate(1.35);
     -webkit-backdrop-filter: blur(40px) saturate(1.35);
   }

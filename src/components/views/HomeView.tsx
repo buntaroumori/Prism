@@ -1,113 +1,160 @@
 import { motion } from "framer-motion";
-import { useState, type JSX } from "react";
-import { ArrowRight, FolderPlus, HardDrive, Library, Play, Shuffle } from "lucide-react";
+import { useEffect, useMemo, useState, type JSX } from "react";
+import { ArrowRight, FolderPlus, Disc3, Clock3, Flame, Sparkles, Star, Waves } from "lucide-react";
 
 import { AlbumCard } from "@/components/library/AlbumCard";
+import { Rail } from "@/components/library/Rail";
 import { Button } from "@/components/ui/Button";
-import { formatCount, formatLibraryDuration, formatSampleRate } from "@/lib/format";
+import { formatCount, formatLibraryDuration } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore } from "@/stores/uiStore";
-import type { AlbumRow } from "@/types/ipc";
+import type { AlbumRow, HomeRails } from "@/types/ipc";
 
-const GUTTER = "mx-auto w-full max-w-[1420px] px-8";
+const GUTTER = "mx-auto w-full max-w-[1560px] px-8";
+
+/** Rail definitions in display order; a rail with no albums is not rendered. */
+const RAILS: readonly {
+  key: keyof HomeRails;
+  title: string;
+  caption: string;
+  icon: typeof Disc3;
+}[] = [
+  {
+    key: "recentlyPlayed",
+    title: "Recently played",
+    caption: "Where you left off — most recent first.",
+    icon: Clock3,
+  },
+  {
+    key: "recentlyAdded",
+    title: "Recently added",
+    caption: "The last records the scanner committed to the catalogue.",
+    icon: Sparkles,
+  },
+  { key: "mostPlayed", title: "On repeat", caption: "The records you return to.", icon: Flame },
+  {
+    key: "highResolution",
+    title: "High resolution",
+    caption: "Above CD quality: 24-bit, DSD or rates beyond 48 kHz.",
+    icon: Waves,
+  },
+  {
+    key: "recentReleases",
+    title: "Fresh releases",
+    caption: "Newest release years in your collection.",
+    icon: Star,
+  },
+  {
+    key: "rediscover",
+    title: "Rediscover",
+    caption: "Albums you own and have not played in a while.",
+    icon: Disc3,
+  },
+];
 
 /**
- * Editorial home.
+ * Home.
  *
- * Everything on this screen is derived from the real catalogue: no sample data,
- * no invented counts. The hero adapts to the library it finds — a fresh install
- * is invited to add a folder, a scanned library gets an entry point plus the
- * most recent additions, and an empty-but-configured library says so.
+ * No hero: this is a listening surface, not a landing page. Six shelves, each
+ * built by a single backend call from the real catalogue, each scrollable by
+ * drag and by the arrows in its corner. Empty shelves are omitted rather than
+ * drawn as placeholders.
  */
 export function HomeView(): JSX.Element {
   const stats = useLibraryStore((state) => state.stats);
   const roots = useLibraryStore((state) => state.roots);
-  const recent = useLibraryStore((state) => state.recent);
-  const error = useLibraryStore((state) => state.error);
   const setRoute = useUiStore((state) => state.setRoute);
+  const showStats = useUiStore((state) => state.showHomeStats);
   const playTracks = usePlaybackStore((state) => state.playTracks);
-  const queue = usePlaybackStore((state) => state.queue);
-  const currentIndex = usePlaybackStore((state) => state.index);
+  const queueLength = usePlaybackStore((state) => state.queue.length);
+  const trackId = usePlaybackStore((state) => state.status?.track?.trackId ?? null);
+
+  const [rails, setRails] = useState<HomeRails | null>(null);
   const [busyAlbum, setBusyAlbum] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
 
-  const empty = stats !== null && stats.trackCount === 0;
+  useEffect(() => {
+    let active = true;
+    void libraryApi
+      .home(24)
+      .then((next) => {
+        if (active) {
+          setRails(next);
+        }
+      })
+      .catch((cause: unknown) => {
+        if (active) {
+          setFailed(cause instanceof Error ? cause.message : "Cannot read the catalogue");
+        }
+      });
+    return () => {
+      active = false;
+    };
+    // A new track changes "recently played" and "on repeat": refetch once per
+    // start, not on every playhead tick (that lives in a separate store slice).
+  }, [stats?.trackCount, trackId]);
 
-  /**
-   * Queue an entire album.
-   *
-   * The request is capped at the backend's page limit and ordered by disc and
-   * track number, so a 40-track box set plays in the right sequence.
-   */
-  const playAlbum = async (album: AlbumRow, shuffle = false): Promise<void> => {
+  const playAlbum = async (album: AlbumRow): Promise<void> => {
     setBusyAlbum(album.id);
     try {
-      const page = await libraryApi.search({
-        albumId: album.id,
-        sort: "album",
-        limit: 500,
-      });
+      const page = await libraryApi.search({ albumId: album.id, sort: "album", limit: 500 });
       if (page.items.length === 0) {
         return;
       }
       const ordered = [...page.items].sort((a, b) => {
         const disc = (a.discNo ?? 1) - (b.discNo ?? 1);
-        if (disc !== 0) {
-          return disc;
-        }
-        return (a.trackNo ?? 0) - (b.trackNo ?? 0);
+        return disc !== 0 ? disc : (a.trackNo ?? 0) - (b.trackNo ?? 0);
       });
-      const finalOrder = shuffle ? shuffleDeterministic(ordered) : ordered;
-      await playTracks(finalOrder, 0);
+      await playTracks(ordered, 0);
     } finally {
       setBusyAlbum(null);
     }
   };
 
+  const empty = stats !== null && stats.trackCount === 0;
+  const visible = useMemo(
+    () => RAILS.filter((rail) => (rails?.[rail.key].length ?? 0) > 0),
+    [rails],
+  );
+
   if (stats === null) {
     return (
-      <div className={cn(GUTTER, "pt-10")}>
-        <div className="h-[220px] animate-pulse rounded-3xl bg-white/[0.03]" />
+      <div className={cn(GUTTER, "space-y-6 pt-8")}>
+        {[0, 1, 2].map((key) => (
+          <div key={key} className="h-[240px] animate-pulse rounded-3xl bg-white/[0.03]" />
+        ))}
       </div>
     );
   }
 
   return (
-    <div className={cn(GUTTER, "space-y-12 pt-8 pb-12")}>
-      {/* ------------------------------------------------------------ Hero -- */}
-      <motion.section
-        initial={{ opacity: 0, y: 14 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-        className="relative overflow-hidden rounded-[28px] border border-white/[0.07] bg-white/[0.025] p-9 backdrop-blur-2xl"
-      >
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute -top-32 -right-24 h-72 w-72 rounded-full opacity-40 blur-[110px]"
-          style={{ background: "var(--prism-accent)" }}
-        />
-
-        <p className="text-[10.5px] font-semibold tracking-[0.24em] text-white/30 uppercase">
-          {empty ? "Your library is empty" : "Reference listening"}
-        </p>
-
-        <h1 className="mt-3 max-w-3xl text-[40px] leading-[1.05] font-semibold tracking-[-0.035em] text-balance text-white">
-          {empty ? "Point Prism at your music." : "Every bit, exactly as it was mastered."}
-        </h1>
-
-        <p className="mt-4 max-w-2xl text-[14px] leading-relaxed text-white/45">
-          {empty
-            ? "Add a folder and Prism will index it — tags, technical details, embedded artwork and CUE sheets — then hand it to the engine untouched."
-            : `${formatCount(stats.trackCount)} tracks across ${formatCount(stats.albumCount)} albums, ${formatLibraryDuration(stats.totalDurationMs)} of listening. ${
-                stats.maxBitDepth !== null && stats.maxBitDepth > 16
-                  ? `Your highest-resolution file is ${String(stats.maxBitDepth)}-bit / ${formatSampleRate(stats.maxSampleRate)}.`
-                  : "Everything here is CD resolution or better."
-              }`}
-        </p>
-
-        <div className="mt-7 flex flex-wrap items-center gap-2.5">
+    <div className={cn(GUTTER, "space-y-9 pt-7 pb-12")}>
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-[26px] leading-none font-semibold tracking-[-0.03em] text-white">
+            Home
+          </h1>
+          <p className="mt-1.5 text-[12.5px] text-white/40">
+            {empty
+              ? "Point Prism at a folder and it will index tags, artwork and CUE sheets."
+              : `${formatCount(stats.trackCount)} tracks · ${formatCount(stats.albumCount)} albums · ${formatCount(stats.artistCount)} artists · ${formatLibraryDuration(stats.totalDurationMs)}`}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {queueLength > 0 ? (
+            <Button
+              variant="ghost"
+              icon={ArrowRight}
+              onClick={() => {
+                setRoute("now-playing");
+              }}
+            >
+              Now playing
+            </Button>
+          ) : null}
           {empty ? (
             <Button
               variant="primary"
@@ -118,114 +165,58 @@ export function HomeView(): JSX.Element {
             >
               Add a music folder
             </Button>
-          ) : (
-            <>
-              <Button
-                variant="primary"
-                icon={Play}
-                onClick={() => {
-                  if (recent[0] !== undefined) {
-                    void playAlbum(recent[0]);
-                  }
-                }}
-                disabled={recent.length === 0}
-              >
-                Play latest addition
-              </Button>
-              <Button
-                variant="secondary"
-                icon={Shuffle}
-                onClick={() => {
-                  if (recent[0] !== undefined) {
-                    void playAlbum(recent[0], true);
-                  }
-                }}
-                disabled={recent.length === 0}
-              >
-                Shuffle it
-              </Button>
-            </>
-          )}
-          <Button
-            variant="ghost"
-            icon={ArrowRight}
-            onClick={() => {
-              setRoute("now-playing");
-            }}
-            disabled={queue.length === 0}
-          >
-            Now playing
-          </Button>
+          ) : null}
         </div>
+      </header>
 
-        {error !== null ? (
-          <p role="alert" className="mt-5 text-[12px] text-critical">
-            {error.message}
+      {failed !== null ? (
+        <p role="alert" className="text-[12px] text-critical">
+          {failed}
+        </p>
+      ) : null}
+
+      {empty ? (
+        <div className="rounded-2xl border border-dashed border-white/[0.09] px-6 py-14 text-center">
+          <Disc3 className="mx-auto h-6 w-6 text-white/20" aria-hidden="true" strokeWidth={1.5} />
+          <p className="mt-3 text-[13px] font-medium text-white/55">Nothing indexed yet</p>
+          <p className="mx-auto mt-1 max-w-md text-[11.5px] leading-relaxed text-white/30">
+            {roots.length === 0
+              ? "No folders are configured. Settings → Library is where a root is added and a scan is started."
+              : "The roots are configured but the catalogue is empty. Run a scan from Settings → Library."}
           </p>
-        ) : null}
-      </motion.section>
-
-      {/* --------------------------------------------------------- Counters -- */}
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat
-          icon={Library}
-          label="Tracks"
-          value={formatCount(stats.trackCount)}
-          detail={`${formatCount(stats.cueTrackCount)} from CUE sheets`}
-        />
-        <Stat
-          icon={HardDrive}
-          label="Library size"
-          value={formatLibraryDuration(stats.totalDurationMs)}
-          detail={`${String(roots.length)} folder${roots.length === 1 ? "" : "s"} indexed`}
-        />
-        <Stat
-          icon={Library}
-          label="Albums"
-          value={formatCount(stats.albumCount)}
-          detail={`${formatCount(stats.artistCount)} artists`}
-        />
-        <Stat
-          icon={HardDrive}
-          label="Resolution"
-          value={stats.maxSampleRate === null ? "—" : formatSampleRate(stats.maxSampleRate)}
-          detail={
-            stats.maxBitDepth === null ? "No files yet" : `${String(stats.maxBitDepth)}-bit ceiling`
-          }
-        />
-      </section>
-
-      {/* ----------------------------------------------------------- Recent -- */}
-      <section>
-        <div className="mb-4 flex items-end justify-between">
-          <div>
-            <h2 className="text-[19px] font-semibold tracking-[-0.02em] text-white">
-              Recently added
-            </h2>
-            <p className="mt-0.5 text-[12px] text-white/35">
-              The last albums the scanner committed to the catalogue.
-            </p>
-          </div>
-          <span className="tabular text-[11px] text-white/25">
-            {currentIndex + 1 > queue.length || queue.length === 0
-              ? ""
-              : `${String(queue.length)} in queue`}
-          </span>
         </div>
+      ) : null}
 
-        {recent.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-white/[0.09] px-6 py-10 text-center">
-            <p className="text-[13px] text-white/45">
-              {empty
-                ? "No albums yet — add a folder in Settings and run a scan."
-                : "The catalogue has no albums. Run a scan to populate it."}
-            </p>
-          </div>
-        ) : (
-          <div className="no-scrollbar -mx-1 flex gap-5 overflow-x-auto px-1 pt-1 pb-3">
-            {recent.map((album) => (
+      {visible.map((rail, index) => (
+        <motion.div
+          key={rail.key}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{
+            duration: 0.32,
+            delay: Math.min(index * 0.03, 0.15),
+            ease: [0.22, 1, 0.36, 1],
+          }}
+        >
+          <Rail
+            title={rail.title}
+            caption={rail.caption}
+            action={
+              <button
+                type="button"
+                onClick={() => {
+                  setRoute("library");
+                }}
+                className="hidden items-center gap-1 text-[11px] text-white/30 transition-colors hover:text-white/70 sm:flex"
+              >
+                See all
+                <ArrowRight className="h-3 w-3" aria-hidden="true" />
+              </button>
+            }
+          >
+            {rails?.[rail.key].map((album) => (
               <AlbumCard
-                key={album.id}
+                key={`${rail.key}-${album.id}`}
                 album={album}
                 busy={busyAlbum === album.id}
                 onPlay={(target) => {
@@ -233,61 +224,36 @@ export function HomeView(): JSX.Element {
                 }}
               />
             ))}
-          </div>
-        )}
-      </section>
+          </Rail>
+        </motion.div>
+      ))}
+
+      {showStats && !empty ? (
+        <section className="grid grid-cols-2 gap-3 border-t border-white/[0.06] pt-6 lg:grid-cols-4">
+          <Fact label="Tracks" value={formatCount(stats.trackCount)} />
+          <Fact label="Albums" value={formatCount(stats.albumCount)} />
+          <Fact label="Listening time" value={formatLibraryDuration(stats.totalDurationMs)} />
+          <Fact
+            label="Resolution ceiling"
+            value={
+              stats.maxBitDepth === null
+                ? "—"
+                : `${String(stats.maxBitDepth)}-bit · ${formatCount(stats.maxSampleRate ?? 0)} Hz`
+            }
+          />
+        </section>
+      ) : null}
     </div>
   );
 }
 
-/** One editorial counter tile. */
-function Stat({
-  icon: Icon,
-  label,
-  value,
-  detail,
-}: {
-  icon: typeof Library;
-  label: string;
-  value: string;
-  detail: string;
-}): JSX.Element {
+function Fact({ label, value }: { label: string; value: string }): JSX.Element {
   return (
-    <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
-      <div className="flex items-center gap-2 text-white/30">
-        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-        <span className="text-[10px] font-semibold tracking-[0.16em] uppercase">{label}</span>
-      </div>
-      <p className="mt-2.5 text-[24px] leading-none font-semibold tracking-[-0.03em] text-white">
-        {value}
+    <div>
+      <p className="text-[9.5px] font-semibold tracking-[0.16em] text-white/25 uppercase">
+        {label}
       </p>
-      <p className="mt-1.5 truncate text-[10.5px] text-white/30">{detail}</p>
+      <p className="tabular mt-1 text-[15px] font-medium tracking-tight text-white/80">{value}</p>
     </div>
   );
 }
-
-/**
- * Deterministic shuffle.
- *
- * `Math.random` in a render path is a bug waiting to happen (and eslint rightly
- * flags it); a seeded Fisher–Yates over the track list gives a shuffle that is
- * reproducible for the same album, which also makes the behaviour testable.
- */
-function shuffleDeterministic<T>(items: T[]): T[] {
-  const copy = [...items];
-  let seed = copy.length * 2_654_435_761;
-  for (let index = copy.length - 1; index > 0; index -= 1) {
-    seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
-    const swap = seed % (index + 1);
-    const a = copy[index];
-    const b = copy[swap];
-    if (a !== undefined && b !== undefined) {
-      copy[index] = b;
-      copy[swap] = a;
-    }
-  }
-  return copy;
-}
-
-/** Re-export for the router. */
-export const HOME_TITLE = "Home";

@@ -12,7 +12,7 @@ use lofty::config::WriteOptions;
 use lofty::prelude::{Accessor, ItemKey, TagExt};
 use lofty::tag::{Tag, TagType};
 use prism_lib::db::catalog::CatalogWriter;
-use prism_lib::db::search::{self, TrackQuery, TrackSort};
+use prism_lib::db::search::{self, AlbumSort, TrackQuery, TrackSort};
 use prism_lib::db::{connect, health};
 use prism_lib::metadata::scanner::{ScanConfig, ScanTrigger, Scanner};
 use sqlx::{Row, SqlitePool};
@@ -189,6 +189,48 @@ async fn scalar(pool: &SqlitePool, sql: &str) -> i64 {
 // ---------------------------------------------------------------------------
 // Scanner
 // ---------------------------------------------------------------------------
+
+/// The historical failure stopped after two 512-file parse chunks: progress sat
+/// at exactly 1024 tracks forever because the third chunk waited on one hung
+/// reader with no budget. This fixture is the smallest one that crosses that
+/// boundary, and it fails if chunked parsing ever regains a hard ceiling.
+#[tokio::test]
+async fn scan_completes_past_the_old_1024_file_ceiling() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("library");
+    let total: u32 = 1_100;
+    for index in 0..total {
+        let path = root.join(format!("Ceiling/Transmission/track-{index:04}.wav"));
+        write_wav(&path, 0.02, 8_000, 1, 16);
+        tag_wav(
+            &path,
+            &Fixture {
+                artist: "Ceiling",
+                album: "Transmission",
+                track: (index % 12) + 1,
+                total: 12,
+                title: &format!("Track {index:04}"),
+                genre: "Test",
+                year: 2026,
+            },
+        );
+    }
+    let pool = pool_for(temp.path()).await;
+
+    let outcome = scan(&pool, &root, ScanConfig::default()).await;
+
+    assert_eq!(outcome.status, "completed");
+    assert_eq!(outcome.files_seen, u64::from(total));
+    assert_eq!(
+        outcome.files_indexed,
+        u64::from(total),
+        "every file past the third chunk is indexed"
+    );
+    assert_eq!(
+        scalar(&pool, "SELECT COUNT(*) FROM tracks WHERE missing = 0").await,
+        i64::from(total)
+    );
+}
 
 #[tokio::test]
 async fn scan_indexes_files_albums_artists_cue_tracks_and_errors() {
@@ -569,7 +611,7 @@ async fn browse_filters_and_facets_cover_the_library() {
     scan(&pool, &root, ScanConfig::default()).await;
 
     // Album grid.
-    let albums = search::albums(&pool, None, None, TrackSort::Title, 50, 0)
+    let albums = search::albums(&pool, None, None, search::AlbumSort::Title, 50, 0)
         .await
         .expect("albums");
     assert_eq!(albums.total, 4);
@@ -666,6 +708,151 @@ async fn browse_filters_and_facets_cover_the_library() {
     assert_eq!(shown.total, hidden.total + 1);
 
     pool.close().await;
+}
+
+#[tokio::test]
+async fn the_album_grid_carries_the_artist_identifier() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("library");
+    build_library(&root);
+    let pool = pool_for(temp.path()).await;
+    scan(&pool, &root, ScanConfig::default()).await;
+
+    let page = search::albums(&pool, None, None, AlbumSort::Artist, 50, 0)
+        .await
+        .expect("albums");
+    assert_eq!(page.total, 4);
+
+    // Migration 0004 exists so a tile can link by identifier. A name is not an
+    // identifier: two artists may share one. The untagged fixture has no album
+    // artist at all and is therefore the one album without a link — every other
+    // album must carry an id that resolves.
+    let mut linked = 0;
+    for album in &page.items {
+        let Some(artist_id) = album.artist_id.clone() else {
+            assert!(
+                album.album_artist.is_empty() || album.album_artist == "Loose",
+                "only the folder-derived album may lack an artist id, not {}",
+                album.title
+            );
+            continue;
+        };
+        linked += 1;
+        let known: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM artists WHERE id = ?1")
+            .bind(&artist_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count artists");
+        assert_eq!(known, 1, "{} points at a real artist", album.title);
+
+        let filtered = search::albums(&pool, None, Some(&artist_id), AlbumSort::Artist, 50, 0)
+            .await
+            .expect("filtered");
+        assert!(
+            filtered
+                .items
+                .iter()
+                .any(|candidate| candidate.id == album.id),
+            "filtering by the artist id keeps {} in the grid",
+            album.title
+        );
+    }
+    assert!(linked >= 3, "the fixture links every tagged album");
+}
+
+#[tokio::test]
+async fn removing_a_root_purges_its_tracks_albums_and_artists() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let keep = temp.path().join("keep");
+    let drop = temp.path().join("drop");
+
+    let kept = keep.join("Kept Artist/A Record");
+    write_wav(&kept.join("01 Kept.wav"), 0.05, 8_000, 1, 16);
+    tag_wav(
+        &kept.join("01 Kept.wav"),
+        &Fixture {
+            artist: "Kept Artist",
+            album: "A Record",
+            track: 1,
+            total: 1,
+            title: "Kept",
+            genre: "Test",
+            year: 2026,
+        },
+    );
+
+    // Same album *title* as the kept record, different artist: the purge works
+    // on paths, so a title collision must not cost the surviving album a row.
+    let dropped = drop.join("Dropped Artist/A Record");
+    for track in 1..=2u32 {
+        let name = format!("{track:02} Gone.wav");
+        write_wav(&dropped.join(&name), 0.05, 8_000, 1, 16);
+        tag_wav(
+            &dropped.join(&name),
+            &Fixture {
+                artist: "Dropped Artist",
+                album: "A Record",
+                track,
+                total: 2,
+                title: &format!("Gone {track}"),
+                genre: "Test",
+                year: 2026,
+            },
+        );
+    }
+
+    let pool = pool_for(temp.path()).await;
+    let config = ScanConfig {
+        roots: vec![keep.clone(), drop.clone()],
+        ..ScanConfig::default()
+    };
+    scan(&pool, &keep, config).await;
+    assert_eq!(scalar(&pool, "SELECT COUNT(*) FROM tracks").await, 3);
+    assert_eq!(scalar(&pool, "SELECT COUNT(*) FROM albums").await, 2);
+
+    let writer = CatalogWriter::new(pool.clone());
+    let outcome = writer
+        .purge_root(&drop.to_string_lossy())
+        .await
+        .expect("purge");
+    assert_eq!(outcome.tracks, 2, "both dropped tracks are deleted");
+    assert_eq!(outcome.albums, 1, "only the orphaned record goes");
+
+    assert_eq!(scalar(&pool, "SELECT COUNT(*) FROM tracks").await, 1);
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT COUNT(*) FROM tracks WHERE path LIKE '%keep%'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(scalar(&pool, "SELECT COUNT(*) FROM albums").await, 1);
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT COUNT(*) FROM albums WHERE album_artist_name = 'Dropped Artist'"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT COUNT(*) FROM artists WHERE name = 'Dropped Artist'"
+        )
+        .await,
+        0,
+        "the artist row follows its last track"
+    );
+    assert_eq!(
+        scalar(
+            &pool,
+            "SELECT COUNT(*) FROM artists WHERE name = 'Kept Artist'"
+        )
+        .await,
+        1
+    );
 }
 
 #[tokio::test]

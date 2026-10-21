@@ -45,6 +45,14 @@ degrades from exclusive to mixed output on its own, and a configuration error ne
 without sound. Selecting an endpoint pins its driver stack: an `alsa-hw:` id never silently opens
 PipeWire.
 
+The application itself requests `Shared`. Coexisting with every other sound source is a product
+requirement, not a preference, so there is no engine-mode switch in the interface; the exclusive
+backends remain compiled and reachable for diagnostics and future endpoints. In shared mode the
+stream is opened in the endpoint's **live** configuration — `IAudioClient`/cpal are asked at open
+time, never assumed — and the DSP chain resamples the file into it. Asking for the file's own format
+instead is what made a 44.1 kHz file play through Windows' 24/192 mixer and sound broken while the
+badge blamed the endpoint.
+
 ### Negotiation and commit
 
 Opening a device is split in two so the DAC never starts on an empty buffer:

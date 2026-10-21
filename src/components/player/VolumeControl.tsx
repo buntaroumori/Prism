@@ -2,7 +2,6 @@ import type { JSX } from "react";
 import { Volume, Volume1, Volume2, VolumeX } from "lucide-react";
 
 import { Slider } from "@/components/ui/Slider";
-import { formatDecibels } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 interface VolumeControlProps {
@@ -19,12 +18,14 @@ const FLOOR_DB = -60;
 const TOP_DB = 0;
 
 /**
- * Volume in decibels, not in a fake percentage.
+ * Volume and mute.
  *
- * An audiophile player has to be able to say "unity gain" out loud: the slider is
- * labelled in dB, the notch snaps to exactly 0 dB, and only at 0 dB (unmuted, no
- * DSP) can the engine claim a bit-perfect path. A linear 0–100 % slider would
- * make that promise impossible to see.
+ * The engine still works in decibels — that is the only unit in which "unity
+ * gain" is a statement rather than an approximation — but the *interface* shows
+ * a percentage: a listener adjusts loudness, and a number between 0 and 100 is
+ * the shape of that gesture. The dB value stays in the tooltip for anyone who
+ * needs it, and the icon changes with the level so the bar answers "how loud"
+ * at a glance.
  */
 export function VolumeControl({
   volumeDb,
@@ -34,15 +35,18 @@ export function VolumeControl({
   onToggleMute,
 }: VolumeControlProps): JSX.Element {
   const value = muted ? FLOOR_DB : Math.min(TOP_DB, Math.max(FLOOR_DB, volumeDb));
-  const Icon = muted ? VolumeX : volumeDb >= -3 ? Volume2 : volumeDb >= -18 ? Volume1 : Volume;
+  const percent = Math.round(((value - FLOOR_DB) / (TOP_DB - FLOOR_DB)) * 100);
+  const Icon =
+    muted || percent === 0 ? VolumeX : percent > 75 ? Volume2 : percent > 35 ? Volume1 : Volume;
 
   return (
-    <div className="no-drag flex w-[168px] items-center gap-2.5">
+    <div className="no-drag flex w-[150px] shrink-0 items-center gap-2">
       <button
         type="button"
         onClick={onToggleMute}
         aria-label={muted ? "Unmute" : "Mute"}
         aria-pressed={muted}
+        title={muted ? "Unmute" : `Mute · ${String(Math.round(value))} dB`}
         className={cn(
           "grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/55 transition-colors",
           "hover:bg-white/[0.07] hover:text-white",
@@ -59,19 +63,14 @@ export function VolumeControl({
         step={0.5}
         label="Volume"
         variant="volume"
-        onChange={onPreview}
+        onChange={(next) => {
+          if (muted) {
+            onToggleMute();
+          }
+          onPreview(next);
+        }}
         onCommit={onCommit}
       />
-
-      <span
-        className={cn(
-          "tabular w-14 shrink-0 text-right text-[10.5px]",
-          value === TOP_DB && !muted ? "accent-soft-text" : "text-white/40",
-        )}
-        title={value === TOP_DB && !muted ? "Unity gain — the bit-perfect requirement" : undefined}
-      >
-        {muted ? "Muted" : formatDecibels(value)}
-      </span>
     </div>
   );
 }

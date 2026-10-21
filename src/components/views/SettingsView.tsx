@@ -15,12 +15,14 @@ import { PluginsSection } from "@/components/settings/PluginsSection";
 import { Button } from "@/components/ui/Button";
 import { Segmented } from "@/components/ui/Segmented";
 import { StatusPill } from "@/components/ui/StatusPill";
+import { formatAudioFormat } from "@/lib/audio";
 import { formatCount, formatLibraryDuration } from "@/lib/format";
 import { discordApi, libraryApi } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { usePlaybackStore } from "@/stores/playbackStore";
 import { useOutputStore, BUFFER_CHOICES } from "@/stores/outputStore";
-import { useUiStore } from "@/stores/uiStore";
+import { COVER_SIZE_MAX, COVER_SIZE_MIN, useUiStore } from "@/stores/uiStore";
 import type { DiscordStatus, LibraryRoot } from "@/types/ipc";
 
 /**
@@ -56,54 +58,41 @@ export function SettingsView(): JSX.Element {
 // ---------------------------------------------------------------------------
 
 function OutputSection(): JSX.Element {
-  const mode = useOutputStore((state) => state.mode);
   const bufferFrames = useOutputStore((state) => state.bufferFrames);
+  const deviceId = useOutputStore((state) => state.deviceId);
   const devices = useOutputStore((state) => state.devices);
-  const setMode = useOutputStore((state) => state.setMode);
+  const deviceFormat = useOutputStore((state) => state.deviceFormat);
   const setDevice = useOutputStore((state) => state.setDevice);
   const setBufferFrames = useOutputStore((state) => state.setBufferFrames);
   const loadDevices = useOutputStore((state) => state.loadDevices);
+  const status = usePlaybackStore((state) => state.status);
 
   useEffect(() => {
     void loadDevices();
   }, [loadDevices]);
 
+  const live = deviceFormat ?? status?.deviceFormat ?? null;
+  const latencyMs = live === null ? null : (bufferFrames / live.sampleRate) * 1_000;
+
   return (
     <Section
       title="Output"
-      description="How the engine reaches your DAC. Exclusive modes bypass the operating-system mixer and enable bit-perfect playback."
+      description="Prism plays through the system mixer, so it coexists with every other application and the endpoint never disappears from under one of them. The engine reads the device's live configuration at open time and matches it exactly; the rate shown below is the one the driver reports, not an assumption."
     >
       <Row
-        label="Engine mode"
-        hint="Exclusive refuses to share the device; Auto falls back when it must."
+        label="Output device"
+        hint="Physical playback endpoints only. Loopback and capture nodes are filtered out."
       >
-        <Segmented
-          label="Engine mode"
-          layoutId="settings-output-mode"
-          value={mode}
-          onChange={(next) => {
-            void setMode(next);
-          }}
-          options={[
-            { value: "auto", label: "Auto" },
-            { value: "exclusive", label: "Exclusive" },
-            { value: "shared", label: "Shared" },
-            { value: "asio", label: "ASIO" },
-          ]}
-        />
-      </Row>
-
-      <Row label="Device" hint="Endpoints reachable through the selected mode.">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <select
             aria-label="Output device"
+            value={deviceId ?? ""}
             onChange={(event) => {
               void setDevice(event.target.value.length === 0 ? null : event.target.value);
             }}
-            defaultValue=""
-            className="h-8 max-w-[320px] rounded-lg border border-white/10 bg-oled-850 px-2 text-[12px] text-white/80"
+            className="h-8 max-w-[320px] min-w-0 truncate rounded-lg border border-white/10 bg-oled-850 px-2 text-[12px] text-white/80"
           >
-            <option value="">Follow system default</option>
+            <option value="">System default</option>
             {devices.map((device) => (
               <option key={device.id} value={device.id}>
                 {device.name}
@@ -122,7 +111,21 @@ function OutputSection(): JSX.Element {
         </div>
       </Row>
 
-      <Row label="Buffer" hint="Frames per device period. Lower is tighter; higher survives load.">
+      <Row
+        label="Device configuration"
+        hint="Queried from the driver at runtime. In shared mode the operating system owns this format; the engine converts to it."
+      >
+        <div className="flex items-center gap-2">
+          <span className="tabular rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[11.5px] text-white/70">
+            {live === null ? "Reading…" : formatAudioFormat(live)}
+          </span>
+          <span className="text-[10.5px] text-white/25">
+            {live === null ? "" : `${String(live.channels)} ch`}
+          </span>
+        </div>
+      </Row>
+
+      <Row label="Buffer" hint={bufferHint(bufferFrames, latencyMs)}>
         <Segmented
           label="Buffer size"
           layoutId="settings-buffer"
@@ -136,8 +139,28 @@ function OutputSection(): JSX.Element {
           }))}
         />
       </Row>
+
+      <p className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-3.5 py-2.5 text-[11px] leading-relaxed text-white/35">
+        {bufferFrames <= 128
+          ? "At this size the engine keeps a handful of milliseconds in flight: seeking feels immediate, but a busy machine or a USB DAC with a loose clock will produce the occasional click. Choose it when the machine is idle and the endpoint is solid."
+          : bufferFrames <= 512
+            ? "The balanced setting: low enough that transport buttons feel instant, deep enough to absorb a background compile or a browser tab waking up. This is the right default for most libraries."
+            : "A deep buffer trades latency for resilience: nothing can starve the device, so dropouts disappear on slow disks, network shares and virtual machines. Seeking and pausing will feel a fraction of a second behind the click."}
+      </p>
     </Section>
   );
+}
+
+/** One sentence that describes what the chosen buffer actually does. */
+function bufferHint(frames: number, latencyMs: number | null): string {
+  const ms = latencyMs === null ? null : `${latencyMs.toFixed(1)} ms`;
+  const shape =
+    frames <= 128
+      ? "Lowest latency, least tolerance for load."
+      : frames <= 512
+        ? "Balanced latency and resilience."
+        : "Maximum resilience, higher latency.";
+  return ms === null ? shape : `${shape} One period is ${ms} at the device rate.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,11 +170,25 @@ function OutputSection(): JSX.Element {
 function LibrarySection(): JSX.Element {
   const roots = useLibraryStore((state) => state.roots);
   const addRoot = useLibraryStore((state) => state.addRoot);
-  const removeRoot = useLibraryStore((state) => state.removeRoot);
+  const refreshRoots = useLibraryStore((state) => state.loadRoots);
   const setRootEnabled = useLibraryStore((state) => state.setRootEnabled);
   const error = useLibraryStore((state) => state.error);
   const stats = useLibraryStore((state) => state.stats);
+  const refreshStats = useLibraryStore((state) => state.refreshStats);
   const [picking, setPicking] = useState(false);
+  const [removal, setRemoval] = useState<string | null>(null);
+
+  const purge = async (id: string, name: string): Promise<void> => {
+    try {
+      const outcome = await libraryApi.removeRoot(id);
+      setRemoval(
+        `${name}: ${formatCount(outcome.tracksRemoved)} tracks, ${formatCount(outcome.albumsRemoved)} albums and ${formatCount(outcome.artistsRemoved)} artists removed from the catalogue`,
+      );
+      await Promise.all([refreshRoots(), refreshStats()]);
+    } catch (cause) {
+      setRemoval(cause instanceof Error ? cause.message : "The folder could not be removed");
+    }
+  };
 
   const pickFolder = async (): Promise<void> => {
     setPicking(true);
@@ -172,7 +209,7 @@ function LibrarySection(): JSX.Element {
   return (
     <Section
       title="Library folders"
-      description="Prism indexes these directories recursively. A folder that disappears is reported, never silently emptied."
+      description="Prism indexes these directories recursively. Removing a folder also removes the tracks it contributed from the catalogue — files on disk are untouched, but the library stops listing what is no longer indexed."
     >
       <div className="space-y-2">
         {roots.length === 0 ? (
@@ -188,7 +225,7 @@ function LibrarySection(): JSX.Element {
                 void setRootEnabled(root.id, enabled);
               }}
               onRemove={() => {
-                void removeRoot(root.id);
+                void purge(root.id, root.name.length > 0 ? root.name : root.path);
               }}
             />
           ))
@@ -212,6 +249,15 @@ function LibrarySection(): JSX.Element {
             </span>
           ) : null}
         </div>
+
+        {removal !== null ? (
+          <p
+            role="status"
+            className="rounded-xl bg-white/[0.03] px-3 py-2 text-[11.5px] text-white/50"
+          >
+            {removal}
+          </p>
+        ) : null}
 
         {error !== null ? (
           <p
@@ -569,23 +615,80 @@ function PresenceSection(): JSX.Element {
 // ---------------------------------------------------------------------------
 
 function AppearanceSection(): JSX.Element {
+  const accentSource = useUiStore((state) => state.accentSource);
+  const accentColor = useUiStore((state) => state.accentColor);
+  const glassOpacity = useUiStore((state) => state.glassOpacity);
+  const tintStrength = useUiStore((state) => state.tintStrength);
+  const corners = useUiStore((state) => state.corners);
+  const density = useUiStore((state) => state.density);
+  const coverSize = useUiStore((state) => state.coverSize);
   const intensity = useUiStore((state) => state.ambientIntensity);
-  const setIntensity = useUiStore((state) => state.setAmbientIntensity);
+  const showRailArrows = useUiStore((state) => state.showRailArrows);
+  const showHomeStats = useUiStore((state) => state.showHomeStats);
+  const showSpectrum = useUiStore((state) => state.showSpectrum);
+  const setAppearance = useUiStore((state) => state.setAppearance);
+  const reset = useUiStore((state) => state.resetAppearance);
 
   return (
     <Section
       title="Appearance"
-      description="The ambient canvas is tinted from the current artwork. It animates on the compositor only, so even the full setting costs no main-thread time."
+      description="Every control here writes a CSS custom property on the shell root, so the window restyles in one frame and a slider move costs no React render. Preferences persist per machine."
     >
-      <Row
-        label="Ambient intensity"
-        hint="Turn it off on battery or on an OLED panel you want truly black."
-      >
+      <Row label="Accent" hint="Follow the playing artwork, or pin a colour of your own.">
+        <div className="flex items-center gap-2">
+          <Segmented
+            label="Accent source"
+            layoutId="settings-accent-source"
+            value={accentSource}
+            onChange={(next) => {
+              setAppearance({ accentSource: next === "fixed" ? "fixed" : "artwork" });
+            }}
+            options={[
+              { value: "artwork", label: "Artwork" },
+              { value: "fixed", label: "Fixed" },
+            ]}
+          />
+          <input
+            type="color"
+            aria-label="Accent colour"
+            value={accentColor}
+            disabled={accentSource !== "fixed"}
+            onChange={(event) => {
+              setAppearance({ accentColor: event.target.value });
+            }}
+            className="h-8 w-9 cursor-pointer rounded-lg border border-white/10 bg-transparent disabled:opacity-30"
+          />
+        </div>
+      </Row>
+
+      <Row label="Surface glass" hint="Opacity of every frosted panel over the black.">
+        <Percent
+          label="Surface glass"
+          value={glassOpacity}
+          onChange={(value) => {
+            setAppearance({ glassOpacity: value });
+          }}
+        />
+      </Row>
+
+      <Row label="Colour bleed" hint="How far the cover palette tints the surfaces behind it.">
+        <Percent
+          label="Colour bleed"
+          value={tintStrength}
+          onChange={(value) => {
+            setAppearance({ tintStrength: value });
+          }}
+        />
+      </Row>
+
+      <Row label="Ambient canvas" hint="The slow gradient behind the content.">
         <Segmented
           label="Ambient intensity"
           layoutId="settings-ambient"
           value={intensity}
-          onChange={setIntensity}
+          onChange={(next) => {
+            setAppearance({ ambientIntensity: next });
+          }}
           options={[
             { value: "off", label: "Off" },
             { value: "subtle", label: "Subtle" },
@@ -593,7 +696,157 @@ function AppearanceSection(): JSX.Element {
           ]}
         />
       </Row>
+
+      <Row label="Corners" hint="Radius of covers, cards and panels.">
+        <Segmented
+          label="Corner style"
+          layoutId="settings-corners"
+          value={corners}
+          onChange={(next) => {
+            setAppearance({ corners: next });
+          }}
+          options={[
+            { value: "sharp", label: "Sharp" },
+            { value: "soft", label: "Soft" },
+            { value: "round", label: "Round" },
+          ]}
+        />
+      </Row>
+
+      <Row label="Density" hint="Vertical rhythm of lists and grids.">
+        <Segmented
+          label="Density"
+          layoutId="settings-density"
+          value={density}
+          onChange={(next) => {
+            setAppearance({ density: next });
+          }}
+          options={[
+            { value: "comfortable", label: "Comfortable" },
+            { value: "compact", label: "Compact" },
+          ]}
+        />
+      </Row>
+
+      <Row
+        label="Cover size"
+        hint="Edge length of the library mosaic. The grid reflows to as many columns as fit."
+      >
+        <div className="flex items-center gap-2.5">
+          <input
+            type="range"
+            min={COVER_SIZE_MIN}
+            max={COVER_SIZE_MAX}
+            step={4}
+            value={coverSize}
+            aria-label="Cover size"
+            onChange={(event) => {
+              setAppearance({ coverSize: Number(event.target.value) });
+            }}
+            className="h-1 w-40 cursor-pointer appearance-none rounded-full bg-white/15 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+          />
+          <span className="tabular w-9 text-right text-[11px] text-white/40">{coverSize}</span>
+        </div>
+      </Row>
+
+      <Row label="Rail arrows" hint="Show the corner buttons on every Home shelf.">
+        <Toggle
+          label="Rail arrows"
+          checked={showRailArrows}
+          onChange={(checked) => {
+            setAppearance({ showRailArrows: checked });
+          }}
+        />
+      </Row>
+
+      <Row label="Home counters" hint="The listening summary under the shelves.">
+        <Toggle
+          label="Home counters"
+          checked={showHomeStats}
+          onChange={(checked) => {
+            setAppearance({ showHomeStats: checked });
+          }}
+        />
+      </Row>
+
+      <Row label="Spectrum" hint="The analyser in Now Playing. Off saves the FFT work entirely.">
+        <Toggle
+          label="Spectrum"
+          checked={showSpectrum}
+          onChange={(checked) => {
+            setAppearance({ showSpectrum: checked });
+          }}
+        />
+      </Row>
+
+      <div className="pt-1">
+        <Button variant="ghost" onClick={reset}>
+          Reset appearance
+        </Button>
+      </div>
     </Section>
+  );
+}
+
+function Percent({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}): JSX.Element {
+  return (
+    <div className="flex items-center gap-2.5">
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={1}
+        value={value}
+        aria-label={label}
+        onChange={(event) => {
+          onChange(Number(event.target.value));
+        }}
+        className="h-1 w-40 cursor-pointer appearance-none rounded-full bg-white/15 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+      />
+      <span className="tabular w-9 text-right text-[11px] text-white/40">{value}</span>
+    </div>
+  );
+}
+
+function Toggle({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => {
+        onChange(!checked);
+      }}
+      className={cn(
+        "relative h-5 w-9 rounded-full border transition-colors",
+        checked ? "border-accent/50 bg-accent/35" : "border-white/15 bg-white/[0.06]",
+      )}
+    >
+      <span
+        aria-hidden="true"
+        className={cn(
+          "absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-white transition-[left]",
+          checked ? "left-[18px]" : "left-[3px]",
+        )}
+      />
+    </button>
   );
 }
 

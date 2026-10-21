@@ -9,6 +9,8 @@ import { TopBar } from "@/components/TopBar";
 import { HomeView } from "@/components/views/HomeView";
 import { LibraryView } from "@/components/views/LibraryView";
 import { NowPlayingView } from "@/components/views/NowPlayingView";
+import { AlbumView } from "@/components/views/AlbumView";
+import { ArtistView } from "@/components/views/ArtistView";
 import { SettingsView } from "@/components/views/SettingsView";
 import { SystemView } from "@/components/views/SystemView";
 import { useAlbumCoverKey } from "@/hooks/useAlbumCoverKey";
@@ -44,21 +46,34 @@ export function AppShell(): JSX.Element {
   }, [loadOverview]);
 
   const route = useUiStore((state) => state.route);
+  const params = useUiStore((state) => state.params);
   const intensity = useUiStore((state) => state.ambientIntensity);
+  const accentSource = useUiStore((state) => state.accentSource);
+  const accentColor = useUiStore((state) => state.accentColor);
+  const glassOpacity = useUiStore((state) => state.glassOpacity);
+  const corners = useUiStore((state) => state.corners);
+  const density = useUiStore((state) => state.density);
 
   // The palette follows the *album* currently loaded, so a queue of tracks from
   // one record does not re-tint the window on every skip.
   const trackId = usePlaybackStore((state) => state.status?.track?.trackId ?? null);
   const album = usePlaybackStore((state) => state.status?.track?.album ?? null);
   const coverKey = useAlbumCoverKey(album, trackId);
-  const palette = useArtworkPalette(coverKey);
-  const tokens = paletteTokens(palette);
+  const palette = useArtworkPalette(accentSource === "artwork" ? coverKey : null);
+  const tokens = paletteTokens(palette, {
+    accentSource,
+    accentColor,
+    glassOpacity,
+    corners,
+    density,
+  });
 
   return (
     <div
       className="relative flex h-full overflow-hidden bg-oled-950 text-white"
       style={tokens}
       data-route={route}
+      data-density={density}
     >
       <AmbientBackground palette={palette} intensity={intensity} />
 
@@ -128,7 +143,7 @@ export function AppShell(): JSX.Element {
             </div>
           ) : null}
 
-          <PageTransition route={route} />
+          <PageTransition route={route} params={params} />
         </main>
 
         <PlayerBar />
@@ -144,13 +159,20 @@ export function AppShell(): JSX.Element {
  * change of place, short enough that it never delays an interaction. Reduced
  * motion collapses it to a plain swap.
  */
-function PageTransition({ route }: { route: ShellRoute }): JSX.Element {
+function PageTransition({
+  route,
+  params,
+}: {
+  route: ShellRoute;
+  params: { albumId: string | null; artistId: string | null };
+}): JSX.Element {
   const reduce = useReducedMotion();
+  const key = `${route}:${params.albumId ?? ""}:${params.artistId ?? ""}`;
 
   return (
     <AnimatePresence mode="wait" initial={false}>
       <motion.div
-        key={route}
+        key={key}
         initial={reduce === true ? false : { opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         exit={reduce === true ? { opacity: 1, y: 0 } : { opacity: 0, y: -6 }}
@@ -159,6 +181,12 @@ function PageTransition({ route }: { route: ShellRoute }): JSX.Element {
       >
         {route === "home" ? <HomeView /> : null}
         {route === "library" ? <LibraryView /> : null}
+        {route === "album" && params.albumId !== null ? (
+          <AlbumView albumId={params.albumId} />
+        ) : null}
+        {route === "artist" && params.artistId !== null ? (
+          <ArtistView artistId={params.artistId} />
+        ) : null}
         {route === "now-playing" ? <NowPlayingView /> : null}
         {route === "settings" ? <SettingsView /> : null}
         {route === "system" ? <SystemView /> : null}
@@ -175,16 +203,65 @@ function PageTransition({ route }: { route: ShellRoute }): JSX.Element {
  * writes six strings and lets the compositor do the rest. With no palette yet
  * the browser keeps the neutral tokens declared in `globals.css`.
  */
-function paletteTokens(palette: CoverPalette | null): CSSProperties {
-  if (palette === null) {
-    return {};
+function paletteTokens(
+  palette: CoverPalette | null,
+  appearance: {
+    accentSource: "artwork" | "fixed";
+    accentColor: string;
+    glassOpacity: number;
+    corners: "sharp" | "soft" | "round";
+    density: "comfortable" | "compact";
+  },
+): CSSProperties {
+  const tokens: Record<string, string> = {
+    // Appearance knobs become CSS variables once, at the shell root. Every
+    // surface reads them, so a slider move is one style write, not a repaint
+    // cascade through fifty components.
+    "--prism-glass": (0.012 + (appearance.glassOpacity / 100) * 0.06).toFixed(4),
+    "--prism-radius":
+      appearance.corners === "sharp"
+        ? "0.25rem"
+        : appearance.corners === "round"
+          ? "1.25rem"
+          : "0.75rem",
+    "--prism-row-gap": appearance.density === "compact" ? "0.35rem" : "0.6rem",
+  };
+
+  if (appearance.accentSource === "fixed") {
+    tokens["--prism-accent"] = appearance.accentColor;
+    tokens["--prism-accent-soft"] = hexAlpha(appearance.accentColor, 0.18);
   }
+
+  if (palette === null) {
+    return tokens;
+  }
+
   return {
-    "--prism-accent": palette.accent,
-    "--prism-accent-soft": palette.accentSoft,
-    "--prism-surface": palette.surface,
-    "--prism-background": palette.background,
-    "--prism-highlight": palette.highlight,
-    "--prism-highlight-alt": palette.highlightAlt,
+    ...tokens,
+    ...(appearance.accentSource === "artwork"
+      ? {
+          "--prism-accent": palette.accent,
+          "--prism-accent-soft": palette.accentSoft,
+          "--prism-surface": palette.surface,
+          "--prism-background": palette.background,
+          "--prism-highlight": palette.highlight,
+          "--prism-highlight-alt": palette.highlightAlt,
+        }
+      : {
+          "--prism-surface": palette.surface,
+          "--prism-background": palette.background,
+        }),
   } as CSSProperties;
+}
+
+/** `#rrggbb` → rgba() at the given alpha, for the soft accent token. */
+function hexAlpha(hex: string, alpha: number): string {
+  const value = hex.replace("#", "");
+  if (value.length !== 6) {
+    return hex;
+  }
+  const r = Number.parseInt(value.slice(0, 2), 16);
+  const g = Number.parseInt(value.slice(2, 4), 16);
+  const b = Number.parseInt(value.slice(4, 6), 16);
+  return `rgba(${String(r)}, ${String(g)}, ${String(b)}, ${String(alpha)})`;
 }

@@ -207,22 +207,59 @@ impl DspChain {
             return Ok(Vec::new());
         }
 
+        self.apply_tail(&mut working);
+        Ok(working)
+    }
+
+    /// Push the last of the signal through the chain when the stream ends.
+    ///
+    /// A sinc resampler is a finite impulse response filter with a delay line:
+    /// the final `latency_frames` of output are still inside it when the last
+    /// input frame arrives. Dropping the chain there truncates every track by
+    /// that latency — a click into the next track on a gapless album, and up to
+    /// ~10 ms missing at the end of a record. Feeding the resampler exactly the
+    /// silence it is still waiting for emits the tail instead.
+    pub fn flush(&mut self) -> Result<Vec<f32>, AudioError> {
+        let Some(resampler) = &mut self.resampler else {
+            return Ok(Vec::new());
+        };
+        let latency = usize::try_from(self.latency_frames).unwrap_or(0);
+        if latency == 0 {
+            return Ok(Vec::new());
+        }
+        let ratio = resampler.ratio();
+        if !(ratio.is_finite() && ratio > 0.0) {
+            return Ok(Vec::new());
+        }
+        // Input frames that produce `latency` output frames, rounded up so the
+        // tail is never cut short.
+        let input_frames = ((latency as f64) / ratio).ceil() as usize;
+        let silence = vec![0.0f32; input_frames.max(1) * self.channels];
+        resampler.push(&silence)?;
+        let mut tail = resampler.drain(latency);
+        if tail.is_empty() {
+            return Ok(tail);
+        }
+        self.apply_tail(&mut tail);
+        Ok(tail)
+    }
+
+    /// Everything after the resampler: gain, EQ, crossfeed, master trim.
+    fn apply_tail(&mut self, working: &mut Vec<f32>) {
         if let Some(replaygain) = &mut self.replaygain {
-            replaygain.process(&mut working, self.channels);
+            replaygain.process(working, self.channels);
         }
         if let Some(eq) = &mut self.eq {
-            eq.process(&mut working, self.channels);
+            eq.process(working, self.channels);
         }
         if let Some(crossfeed) = &mut self.crossfeed {
-            crossfeed.process(&mut working, self.channels);
+            crossfeed.process(working, self.channels);
         }
         if (self.master_gain - 1.0).abs() > f32::EPSILON {
-            for sample in &mut working {
+            for sample in working.iter_mut() {
                 *sample *= self.master_gain;
             }
         }
-
-        Ok(working)
     }
 
     /// Resampler latency expressed in output frames.

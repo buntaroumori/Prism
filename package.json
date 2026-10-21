@@ -1,7 +1,7 @@
 {
   "name": "prism",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Prism \u2014 an audiophile-grade local music player for Windows and Linux",
   "license": "MIT",
   "type": "module",

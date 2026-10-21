@@ -83,6 +83,12 @@ pub struct EngineStatus {
     pub output_format: Option<AudioFormat>,
     pub backend: Option<BackendKind>,
     pub device_name: Option<String>,
+    /// The endpoint's *own* configuration, queried from the driver at open
+    /// time. Distinct from `output_format`, which is the container this engine
+    /// writes: on Windows shared mode they differ by design (the OS mix is
+    /// float32, the panel may say 24-bit) and conflating them is exactly how a
+    /// player ends up reporting a format the DAC never sees.
+    pub device_format: Option<AudioFormat>,
     /// No DSP stage, no volume attenuation and an exact format match.
     pub bit_perfect: bool,
     /// The samples are DSD-over-PCM and must not be touched.
@@ -107,6 +113,7 @@ impl Default for EngineStatus {
             output_format: None,
             backend: None,
             device_name: None,
+            device_format: None,
             bit_perfect: false,
             dop: false,
             volume_db: 0.0,
@@ -136,7 +143,11 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            mode: OutputMode::Auto,
+            // Standard behaviour: share the endpoint with every other
+            // application and let the OS mixer keep its clock. Exclusive mode
+            // stays available through `player_set_output` but is never the
+            // default: taking a device hostage is not a sane first impression.
+            mode: OutputMode::Shared,
             device_id: None,
             buffer_frames: 512,
             dsp: DspSettings::default(),
@@ -322,6 +333,7 @@ impl Engine {
             gain: 0.0,
             last_publish: Instant::now() - Duration::from_secs(1),
             negotiated_exclusive: false,
+            device_format: None,
         };
 
         let worker = std::thread::Builder::new()
@@ -481,6 +493,8 @@ struct Supervisor {
     /// True when the open sink is an exclusive backend, which is what enables
     /// per-track rate renegotiation.
     negotiated_exclusive: bool,
+    /// Endpoint configuration as reported by the driver for the open sink.
+    device_format: Option<AudioFormat>,
 }
 
 impl Supervisor {
@@ -526,8 +540,11 @@ impl Supervisor {
 
             self.publish(false);
 
-            // Sleep until a device callback, a command or (as a watchdog) 250 ms.
-            std::thread::park_timeout(Duration::from_millis(250));
+            // Sleep until a device callback, a command or (as a watchdog)
+            // 100 ms. The device callback wakes the thread once per period, so
+            // the playhead is republished every 40 ms and the scrubber advances
+            // smoothly; the watchdog only matters if the signal is ever missed.
+            std::thread::park_timeout(Duration::from_millis(100));
         }
     }
 
@@ -666,6 +683,11 @@ impl Supervisor {
         )?;
 
         self.negotiated_exclusive = opened.negotiation.kind.is_exclusive();
+        // Ask the driver what the endpoint is actually configured to do right
+        // now. This is the number the user compares against the OS panel, and
+        // the only honest source for it.
+        self.device_format =
+            backend::live_device_format(opened.negotiation.kind, self.config.device_id.as_deref());
         // The device threads unpark this one through their refill signal.
         opened.refill.attach();
         tracing::info!(
@@ -736,8 +758,46 @@ impl Supervisor {
     /// Exclusive backends honour it exactly (that is what bit-perfect means);
     /// shared backends are allowed to answer with their mix format, which the
     /// returned [`backend::Negotiation`] reports back.
+    /// The format to ask the endpoint for.
+    ///
+    /// Shared mode is not ours to choose: the endpoint runs at whatever rate and
+    /// container the OS panel says, and everything else is converted by Windows
+    /// on the way in. Asking cpal for the *source* rate here is what made the
+    /// Windows build sound broken — the stream was opened at 44.1/16 into a
+    /// 24/192 mix graph, and the OS converter mangled every sample while the
+    /// quality badge still reported the endpoint's 32/192. So: query the live
+    /// default configuration and ask for exactly that, then let the DSP chain
+    /// resample the file into it.
+    ///
+    /// Exclusive mode is the opposite: the stream owns the DAC, so we ask for
+    /// the source's native format and let the negotiation ladder fall back only
+    /// when the endpoint refuses it.
     fn choose_format(&self, source: &AudioFormat) -> AudioFormat {
-        *source
+        if self.config.mode == OutputMode::Exclusive {
+            return *source;
+        }
+        self.live_shared_format().unwrap_or(*source)
+    }
+
+    /// The endpoint's own default configuration, asked of the driver at
+    /// runtime.
+    ///
+    /// A pinned endpoint answers for itself; otherwise the first shared backend
+    /// the platform would open is asked. `None` means the backend does its own
+    /// negotiation (PipeWire) or the device vanished, and the caller keeps the
+    /// source format.
+    fn live_shared_format(&self) -> Option<AudioFormat> {
+        let device = self.config.device_id.as_deref();
+        if let Some(kind) = device.and_then(backend::kind_of) {
+            return backend::live_device_format(kind, device);
+        }
+        // Ask the backend that will actually take the stream. Querying a
+        // different one and handing its format to the first would be fiction:
+        // a PipeWire node negotiates its own rate with the graph, and forcing
+        // ALSA's default onto it is how a working Linux install starts
+        // resampling twice.
+        let first = *backend::preferred_kinds(OutputMode::Shared).first()?;
+        backend::live_device_format(first, None)
     }
 
     /// DSP settings as handed to the decoder: volume is applied by the pump so
@@ -986,9 +1046,31 @@ impl Supervisor {
             .map_or(0, |output| output.producer.occupied_frames() as u64)
     }
 
+    /// Playhead in **source** frames.
+    ///
+    /// `pushed` and `backlog` count frames as they reach the device — that is,
+    /// after the DSP chain, at the negotiated output rate. Seek offsets and
+    /// durations are in source frames. Whenever the two rates differ the
+    /// elapsed delta has to be rescaled, or the counter runs at the ratio:
+    /// a 44.1 kHz file on a 192 kHz endpoint advanced 4.35× too fast and the
+    /// slider hit the end of the track in the first ten seconds. This is the
+    /// single bug behind "the scrubber does not advance correctly".
     fn position_frames(&self) -> u64 {
         let audible = self.pushed.saturating_sub(self.backlog());
-        self.playhead.base + audible.saturating_sub(self.playhead.anchor)
+        let elapsed_output = audible.saturating_sub(self.playhead.anchor);
+        let output_rate = self
+            .output
+            .as_ref()
+            .map_or(0, |output| output.negotiation.format.sample_rate);
+        let source_rate = self.playhead.format.map_or(0, |format| format.sample_rate);
+        let elapsed_source = if output_rate == 0 || source_rate == 0 || output_rate == source_rate {
+            elapsed_output
+        } else {
+            // Multiply first, divide second: 64-bit headroom is ample for a
+            // whole track at 768 kHz.
+            elapsed_output.saturating_mul(u64::from(source_rate)) / u64::from(output_rate)
+        };
+        self.playhead.base.saturating_add(elapsed_source)
     }
 
     fn seek(&mut self, frame: u64) -> Result<(), AudioError> {
@@ -1135,6 +1217,7 @@ impl Supervisor {
         status.duration_frames = self.playhead.duration;
         status.source_format = self.playhead.format;
         status.output_format = output_format;
+        status.device_format = self.device_format;
         status.backend = backend;
         status.device_name = device_name;
         status.dop = self

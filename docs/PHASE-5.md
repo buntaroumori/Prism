@@ -148,8 +148,9 @@ present.
 `useLayoutStore` owns an ordered list of modules — `artwork`, `lyrics`, `spectrum`, `technical`,
 `queue` — persisted under `prism.layout.now-playing` with a schema-aware migration.
 
-- **Presets** are starting points: _Editorial_ (artwork, signal path, lyrics), _Listening_ (artwork,
-  lyrics, spectrum), _Analysis_ (spectrum, signal path, queue).
+- **Presets** are starting points: _Editorial_ (artwork, lyrics), _Listening_ (artwork,
+  lyrics, spectrum), _Analysis_ (spectrum, queue). _Superseded in 0.1.2_: the Signal Path module was
+  removed from the product and the presets were rebuilt without it.
 - Editing a preset makes the layout `custom`; modules can be toggled and moved up/down.
 - **Invariant:** at least one module stays visible — an empty deck would look broken with no way back.
 - Removing a module removes its work: the spectrum releases the audio-thread tap, the lyrics panel

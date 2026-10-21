@@ -10,6 +10,16 @@ export interface QueueEntry {
   title: string;
   artist: string;
   album: string;
+  /**
+   * Catalogue identifiers of the record and the artist.
+   *
+   * The engine knows them only as text (`TrackRequest` carries the display
+   * strings), but the queue was built from library rows that have the ids —
+   * keeping them here is what lets the player bar link the title to its album
+   * and the artist to their discography without a second round-trip.
+   */
+  albumId: string | null;
+  artistId: string | null;
   path: string;
   durationMs: number;
   startMs?: number | null;
@@ -32,6 +42,7 @@ export const EMPTY_STATUS: PlayerStatus = {
   outputFormat: null,
   backend: null,
   deviceName: null,
+  deviceFormat: null,
   bitPerfect: false,
   dop: false,
   volumeDb: 0,
@@ -135,6 +146,8 @@ function fromRow(row: TrackRow): QueueEntry {
     artist: row.artist,
     album: row.album,
     path: row.path,
+    albumId: row.albumId,
+    artistId: row.artistId,
     durationMs: row.durationMs,
     startMs: row.cueStartMs,
     endMs: row.cueEndMs,
@@ -178,11 +191,22 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
 
     switch (event.type) {
       case "stateChanged": {
+        if (event.state === "stopped") {
+          // `Stop` tears the whole session down in the engine: queue, device and
+          // current track all go. Mirroring only the state left the bar on
+          // screen with a dead play button, which is why stop felt unreliable.
+          set({
+            status: { ...EMPTY_STATUS, volumeDb: base.volumeDb, muted: base.muted },
+            tick: null,
+            index: 0,
+          });
+          break;
+        }
         set({
           status: { ...base, state: event.state },
           // A state change invalidates the last tick: showing the old playhead
-          // after a stop would leave a frozen progress bar on screen.
-          tick: event.state === "stopped" ? null : get().tick,
+          // after a pause would leave a stale progress bar on screen.
+          tick: get().tick,
         });
         break;
       }
@@ -316,7 +340,21 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
     set({ busy: true });
     try {
       await playerApi.stop();
-      set({ tick: null, error: null });
+      // Optimistic teardown: the engine emits `stateChanged(stopped)` too, but
+      // the bar must disappear on the click, not a round trip later.
+      set({
+        tick: null,
+        index: 0,
+        status:
+          get().status === null
+            ? null
+            : {
+                ...EMPTY_STATUS,
+                volumeDb: get().status?.volumeDb ?? 0,
+                muted: get().status?.muted ?? false,
+              },
+        error: null,
+      });
     } catch (cause) {
       set({ error: toUiError(cause) });
     } finally {

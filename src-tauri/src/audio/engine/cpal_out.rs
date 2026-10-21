@@ -158,6 +158,24 @@ fn find_device(
     Ok((host, device))
 }
 
+/// The endpoint's live configuration, as the driver reports it *right now*.
+///
+/// This is `default_output_config()`: on WASAPI shared mode it is the mix
+/// format the OS mixer is running (the one shown in the Sound panel), on
+/// PipeWire it is the node's current format, on ALSA the card default. It is
+/// deliberately not the format the engine opens with — reporting the latter as
+/// "device format" is what made the old signal path claim 32/192 while the OS
+/// said 24/192.
+pub fn live_format(kind: BackendKind, device: Option<&str>) -> Option<AudioFormat> {
+    let (_host, handle) = find_device(kind, device).ok()?;
+    let default = handle.default_output_config().ok()?;
+    Some(AudioFormat {
+        sample_rate: default.sample_rate().0,
+        channels: default.channels(),
+        sample_format: to_prism(default.sample_format())?,
+    })
+}
+
 /// Best configuration the endpoint can give for `desired`.
 fn choose_config(
     device: &cpal::Device,
@@ -179,11 +197,17 @@ fn choose_config(
         })
         .unwrap_or_default();
 
-    // Exact match first: same rate, same container.
+    // Exact match first: same rate, same container, same channel count.
+    //
+    // The channel count is not a detail. An endpoint that advertises 8 channels
+    // and is opened with 8 will happily accept a stereo stream, and every frame
+    // after the first is then interpreted as a different speaker — the single
+    // most effective way to make a player sound broken. Prefer the config that
+    // matches the source exactly and only widen when nothing else exists.
     for range in &ranges {
         if range.0 == desired.sample_format
             && (range.1..=range.2).contains(&desired.sample_rate)
-            && range.3 >= desired.channels
+            && range.3 == desired.channels
             && let Ok(configs) = device.supported_output_configs()
         {
             for config in configs {

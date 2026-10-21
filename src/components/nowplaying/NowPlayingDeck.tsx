@@ -5,10 +5,10 @@ import { LayoutGrid, RotateCcw } from "lucide-react";
 import { ArtworkModule } from "@/components/nowplaying/ArtworkModule";
 import { QueueModule } from "@/components/nowplaying/QueueModule";
 import { SpectrumModule } from "@/components/nowplaying/SpectrumModule";
-import { TechnicalModule } from "@/components/nowplaying/TechnicalModule";
 import { LyricsPanel } from "@/components/player/LyricsPanel";
 import { Popover } from "@/components/ui/Popover";
 import { cn } from "@/lib/utils";
+import { useUiStore } from "@/stores/uiStore";
 import {
   MODULE_LABELS,
   NOW_PLAYING_MODULES,
@@ -29,8 +29,7 @@ const PRESET_OPTIONS: readonly { value: Exclude<NowPlayingPreset, "custom">; lab
 const SPAN: Record<NowPlayingModule, string> = {
   artwork: "lg:col-span-7",
   lyrics: "lg:col-span-5",
-  spectrum: "lg:col-span-7",
-  technical: "lg:col-span-12",
+  spectrum: "lg:col-span-5",
   queue: "lg:col-span-12",
 };
 
@@ -45,8 +44,8 @@ interface NowPlayingDeckProps {
  * Modular Now Playing surface.
  *
  * The deck renders whatever `useLayoutStore` says, in the stored order. Modules
- * are real panels with their own data source — artwork, lyrics, spectrum, signal
- * path and queue — so removing one removes its work: the spectrum stops the
+ * are real panels with their own data source — artwork, lyrics, spectrum and
+ * queue — so removing one removes its work: the spectrum stops the
  * audio-thread tap when it unmounts, lyrics stop fetching when they leave the
  * tree. The layout itself animates with Framer Motion `layout`, which moves
  * boxes with transforms and costs nothing on the main thread.
@@ -64,6 +63,8 @@ export function NowPlayingDeck({
   const moveModule = useLayoutStore((state) => state.moveModule);
   const reset = useLayoutStore((state) => state.reset);
   const reduce = useReducedMotion();
+  const showSpectrum = useUiStore((state) => state.showSpectrum);
+  const visible = modules.filter((module) => module !== "spectrum" || showSpectrum);
 
   return (
     <div>
@@ -178,7 +179,7 @@ export function NowPlayingDeck({
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-flow-row-dense lg:grid-cols-12">
-        {modules.map((module) => (
+        {visible.map((module) => (
           <motion.section
             key={module}
             layout={reduce !== true}
@@ -200,7 +201,6 @@ export function NowPlayingDeck({
                 <SpectrumModule sampleRate={status?.sourceFormat?.sampleRate ?? null} />
               </div>
             ) : null}
-            {module === "technical" ? <TechnicalModule status={status} /> : null}
             {module === "queue" ? <QueueModule /> : null}
           </motion.section>
         ))}

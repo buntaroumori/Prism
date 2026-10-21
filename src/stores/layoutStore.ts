@@ -9,7 +9,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
  * The order in this type is the order used by the preset definitions and by the
  * settings UI.
  */
-export type NowPlayingModule = "artwork" | "lyrics" | "spectrum" | "technical" | "queue";
+export type NowPlayingModule = "artwork" | "lyrics" | "spectrum" | "queue";
 
 export type NowPlayingPreset = "editorial" | "listening" | "analysis" | "custom";
 
@@ -18,7 +18,6 @@ export const NOW_PLAYING_MODULES: readonly NowPlayingModule[] = [
   "artwork",
   "lyrics",
   "spectrum",
-  "technical",
   "queue",
 ];
 
@@ -26,15 +25,14 @@ export const MODULE_LABELS: Record<NowPlayingModule, string> = {
   artwork: "Artwork",
   lyrics: "Lyrics",
   spectrum: "Spectrum",
-  technical: "Signal path",
   queue: "Queue",
 };
 
 /** Presets are opinionated starting points, not modes: editing one makes it custom. */
 export const PRESETS: Record<Exclude<NowPlayingPreset, "custom">, NowPlayingModule[]> = {
-  editorial: ["artwork", "technical", "lyrics"],
+  editorial: ["artwork", "lyrics"],
   listening: ["artwork", "lyrics", "spectrum"],
-  analysis: ["spectrum", "technical", "queue"],
+  analysis: ["spectrum", "queue"],
 };
 
 const DEFAULT_MODULES = PRESETS.editorial;
@@ -97,15 +95,19 @@ export const useLayoutStore = create<LayoutState>()(
     }),
     {
       name: "prism.layout.now-playing",
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({ preset: state.preset, modules: state.modules }),
-      // A stored layout from a future/older build may name modules that no
-      // longer exist: keep only known ids, and never persist an empty deck.
+      // v2 drops the signal-path module: its facts now live in Settings →
+      // Output, where the device format is read from the driver instead of
+      // being restated next to the artwork. A stored layout may still name it,
+      // so unknown ids are filtered and an empty deck falls back to the preset.
       migrate: (persisted) => {
-        const candidate = persisted as Partial<LayoutState> | null;
-        const known: NowPlayingModule[] = ["artwork", "lyrics", "spectrum", "technical", "queue"];
-        const modules = (candidate?.modules ?? []).filter((module) => known.includes(module));
+        const candidate = persisted as { modules?: string[]; preset?: NowPlayingPreset } | null;
+        const known: readonly string[] = NOW_PLAYING_MODULES;
+        const modules = (candidate?.modules ?? []).filter((module): module is NowPlayingModule =>
+          known.includes(module),
+        );
         if (modules.length === 0) {
           return { preset: "editorial", modules: [...DEFAULT_MODULES] };
         }
