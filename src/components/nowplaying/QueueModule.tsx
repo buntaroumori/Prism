@@ -4,6 +4,7 @@ import { ListMusic } from "lucide-react";
 import { formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { usePlaybackStore } from "@/stores/playbackStore";
+import { useContextMenuStore } from "@/stores/contextMenuStore";
 
 /** Rows painted at once; a queue module is a window onto the queue, not the queue. */
 const VISIBLE_ROWS = 6;
@@ -19,6 +20,7 @@ export function QueueModule(): JSX.Element {
   const queue = usePlaybackStore((state) => state.queue);
   const index = usePlaybackStore((state) => state.index);
   const play = usePlaybackStore((state) => state.play);
+  const openAt = useContextMenuStore((state) => state.openAt);
 
   const start = Math.min(index + 1, Math.max(queue.length - 1, 0));
   const upcoming = queue.slice(start, start + VISIBLE_ROWS);
@@ -49,6 +51,13 @@ export function QueueModule(): JSX.Element {
                   type="button"
                   onClick={() => {
                     void play(queue, absolute);
+                  }}
+                  onContextMenu={(event) => {
+                    event.preventDefault();
+                    openAt(event.clientX, event.clientY, {
+                      kind: "track",
+                      track: entry.catalogue,
+                    });
                   }}
                   className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.04]"
                 >

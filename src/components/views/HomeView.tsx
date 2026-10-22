@@ -11,13 +11,13 @@ import { cn } from "@/lib/utils";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore } from "@/stores/uiStore";
-import type { AlbumRow, HomeRails } from "@/types/ipc";
+import type { AlbumCollection, AlbumRow, HomeRails } from "@/types/ipc";
 
 const GUTTER = "mx-auto w-full max-w-[1560px] px-8";
 
 /** Rail definitions in display order; a rail with no albums is not rendered. */
 const RAILS: readonly {
-  key: keyof HomeRails;
+  key: AlbumCollection;
   title: string;
   caption: string;
   icon: typeof Disc3;
@@ -31,7 +31,7 @@ const RAILS: readonly {
   {
     key: "recentlyAdded",
     title: "Recently added",
-    caption: "The last records the scanner committed to the catalogue.",
+    caption: "The latest records added to your library.",
     icon: Sparkles,
   },
   { key: "mostPlayed", title: "On repeat", caption: "The records you return to.", icon: Flame },
@@ -44,7 +44,7 @@ const RAILS: readonly {
   {
     key: "recentReleases",
     title: "Fresh releases",
-    caption: "Newest release years in your collection.",
+    caption: "Records from the newest release year in your collection.",
     icon: Star,
   },
   {
@@ -67,6 +67,7 @@ export function HomeView(): JSX.Element {
   const stats = useLibraryStore((state) => state.stats);
   const roots = useLibraryStore((state) => state.roots);
   const setRoute = useUiStore((state) => state.setRoute);
+  const openCollection = useUiStore((state) => state.openCollection);
   const showStats = useUiStore((state) => state.showHomeStats);
   const playTracks = usePlaybackStore((state) => state.playTracks);
   const queueLength = usePlaybackStore((state) => state.queue.length);
@@ -139,7 +140,7 @@ export function HomeView(): JSX.Element {
           </h1>
           <p className="mt-1.5 text-[12.5px] text-white/40">
             {empty
-              ? "Point Prism at a folder and it will index tags, artwork and CUE sheets."
+              ? "Add a music folder and Prism will organise your albums, artwork and songs."
               : `${formatCount(stats.trackCount)} tracks · ${formatCount(stats.albumCount)} albums · ${formatCount(stats.artistCount)} artists · ${formatLibraryDuration(stats.totalDurationMs)}`}
           </p>
         </div>
@@ -181,8 +182,8 @@ export function HomeView(): JSX.Element {
           <p className="mt-3 text-[13px] font-medium text-white/55">Nothing indexed yet</p>
           <p className="mx-auto mt-1 max-w-md text-[11.5px] leading-relaxed text-white/30">
             {roots.length === 0
-              ? "No folders are configured. Settings → Library is where a root is added and a scan is started."
-              : "The roots are configured but the catalogue is empty. Run a scan from Settings → Library."}
+              ? "Add a music folder in Settings, then run a scan."
+              : "Your folders are ready. Run a scan from Settings to fill your library."}
           </p>
         </div>
       ) : null}
@@ -205,7 +206,7 @@ export function HomeView(): JSX.Element {
               <button
                 type="button"
                 onClick={() => {
-                  setRoute("library");
+                  openCollection(rail.key);
                 }}
                 className="hidden items-center gap-1 text-[11px] text-white/30 transition-colors hover:text-white/70 sm:flex"
               >
@@ -217,6 +218,47 @@ export function HomeView(): JSX.Element {
             {rails?.[rail.key].map((album) => (
               <AlbumCard
                 key={`${rail.key}-${album.id}`}
+                album={album}
+                busy={busyAlbum === album.id}
+                onPlay={(target) => {
+                  void playAlbum(target);
+                }}
+              />
+            ))}
+          </Rail>
+        </motion.div>
+      ))}
+
+      {rails?.genres.map((genre, index) => (
+        <motion.div
+          key={`genre-${genre.name}`}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{
+            duration: 0.32,
+            delay: Math.min((visible.length + index) * 0.03, 0.15),
+            ease: [0.22, 1, 0.36, 1],
+          }}
+        >
+          <Rail
+            title={genre.name}
+            caption={`${formatCount(genre.albumCount)} albums in your library.`}
+            action={
+              <button
+                type="button"
+                onClick={() => {
+                  openCollection(null, genre.name);
+                }}
+                className="hidden items-center gap-1 text-[11px] text-white/30 transition-colors hover:text-white/70 sm:flex"
+              >
+                See all
+                <ArrowRight className="h-3 w-3" aria-hidden="true" />
+              </button>
+            }
+          >
+            {genre.albums.map((album) => (
+              <AlbumCard
+                key={`genre-${genre.name}-${album.id}`}
                 album={album}
                 busy={busyAlbum === album.id}
                 onPlay={(target) => {

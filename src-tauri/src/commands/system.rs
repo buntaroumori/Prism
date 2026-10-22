@@ -75,6 +75,22 @@ pub async fn get_runtime_health(state: State<'_, AppState>) -> Result<RuntimeHea
     })
 }
 
+/// Borderless desktop fullscreen. This is the normal windowed fullscreen mode:
+/// Alt-Tab and the operating-system task switcher keep working.
+#[tauri::command]
+pub fn window_set_fullscreen(
+    window: tauri::WebviewWindow,
+    fullscreen: bool,
+) -> Result<(), PrismError> {
+    window.set_fullscreen(fullscreen)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn window_is_fullscreen(window: tauri::WebviewWindow) -> Result<bool, PrismError> {
+    Ok(window.is_fullscreen()?)
+}
+
 /// Open the log directory in the platform file manager.
 #[allow(clippy::needless_pass_by_value)]
 #[tauri::command]

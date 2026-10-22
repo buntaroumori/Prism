@@ -186,8 +186,8 @@ extension filter ─┬─ *.cue ──▶ CueSheet::parse ──▶ virtual tra
                   └─ audio  ──▶ fingerprint check (mtime+size) ──▶ skip
                                      │ miss
                                      ▼
-                     rayon chunk (512 files): lofty read → TrackTags → TrackRecord
-                                     │
+                     bounded per-file lofty read + isolated deadline
+                                     │ TrackTags → TrackRecord
                                      ▼
                      batch of 256 rows, one transaction:
                      INSERT OR IGNORE artists → albums → tracks upsert (+FTS triggers)
@@ -203,13 +203,16 @@ extension filter ─┬─ *.cue ──▶ CueSheet::parse ──▶ virtual tra
   `ar:lower(name)`, `al:lower(title)|lower(album_artist)`,
   `tr:lower(normalised_path)|source|cue_start_ms`, `cs:lower(sheet_path)`. Re-scanning, renaming a
   library root or importing a friend's catalogue converges on the same rows, so playlists, ratings
-  and play history survive. The birthday bound at 500k tracks is below 1e-17.
+  and play history survive. The birthday bound at 500k tracks is below 1e-17. A MusicBrainz
+  recording id is deliberately non-unique metadata: migration `0005` keeps a lookup index but
+  leaves physical-file uniqueness to `ux_tracks_identity`.
 - **Incremental by default.** A scan reads `(path, mtime, size)` for every indexed file under the
   roots and parses only what changed. `.cue` sheets are compared by SHA-256 of their bytes. A second
   scan of an unchanged 100k library performs no tag reads and no track writes.
-- **Parallel parse, serial write.** `lofty` decoding is CPU-bound and runs on the rayon pool in
-  fixed-size chunks (bounded memory, natural progress ticks). `SQLite` serialises writers, so the
-  database side stays on the async thread with one transaction per 256 rows.
+- **Parallel parse, serial write.** `lofty` decoding is CPU-bound and each file has its own bounded
+  task and deadline, so one malformed or blocking input cannot withhold a whole chunk. `SQLite`
+  serialises writers, so the database side stays on the async thread with one transaction per 256
+  rows.
 - **Album aggregation** is recomputed for touched albums after every batch (`COUNT`, `SUM`,
   `MAX(disc_no)` over the album index), and globally at the end of a full scan. The missing sweep
   re-runs the recomputation for albums that lost a track, so the grid never advertises a track that

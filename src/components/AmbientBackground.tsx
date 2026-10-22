@@ -6,6 +6,8 @@ interface AmbientBackgroundProps {
   palette: CoverPalette | null;
   /** `off` paints the OLED flat colour only. */
   intensity: "off" | "subtle" | "full";
+  /** 0–1 amount of artwork colour allowed into the canvas. */
+  colourBleed: number;
   /**
    * `reduced` swaps the three blurred, drifting orbs for one static gradient.
    *
@@ -32,13 +34,15 @@ interface AmbientBackgroundProps {
 export function AmbientBackground({
   palette,
   intensity,
+  colourBleed,
   reduced = false,
 }: AmbientBackgroundProps): JSX.Element {
   if (intensity === "off") {
     return <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-oled-950" />;
   }
 
-  const strength = intensity === "subtle" ? 0.45 : 1;
+  const bleed = Math.min(1, Math.max(0, colourBleed));
+  const strength = (intensity === "subtle" ? 0.45 : 1) * bleed;
   const lift = palette === null ? 0.5 : 0.35 + palette.averageLightness * 0.9;
   const accent = palette?.accent ?? "var(--prism-accent)";
   const highlight = palette?.highlight ?? "var(--prism-highlight)";

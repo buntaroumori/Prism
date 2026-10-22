@@ -85,6 +85,23 @@
   button {
     -webkit-app-region: no-drag;
   }
+
+  /* Desktop affordance: every actionable surface uses the hand cursor. */
+  :where(
+      button,
+      a[href],
+      select,
+      summary,
+      input[type="range"],
+      input[type="color"],
+      [role="button"],
+      [role="radio"],
+      [role="switch"],
+      [role="slider"],
+      [data-interactive]
+    ):not(:disabled):not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
 }
 
 @layer utilities {
@@ -178,6 +195,28 @@
   .grain {
     background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
   }
+}
+
+/* Appearance controls act on the rendered surfaces, not just on stored state. */
+[data-corners]
+  :where(
+    .rounded,
+    .rounded-md,
+    .rounded-lg,
+    .rounded-xl,
+    .rounded-2xl,
+    .rounded-3xl,
+    [class*="rounded-["]
+  ) {
+  border-radius: var(--prism-radius);
+}
+
+.density-row {
+  padding-block: var(--prism-row-gap) !important;
+}
+
+.density-grid {
+  row-gap: var(--prism-grid-gap) !important;
 }
 
 @keyframes prism-drift {

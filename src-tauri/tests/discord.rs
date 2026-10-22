@@ -53,6 +53,7 @@ async fn write_frame(socket: &mut tokio::net::UnixStream, op: u32, payload: &Val
 
 fn presence() -> TrackPresence {
     TrackPresence {
+        track_id: "track-1".into(),
         title: "Idioteque".into(),
         artist: "Radiohead".into(),
         album: "Kid A".into(),
@@ -135,6 +136,7 @@ async fn the_rpc_completes_the_handshake_and_publishes_an_activity() {
             show_cover: false,
             show_timestamps: true,
             show_quality: true,
+            show_paused: true,
         })
         .expect("configure");
 
@@ -143,8 +145,9 @@ async fn the_rpc_completes_the_handshake_and_publishes_an_activity() {
     let frame = server.await.expect("server");
     let activity = &frame["args"]["activity"];
     assert_eq!(activity["type"], 2, "Listening activity");
-    assert_eq!(activity["details"], "Idioteque — Radiohead");
-    assert_eq!(activity["state"], "Kid A");
+    assert_eq!(activity["details"], "Idioteque");
+    assert_eq!(activity["state"], "Radiohead");
+    assert_eq!(activity["assets"]["large_text"], "Kid A");
     assert!(activity["timestamps"]["start"].as_i64().is_some());
     assert_eq!(activity["assets"]["large_image"], "prism");
     assert_eq!(activity["assets"]["small_text"], "Bit-perfect");
@@ -205,6 +208,7 @@ async fn configuration_round_trips_through_the_settings_table() {
         show_cover: false,
         show_timestamps: true,
         show_quality: false,
+        show_paused: false,
     };
     config.save(&pool).await.expect("save");
 

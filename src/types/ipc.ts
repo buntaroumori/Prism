@@ -105,6 +105,16 @@ export const AlbumSortSchema = z.enum([
 ]);
 export type AlbumSort = z.infer<typeof AlbumSortSchema>;
 
+export const AlbumCollectionSchema = z.enum([
+  "recentlyAdded",
+  "recentlyPlayed",
+  "mostPlayed",
+  "highResolution",
+  "recentReleases",
+  "rediscover",
+]);
+export type AlbumCollection = z.infer<typeof AlbumCollectionSchema>;
+
 /** One row of the virtualized track list. */
 export const TrackRowSchema = z.object({
   id: z.string().min(1),
@@ -234,6 +244,13 @@ export const HomeRailsSchema = z.object({
   highResolution: z.array(AlbumRowSchema),
   recentReleases: z.array(AlbumRowSchema),
   rediscover: z.array(AlbumRowSchema),
+  genres: z.array(
+    z.object({
+      name: z.string().min(1),
+      albumCount: z.number().int().nonnegative(),
+      albums: z.array(AlbumRowSchema),
+    }),
+  ),
 });
 export type HomeRails = z.infer<typeof HomeRailsSchema>;
 
@@ -250,6 +267,27 @@ export const ArtistDetailSchema = z.object({
   albums: pageSchema(AlbumRowSchema),
 });
 export type ArtistDetail = z.infer<typeof ArtistDetailSchema>;
+
+export const PlaylistRowSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().nullable(),
+  kind: z.enum(["static", "smart"]),
+  createdAt: z.string().min(1),
+  updatedAt: z.string().min(1),
+  trackCount: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+  coverId: z.string().nullable(),
+  coverPath: z.string().nullable(),
+  coverUrl: z.string().nullable(),
+});
+export type PlaylistRow = z.infer<typeof PlaylistRowSchema>;
+
+export const PlaylistDetailSchema = z.object({
+  playlist: PlaylistRowSchema,
+  tracks: pageSchema(TrackRowSchema),
+});
+export type PlaylistDetail = z.infer<typeof PlaylistDetailSchema>;
 
 /** What removing a library root took out of the catalogue. */
 export const RootRemovalSchema = z.object({
@@ -390,6 +428,7 @@ export const DiscordConfigSchema = z.object({
   showCover: z.boolean(),
   showTimestamps: z.boolean(),
   showQuality: z.boolean(),
+  showPaused: z.boolean(),
 });
 export type DiscordConfig = z.infer<typeof DiscordConfigSchema>;
 
@@ -404,6 +443,7 @@ export const DiscordStatusSchema = z.object({
   showCover: z.boolean(),
   showTimestamps: z.boolean(),
   showQuality: z.boolean(),
+  showPaused: z.boolean(),
 });
 export type DiscordStatus = z.infer<typeof DiscordStatusSchema>;
 

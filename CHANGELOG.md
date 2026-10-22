@@ -8,6 +8,88 @@ traceable to the delivery document of the phase that introduced it (`docs/PHASE-
 
 _No unreleased changes._
 
+## [0.1.4] — 2026-10-22
+
+A library, desktop-interaction and personalisation release. It removes the remaining
+catalogue-identity assumption that could abort a large scan, adds user-owned playlists,
+and makes the shell's visual and browsing choices real, persistent controls.
+
+### Added
+
+- **Playlists**, directly below Library: create a playlist, open it, play its songs in the
+  stored order, remove entries or delete the playlist. Right-click any song and choose
+  **Add to playlist**, then an existing playlist or **New playlist**. Adding the same song
+  twice is a no-op rather than a duplicate or a database error.
+- **Genre browsing**: Home has shelves for the genres with the most distinct albums, and
+  Library has a removable genre filter whose album count and results agree.
+- **Prism-owned context menus** on songs, albums, playlists, search results, the queue and
+  the player. Album details present artwork, artist, year, release type, disc and song
+  counts, running time, genres and audio formats in a dedicated dialog. The browser menu
+  is suppressed and right-clicking empty background opens nothing.
+- **Borderless, non-exclusive fullscreen**, available from the window button and `F11`;
+  it leaves the window on the current desktop and does not disable Alt-Tab. The previous
+  fullscreen state is restored safely at startup.
+- **Discord paused-activity policy**: choose whether a paused song remains visible or the
+  activity clears until playback resumes. The choice is persisted, and resuming restores
+  the same song rather than starting a new presence.
+
+### Changed
+
+- **Appearance controls now affect the rendered shell**: colour bleed, visual-effects
+  mode, corner radius, row density, cover size, rail arrows, Home counters and spectrum
+  visibility are wired to their respective surfaces. Accent, glass and ambient colour
+  retain their existing behaviour.
+- **Library ordering is three explicit, reversible controls** — Artist, Album and Year.
+  Repeating a selection reverses it; Newest/Oldest menu choices are gone. Sort and genre
+  survive navigation, rescans and application restarts.
+- **Home collections and See all share the same backend predicate**. Fresh releases is
+  restricted to the newest album year, while Rediscover gives unplayed records priority
+  and excludes anything heard during the last 30 days.
+- **Track rows use desktop selection semantics**: one click selects softly without
+  playing, clicking outside clears selection, and double-clicking anywhere on the row
+  plays immediately.
+- **Discord activity names the song, artist and album without repeating the album**, and
+  multi-disc records resolve artwork from the first available disc rather than assuming
+  that every disc directory contains its own cover.
+- **Volume has a perceptual taper** across the full 0–100 range, replacing the abrupt
+  near-linear decibel mapping. Mute is immediate and reliable; dragging while muted
+  performs one deliberate unmute.
+- **Shell preferences persist together**, including appearance, ordering, filters and
+  open module/layout pickers. Interactive surfaces use the pointer cursor consistently.
+- **Desktop browser behaviour is disabled**: Ctrl/Cmd+J/F/G/P/A, Tab focus traversal and
+  developer-tool shortcuts no longer open browser UI inside Prism.
+- **The sidebar uses the real application icon**, and technical, test, mockup and
+  reference-facing copy has been removed from user-facing views.
+
+### Fixed
+
+- **A shared MusicBrainz recording id no longer aborts scanning**. A recording id is not
+  a physical-file identity: different pressings, backup roots and discs may legitimately
+  share it. The invalid unique index is replaced by a lookup index; the existing
+  path/source/CUE identity remains authoritative, so every file can be indexed without
+  weakening duplicate-file protection.
+- **Multi-disc albums stay ordered and scroll as one page**, with a headed section per
+  disc instead of a collapsing virtual layout that could hide rows or strand the
+  playhead. Discord artwork uses the same multi-disc-aware lookup.
+- **The album search and artist filters remain correct through the shared collection
+  query path**, including LIKE escaping and artist identifiers on the aggregate view.
+
+### Data
+
+- Migration `0005_library_identity_and_playlists` drops `ux_tracks_mbid`, creates the
+  non-unique `ix_tracks_mbid`, conservatively deduplicates any pre-existing playlist
+  entries, and enforces one entry per song within each playlist.
+
+### Testing and CI
+
+- The 1,100-file scan regression now gives every tagged file the **same** MusicBrainz
+  recording id, reproducing the reported SQLite 2067 condition instead of merely crossing
+  the old numeric ceiling. Real-database tests also cover playlist order and duplicate
+  rejection, Home/See-all equivalence, Rediscover after playback, and multi-disc ordering
+  and artwork. The production-bundle interaction suite covers playlists, context details,
+  collection filters, persistence, Appearance, fullscreen, Discord pause policy, seeking,
+  mute/volume and unknown-duration playback.
+
 ## [0.1.3] — 2026-10-22
 
 A defect-driven release. Nothing new to learn: every change here answers something

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useRef, useState, type JSX, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type JSX, type ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -13,6 +13,9 @@ interface PopoverProps {
   side?: "top" | "bottom";
   className?: string;
   label: string;
+  /** Optional persisted/controlled open state. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -29,9 +32,21 @@ export function Popover({
   side = "top",
   className,
   label,
+  open: controlledOpen,
+  onOpenChange,
 }: PopoverProps): JSX.Element {
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
   const container = useRef<HTMLDivElement | null>(null);
+  const setOpen = useCallback(
+    (next: boolean): void => {
+      if (controlledOpen === undefined) {
+        setInternalOpen(next);
+      }
+      onOpenChange?.(next);
+    },
+    [controlledOpen, onOpenChange],
+  );
 
   useEffect(() => {
     if (!open) {
@@ -53,14 +68,14 @@ export function Popover({
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open]);
+  }, [open, setOpen]);
 
   return (
     <div ref={container} className="relative">
       {trigger({
         open,
         toggle: () => {
-          setOpen((value) => !value);
+          setOpen(!open);
         },
       })}
 

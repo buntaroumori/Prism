@@ -16,6 +16,7 @@ import {
   usePlaybackStore,
 } from "@/stores/playbackStore";
 import { useUiStore } from "@/stores/uiStore";
+import { useContextMenuStore } from "@/stores/contextMenuStore";
 
 /**
  * Persistent transport.
@@ -44,6 +45,7 @@ export function PlayerBar(): JSX.Element {
   const setRoute = useUiStore((state) => state.setRoute);
   const openAlbum = useUiStore((state) => state.openAlbum);
   const openArtist = useUiStore((state) => state.openArtist);
+  const openAt = useContextMenuStore((state) => state.openAt);
 
   const [coverPath, setCoverPath] = useState<string | null>(null);
   const trackId = status?.track?.trackId ?? null;
@@ -126,7 +128,18 @@ export function PlayerBar(): JSX.Element {
 
           <div className="mx-auto grid h-[92px] w-full max-w-[1560px] grid-cols-[minmax(0,1fr)_minmax(320px,540px)_minmax(0,1fr)] items-center gap-6 px-6">
             {/* ------------------------------------------------ Now playing -- */}
-            <div className="flex min-w-0 items-center gap-3.5">
+            <div
+              className="flex min-w-0 items-center gap-3.5"
+              onContextMenu={(event) => {
+                if (entry !== null) {
+                  event.preventDefault();
+                  openAt(event.clientX, event.clientY, {
+                    kind: "track",
+                    track: entry.catalogue,
+                  });
+                }
+              }}
+            >
               <button
                 type="button"
                 onClick={() => {
@@ -219,7 +232,7 @@ export function PlayerBar(): JSX.Element {
               <div className="hidden min-w-0 flex-col items-end xl:flex">
                 <span
                   className="flex items-center gap-1.5 text-[10px] tracking-[0.1em] whitespace-nowrap text-white/30 uppercase"
-                  title="Endpoint configuration reported by the driver, not the container the engine writes"
+                  title="Current playback format"
                 >
                   <AudioLines className="h-3 w-3 shrink-0" aria-hidden="true" />
                   {formatAudioFormat(status?.deviceFormat ?? status?.outputFormat ?? null)}
@@ -238,6 +251,9 @@ export function PlayerBar(): JSX.Element {
                 }}
                 onToggleMute={() => {
                   void setMuted(!(status?.muted ?? false));
+                }}
+                onUnmute={() => {
+                  void setMuted(false);
                 }}
               />
             </div>

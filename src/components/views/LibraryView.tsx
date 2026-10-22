@@ -1,70 +1,111 @@
-import { Image as ImageIcon, LayoutGrid, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Image as ImageIcon, LayoutGrid, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 
 import { AlbumCard } from "@/components/library/AlbumCard";
-import { Segmented } from "@/components/ui/Segmented";
 import { formatCount } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
-import { cn } from "@/lib/utils";
+import { useBrowseStore, type AlbumSortField } from "@/stores/browseStore";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { COVER_SIZE_MAX, COVER_SIZE_MIN, useUiStore } from "@/stores/uiStore";
-import type { AlbumRow, AlbumSort } from "@/types/ipc";
-
-/** The eight orderings the backend exposes, worded the way a library reads. */
-const SORTS: readonly { value: AlbumSort; label: string }[] = [
-  { value: "added", label: "Newest" },
-  { value: "addedAsc", label: "Oldest" },
-  { value: "artist", label: "Artist A–Z" },
-  { value: "artistDesc", label: "Artist Z–A" },
-  { value: "title", label: "Album A–Z" },
-  { value: "titleDesc", label: "Album Z–A" },
-  { value: "year", label: "Year ↓" },
-  { value: "yearAsc", label: "Year ↑" },
-];
+import type { AlbumCollection, AlbumRow, AlbumSort, Facets } from "@/types/ipc";
 
 const PAGE_SIZE = 120;
 
-/**
- * The library, as a mosaic of records.
- *
- * A track table is the wrong shape for browsing a collection: it answers "what
- * do I own" a line at a time. The mosaic answers it a record at a time, which
- * is how music is filed — and the track list is one click away on every album
- * page. Cover size is a user setting because the same grid has to serve a
- * laptop and a 4K desk.
- */
-export function LibraryView(): JSX.Element {
+const COLLECTION_TITLES: Record<AlbumCollection, { title: string; caption: string }> = {
+  recentlyAdded: {
+    title: "Recently added",
+    caption: "Every record that joined your library, newest first.",
+  },
+  recentlyPlayed: {
+    title: "Recently played",
+    caption: "Your listening history, most recent first.",
+  },
+  mostPlayed: {
+    title: "On repeat",
+    caption: "The records you return to most often.",
+  },
+  highResolution: {
+    title: "High resolution",
+    caption: "Every 24-bit, DSD or above-48 kHz record in your library.",
+  },
+  recentReleases: {
+    title: "Fresh releases",
+    caption: "Every record from the newest release year in your collection.",
+  },
+  rediscover: {
+    title: "Rediscover",
+    caption: "Records you have not heard recently. Playing one removes it from this shelf.",
+  },
+};
+
+interface LibraryViewProps {
+  collection?: AlbumCollection | null;
+  genre?: string | null;
+}
+
+/** Album mosaic shared by Library and every Home “See all” destination. */
+export function LibraryView({ collection = null, genre = null }: LibraryViewProps): JSX.Element {
   const stats = useLibraryStore((state) => state.stats);
   const query = useLibraryStore((state) => state.query);
   const setQuery = useLibraryStore((state) => state.setQuery);
   const coverSize = useUiStore((state) => state.coverSize);
   const setAppearance = useUiStore((state) => state.setAppearance);
+  const back = useUiStore((state) => state.back);
   const playTracks = usePlaybackStore((state) => state.playTracks);
+  const storedSort = useBrowseStore((state) => state.sort);
+  const storedGenre = useBrowseStore((state) => state.genre);
+  const cycleStoredSort = useBrowseStore((state) => state.cycleSort);
+  const setStoredGenre = useBrowseStore((state) => state.setGenre);
 
-  const [sort, setSort] = useState<AlbumSort>("artist");
+  const curated = collection !== null || genre !== null;
+  const [collectionSort, setCollectionSort] = useState<AlbumSort | null>(null);
   const [albums, setAlbums] = useState<AlbumRow[]>([]);
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyAlbum, setBusyAlbum] = useState<string | null>(null);
+  const [facets, setFacets] = useState<Facets | null>(null);
   const sentinel = useRef<HTMLDivElement | null>(null);
 
-  // Reset the window whenever the query or the ordering changes: a stale
-  // offset against a new filter is how grids end up with holes.
+  const sort = curated ? collectionSort : storedSort;
+  const activeGenre = curated ? genre : storedGenre;
+  const libraryVersion = stats?.trackCount ?? 0;
+
+  useEffect(() => {
+    setCollectionSort(null);
+  }, [collection, genre]);
+
+  useEffect(() => {
+    if (curated) {
+      return;
+    }
+    let active = true;
+    void libraryApi.facets().then((next) => {
+      if (active) {
+        setFacets(next);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [curated]);
+
   useEffect(() => {
     setAlbums([]);
     setOffset(0);
     setLoading(true);
-  }, [query, sort]);
+  }, [query, sort, activeGenre, collection, libraryVersion]);
 
   useEffect(() => {
     let active = true;
     void libraryApi
       .albums({
         ...(query.length > 0 ? { text: query } : {}),
-        sort,
+        ...(activeGenre !== null ? { genre: activeGenre } : {}),
+        ...(collection !== null ? { collection } : {}),
+        ...(sort !== null ? { sort } : {}),
         limit: PAGE_SIZE,
         offset,
       })
@@ -85,7 +126,7 @@ export function LibraryView(): JSX.Element {
       })
       .catch((cause: unknown) => {
         if (active) {
-          setError(cause instanceof Error ? cause.message : "Cannot read the catalogue");
+          setError(cause instanceof Error ? cause.message : "The albums could not be loaded");
         }
       })
       .finally(() => {
@@ -96,11 +137,8 @@ export function LibraryView(): JSX.Element {
     return () => {
       active = false;
     };
-  }, [query, sort, offset]);
+  }, [query, sort, activeGenre, collection, offset, libraryVersion]);
 
-  // Infinite scroll: the mosaic is the only surface in the app that may grow
-  // unbounded, so it pages instead of virtualising (cards are cheap, rows are
-  // not — and a virtualised mosaic cannot animate into place).
   useEffect(() => {
     const node = sentinel.current;
     if (node === null) {
@@ -127,11 +165,7 @@ export function LibraryView(): JSX.Element {
       if (page.items.length === 0) {
         return;
       }
-      const ordered = [...page.items].sort((a, b) => {
-        const disc = (a.discNo ?? 1) - (b.discNo ?? 1);
-        return disc !== 0 ? disc : (a.trackNo ?? 0) - (b.trackNo ?? 0);
-      });
-      await playTracks(ordered, 0);
+      await playTracks(page.items, 0);
     } finally {
       setBusyAlbum(null);
     }
@@ -142,25 +176,53 @@ export function LibraryView(): JSX.Element {
     [coverSize],
   );
 
+  const heading = curated
+    ? genre !== null
+      ? { title: genre, caption: "Every album in your library with this genre." }
+      : collection !== null
+        ? COLLECTION_TITLES[collection]
+        : { title: "Library", caption: "" }
+    : null;
+
+  const changeSort = (field: AlbumSortField): void => {
+    if (curated) {
+      setCollectionSort((current) => nextSort(current, field));
+    } else {
+      cycleStoredSort(field);
+    }
+  };
+
   return (
     <div className="mx-auto w-full max-w-[1560px] px-8 pt-7 pb-10">
+      {curated ? (
+        <button
+          type="button"
+          onClick={back}
+          className="mb-5 flex items-center gap-1.5 text-[11.5px] text-white/40 transition-colors hover:text-white"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+          Home
+        </button>
+      ) : null}
+
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <h1 className="flex items-center gap-2 text-[26px] leading-none font-semibold tracking-[-0.03em] text-white">
             <LayoutGrid className="h-5 w-5 text-white/25" aria-hidden="true" strokeWidth={1.5} />
-            Library
+            {heading?.title ?? "Library"}
           </h1>
           <p className="mt-1.5 text-[12.5px] text-white/40">
-            {stats === null
-              ? "Reading the catalogue…"
-              : `${formatCount(total)} albums · ${formatCount(stats.trackCount)} tracks · ${formatCount(stats.artistCount)} artists`}
-            {query.length > 0 ? (
-              <>
-                {" · filtered by "}
-                <span className="text-white/70">“{query}”</span>
-              </>
-            ) : null}
+            {heading !== null
+              ? heading.caption
+              : stats === null
+                ? "Reading your music…"
+                : `${formatCount(total)} albums · ${formatCount(stats.trackCount)} tracks · ${formatCount(stats.artistCount)} artists`}
           </p>
+          {query.length > 0 ? (
+            <p className="mt-1 text-[11.5px] text-white/45">
+              Search: <span className="text-white/75">“{query}”</span>
+            </p>
+          ) : null}
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -190,20 +252,54 @@ export function LibraryView(): JSX.Element {
               className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-[11px] text-white/50 hover:text-white"
             >
               <X className="h-3 w-3" aria-hidden="true" />
-              Clear
+              Clear search
             </button>
           ) : null}
         </div>
       </header>
 
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
-        <Segmented
-          options={SORTS}
-          value={sort}
-          onChange={setSort}
-          label="Sort albums"
-          layoutId="library-album-sort"
-        />
+        <div className="flex flex-wrap items-center gap-1.5" aria-label="Sort albums">
+          <SortButton field="artist" label="Artist" sort={sort} onChange={changeSort} />
+          <SortButton field="title" label="Album" sort={sort} onChange={changeSort} />
+          <SortButton field="year" label="Year" sort={sort} onChange={changeSort} />
+        </div>
+
+        {!curated ? (
+          <label className="flex items-center gap-2 text-[11px] text-white/40">
+            Genre
+            <select
+              aria-label="Filter by genre"
+              value={storedGenre ?? ""}
+              onChange={(event) => {
+                setStoredGenre(event.target.value || null);
+              }}
+              className="h-8 max-w-[220px] rounded-lg border border-white/10 bg-oled-850 px-2.5 text-[11.5px] text-white/75"
+            >
+              <option value="">All genres</option>
+              {facets?.genres.map((facet) => (
+                <option key={facet.value} value={facet.value}>
+                  {facet.value} ({formatCount(facet.count)})
+                </option>
+              ))}
+              {storedGenre !== null && !facets?.genres.some((g) => g.value === storedGenre) ? (
+                <option value={storedGenre}>{storedGenre}</option>
+              ) : null}
+            </select>
+            {storedGenre !== null ? (
+              <button
+                type="button"
+                aria-label="Clear genre filter"
+                onClick={() => {
+                  setStoredGenre(null);
+                }}
+                className="grid h-7 w-7 place-items-center rounded-full text-white/35 hover:bg-white/[0.06] hover:text-white"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            ) : null}
+          </label>
+        ) : null}
       </div>
 
       {error !== null ? (
@@ -214,18 +310,16 @@ export function LibraryView(): JSX.Element {
 
       {total === 0 && !loading ? (
         <div className="mt-10 rounded-2xl border border-dashed border-white/[0.09] px-6 py-14 text-center">
-          <p className="text-[13px] font-medium text-white/55">
-            {query.length > 0 ? "No album matches that search" : "The catalogue is empty"}
-          </p>
+          <p className="text-[13px] font-medium text-white/55">No albums to show</p>
           <p className="mx-auto mt-1 max-w-md text-[11.5px] leading-relaxed text-white/30">
-            {query.length > 0
-              ? "Try a shorter query. Search runs over titles, artists and track names."
-              : "Add a folder in Settings → Library and run a scan."}
+            {query.length > 0 || activeGenre !== null
+              ? "Try another search or clear the genre filter."
+              : "Add a music folder in Settings and run a scan."}
           </p>
         </div>
       ) : (
         <div
-          className="mt-5 grid gap-x-5 gap-y-7"
+          className="density-grid mt-5 grid gap-x-5"
           style={{ gridTemplateColumns: columns }}
           data-cover-size={coverSize}
         >
@@ -245,11 +339,61 @@ export function LibraryView(): JSX.Element {
       <div ref={sentinel} aria-hidden="true" className="h-8" />
 
       {loading ? (
-        <div className={cn("mt-2 flex items-center gap-2 text-[11px] text-white/30")}>
+        <div className="mt-2 flex items-center gap-2 text-[11px] text-white/30">
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/40" />
-          Reading the catalogue…
+          Reading your music…
         </div>
       ) : null}
     </div>
+  );
+}
+
+function nextSort(current: AlbumSort | null, field: AlbumSortField): AlbumSort {
+  if (field === "artist") {
+    return current === "artist" ? "artistDesc" : "artist";
+  }
+  if (field === "title") {
+    return current === "title" ? "titleDesc" : "title";
+  }
+  return current === "year" ? "yearAsc" : "year";
+}
+
+function SortButton({
+  field,
+  label,
+  sort,
+  onChange,
+}: {
+  field: AlbumSortField;
+  label: string;
+  sort: AlbumSort | null;
+  onChange: (field: AlbumSortField) => void;
+}): JSX.Element {
+  const ascendingSort: AlbumSort =
+    field === "artist" ? "artist" : field === "title" ? "title" : "yearAsc";
+  const descendingSort: AlbumSort =
+    field === "artist" ? "artistDesc" : field === "title" ? "titleDesc" : "year";
+  const ascending = sort === ascendingSort;
+  const selected = ascending || sort === descendingSort;
+  const Icon = sort === descendingSort ? ArrowDown : ArrowUp;
+
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      title={`Change ${label.toLowerCase()} order; click again to reverse it`}
+      onClick={() => {
+        onChange(field);
+      }}
+      className={
+        selected
+          ? "flex h-8 items-center gap-1.5 rounded-full border border-white/[0.12] bg-white/[0.09] px-3 text-[11.5px] text-white"
+          : "flex h-8 items-center gap-1.5 rounded-full border border-white/[0.07] bg-white/[0.025] px-3 text-[11.5px] text-white/45 hover:bg-white/[0.05] hover:text-white/80"
+      }
+    >
+      {label}
+      {selected ? <Icon className="h-3 w-3" aria-hidden="true" /> : null}
+      <span className="sr-only">{ascending ? "ascending" : "descending"}</span>
+    </button>
   );
 }

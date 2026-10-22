@@ -62,6 +62,8 @@ export function NowPlayingDeck({
   const toggleModule = useLayoutStore((state) => state.toggleModule);
   const moveModule = useLayoutStore((state) => state.moveModule);
   const reset = useLayoutStore((state) => state.reset);
+  const modulePickerOpen = useLayoutStore((state) => state.modulePickerOpen);
+  const setModulePickerOpen = useLayoutStore((state) => state.setModulePickerOpen);
   const reduce = useReducedMotion();
   const showSpectrum = useUiStore((state) => state.showSpectrum);
   const visible = modules.filter((module) => module !== "spectrum" || showSpectrum);
@@ -96,6 +98,8 @@ export function NowPlayingDeck({
             align="end"
             side="bottom"
             label="Configure modules"
+            open={modulePickerOpen}
+            onOpenChange={setModulePickerOpen}
             className="w-64"
             trigger={({ open, toggle }) => (
               <button
@@ -170,8 +174,8 @@ export function NowPlayingDeck({
                 Reset to Editorial
               </button>
               <p className="mt-2 px-1 text-[10px] leading-relaxed text-white/20">
-                {PRESETS.editorial.length} modules in the default preset. Hidden modules stop
-                running: no canvas, no lyrics fetch, no spectrum tap.
+                {PRESETS.editorial.length} modules in the default preset. Hidden panels stay off
+                until you enable them again.
               </p>
             </div>
           </Popover>

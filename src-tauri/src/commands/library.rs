@@ -15,8 +15,8 @@ use crate::artwork::{CoverAsset, CoverHint};
 use crate::db::catalog::CatalogWriter;
 use crate::db::catalog::{path_key, stable_id};
 use crate::db::search::{
-    self, AlbumRow, AlbumSort, ArtistRow, Facets, GlobalSearch, HomeRails, Page, TrackQuery,
-    TrackRow,
+    self, AlbumCollection, AlbumRow, AlbumSort, ArtistRow, Facets, GlobalSearch, HomeRails, Page,
+    TrackQuery, TrackRow,
 };
 use crate::error::PrismError;
 use crate::metadata::scanner::{ScanConfig, ScanOutcome, ScanProgress, ScanTrigger};
@@ -521,15 +521,19 @@ pub async fn library_albums(
     state: State<'_, AppState>,
     text: Option<String>,
     artist_id: Option<String>,
+    genre: Option<String>,
+    collection: Option<AlbumCollection>,
     sort: Option<AlbumSort>,
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Page<AlbumRow>, PrismError> {
-    search::albums(
+    search::albums_filtered(
         state.pool(),
         text.as_deref(),
         artist_id.as_deref(),
-        sort.unwrap_or_default(),
+        genre.as_deref(),
+        collection,
+        sort,
         limit.unwrap_or(60),
         offset.unwrap_or(0),
     )
@@ -558,7 +562,7 @@ pub async fn library_album_detail(
         state.pool(),
         TrackQuery {
             album_id: Some(id),
-            sort: TrackQuery::default().sort,
+            sort: search::TrackSort::Album,
             limit: 500,
             include_missing: true,
             ..TrackQuery::default()
