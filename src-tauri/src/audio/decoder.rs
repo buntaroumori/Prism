@@ -887,8 +887,12 @@ impl GaplessPlayer {
                 continue;
             }
 
+            // Read the slice of the file that produces the output still
+            // missing, not one sized in the output domain.
+            let missing = frames.saturating_sub(chunk.samples.len() / self.output_channels);
+            let request = track.chain.input_frames_for(missing);
             let mut raw = Vec::new();
-            let read = track.source.read(&mut raw, frames)?;
+            let read = track.source.read(&mut raw, request)?;
 
             if read.frames > 0 {
                 let processed = process_block(track, &raw, self.output_channels)?;

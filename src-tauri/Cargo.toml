@@ -68,7 +68,6 @@ realfft.workspace = true
 
 # --- Library scanning & artwork -----------------------------------------------------
 walkdir.workspace = true
-rayon.workspace = true
 palette.workspace = true
 color-thief.workspace = true
 image.workspace = true

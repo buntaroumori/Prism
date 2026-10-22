@@ -3,7 +3,6 @@ import { useEffect, useState, type JSX } from "react";
 import { AudioLines, Maximize2 } from "lucide-react";
 
 import { CoverArt } from "@/components/ui/CoverArt";
-import { OutputSelector } from "@/components/player/OutputSelector";
 import { QualityBadge } from "@/components/player/QualityBadge";
 import { Scrubber } from "@/components/player/Scrubber";
 import { TransportControls } from "@/components/player/TransportControls";
@@ -33,6 +32,7 @@ export function PlayerBar(): JSX.Element {
   const index = usePlaybackStore((state) => state.index);
   const busy = usePlaybackStore((state) => state.busy);
   const pendingVolumeDb = usePlaybackStore((state) => state.pendingVolumeDb);
+  const committedVolumeDb = usePlaybackStore((state) => state.committedVolumeDb);
   const toggle = usePlaybackStore((state) => state.toggle);
   const next = usePlaybackStore((state) => state.next);
   const previous = usePlaybackStore((state) => state.previous);
@@ -74,7 +74,8 @@ export function PlayerBar(): JSX.Element {
   }, [trackId]);
 
   const position = playheadMs(status, tick);
-  const duration = resolveDuration(status, tick);
+  // The catalogue knows the length of the file the engine opened, even when the
+  // container did not declare one: a bar without a maximum cannot be dragged.
   const track = status?.track ?? null;
   const playing = status?.state === "playing" || status?.state === "buffering";
   const visible = track !== null;
@@ -90,10 +91,11 @@ export function PlayerBar(): JSX.Element {
   // a fallback for the instant between a track change and the store catching up.
   const entry =
     queue.find((item) => item.trackId === status?.track?.trackId) ?? queue[index] ?? null;
+  const duration = resolveDuration(status, tick, entry?.durationMs ?? null);
   const albumId = entry?.albumId ?? null;
   const artistId = entry?.artistId ?? null;
   const canSkip = queue.length > 0 && index + 1 < queue.length;
-  const volumeDb = pendingVolumeDb ?? status?.volumeDb ?? 0;
+  const volumeDb = pendingVolumeDb ?? committedVolumeDb ?? status?.volumeDb ?? 0;
 
   return (
     <AnimatePresence>
@@ -226,8 +228,6 @@ export function PlayerBar(): JSX.Element {
                   {status?.deviceName ?? "—"}
                 </span>
               </div>
-
-              <OutputSelector status={status} />
 
               <VolumeControl
                 volumeDb={volumeDb}

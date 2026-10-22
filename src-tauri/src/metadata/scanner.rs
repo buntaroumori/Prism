@@ -3,17 +3,18 @@
 //! ## Pipeline
 //!
 //! ```text
-//! walkdir ──▶ fingerprints ──▶ rayon parse ──▶ batch upsert ──▶ missing sweep
-//!  (I/O)        (DB read)       (CPU: lofty)     (WAL commit)      (SQL diff)
+//! walkdir ──▶ fingerprints ──▶ per-file parse ──▶ batch upsert ──▶ missing sweep
+//!  (I/O)        (DB read)       (CPU: lofty)        (WAL commit)       (SQL diff)
 //! ```
 //!
 //! * **Walk** is single-threaded: `readdir` on a warm page cache saturates at
 //!   ~250k entries/s, faster than the parser can consume, and one walker keeps
 //!   progress reporting and cancellation trivial.
-//! * **Parse** is CPU-bound (decompression + tag parsing) and runs on the rayon
-//!   pool, in chunks of [`PARSE_CHUNK`] files. Chunking bounds peak memory to a
-//!   few thousand [`TrackRecord`]s and gives the progress callback a natural
-//!   cadence without a lock on the hot path.
+//! * **Parse** is CPU-bound (decompression + tag parsing). Each file is one
+//!   task on the blocking pool, with at most `workers` in flight: a file that
+//!   panics or hangs costs that file and nothing else. There is no chunk
+//!   boundary to fail at, which is what used to stop an index at a fixed track
+//!   count.
 //! * **Write** happens on the tokio thread in batches of [`BATCH_ROWS`] inside
 //!   one transaction each. `SQLite` serialises writers, so a second writer
 //!   thread would only add contention.
@@ -31,7 +32,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use sqlx::SqlitePool;
@@ -47,22 +47,13 @@ use crate::error::PrismError;
 use crate::metadata::tags::{self, TrackTags};
 use crate::metadata::{AUDIO_EXTENSIONS, clean, is_audio_file, parse_year, sort_key};
 
-/// Files parsed per rayon chunk.
-pub const PARSE_CHUNK: usize = 512;
-
-/// Wall-clock budget for one chunk of [`PARSE_CHUNK`] files.
+/// Wall-clock budget for a single file.
 ///
 /// Tag readers are third-party parsers over arbitrary bytes: a truncated FLAC
-/// or a file on a flaky mount can block inside the reader forever. Without a
-/// budget the whole scan waits with it — which is exactly the "stops at 1024
-/// files and never advances" report: two 512-file chunks complete, the third
-/// wedges on one file, and the pipeline never reaches the next progress tick.
-/// 90 s is ~40× the slowest healthy chunk measured on a spinning disk.
-const PARSE_BUDGET: Duration = Duration::from_secs(90);
-
-/// Budget for a single file when a chunk had to be re-parsed one file at a
-/// time after a timeout.
-const PARSE_FILE_BUDGET: Duration = Duration::from_secs(15);
+/// or a file on a flaky mount can block inside the reader forever. A budget per
+/// file means the scan loses one file, not the library — 30 s is roughly two
+/// hundred times the slowest healthy file measured on a spinning disk.
+const PARSE_FILE_BUDGET: Duration = Duration::from_secs(30);
 
 /// Minimum interval between progress callbacks, in milliseconds.
 const PROGRESS_INTERVAL_MS: u64 = 200;
@@ -543,62 +534,84 @@ impl Scanner {
         }
 
         // ---- Audio files ---------------------------------------------------
-        for chunk in audio_entries.chunks(PARSE_CHUNK) {
+        //
+        // One task per file, at most `workers` in flight.
+        //
+        // The previous design parsed fixed chunks of 512 files inside a rayon
+        // fan-out and wrapped the chunk in a single timeout. That has two
+        // failure modes, and both were reported from the field: a single file
+        // whose tag reader *panics* aborts the whole chunk (and therefore the
+        // whole scan, always at the same file), and a single file whose reader
+        // *blocks* costs the entire chunk up to the budget and then re-parses
+        // all 512 files one by one. The library stopped at 1024 tracks — two
+        // completed chunks — and never recovered.
+        //
+        // Per-file isolation removes the cliff: a panic is recorded against its
+        // own file, a hang costs one file's budget, and the scan keeps going
+        // for as many files as the library has.
+        let workers = std::thread::available_parallelism()
+            .map_or(2, std::num::NonZeroUsize::get)
+            .clamp(2, 8);
+        let mut cursor = 0usize;
+        while cursor < audio_entries.len() {
             if cancelled.load(Ordering::SeqCst) {
                 break;
             }
-            let chunk_owned = chunk.to_vec();
-            let chunk_fingerprints = Arc::clone(&fingerprints);
-            let full = config.full;
-            let chunk_run = run_id.clone();
-            let task = tokio::task::spawn_blocking(move || {
-                chunk_owned
-                    .par_iter()
-                    .map(|entry| {
-                        (
-                            entry.clone(),
-                            parse_file(entry, &chunk_run, full, &chunk_fingerprints),
-                        )
-                    })
-                    .collect::<Vec<(WalkEntry, Result<Option<TrackRecord>, ScanErrorRecord>)>>()
-            });
+            let wave: Vec<WalkEntry> = audio_entries[cursor..]
+                .iter()
+                .take(workers)
+                .cloned()
+                .collect();
+            cursor += wave.len();
 
-            // A hung tag parser must never freeze the scan. On timeout the
-            // chunk is abandoned and re-parsed file by file with a much
-            // smaller budget, so exactly the offending file is recorded as
-            // failed and everything behind it still gets indexed.
-            let parsed = match tokio::time::timeout(PARSE_BUDGET, task).await {
-                Ok(result) => result.map_err(|error| {
-                    PrismError::Internal(format!("parser task panicked: {error}"))
-                })?,
-                Err(_elapsed) => {
-                    tracing::warn!(
-                        files = chunk.len(),
-                        timeout_s = PARSE_BUDGET.as_secs(),
-                        "tag parsing exceeded its budget; retrying file by file"
-                    );
-                    self.reparse_individually(
-                        chunk,
-                        &run_id,
-                        config.full,
-                        Arc::clone(&fingerprints),
-                        &mut errors,
-                        config.max_errors,
-                    )
-                    .await
+            let mut handles = Vec::with_capacity(wave.len());
+            for entry in wave {
+                let run = run_id.clone();
+                let index = Arc::clone(&fingerprints);
+                let full = config.full;
+                let label = entry.clone();
+                handles.push((
+                    entry,
+                    tokio::task::spawn_blocking(move || {
+                        parse_file_isolated(&label, &run, full, &index)
+                    }),
+                ));
+            }
+
+            // One deadline for the whole wave, not one per file: eight files
+            // that all hang must cost one budget, not eight.
+            let deadline = tokio::time::Instant::now() + PARSE_FILE_BUDGET;
+            for (entry, handle) in handles {
+                if cancelled.load(Ordering::SeqCst) {
+                    break;
                 }
-            };
+                let outcome = match tokio::time::timeout_at(deadline, handle).await {
+                    Ok(Ok(outcome)) => outcome,
+                    // The task itself panicked outside `parse_file_isolated`'s
+                    // own guard, or the runtime is shutting down.
+                    Ok(Err(error)) => Err(ScanErrorRecord {
+                        id: stable_id("err", &format!("{run_id}:join:{}", entry.path.display())),
+                        path: entry.path.to_string_lossy().into_owned(),
+                        code: "parser".to_string(),
+                        message: format!("the tag parser failed: {error}"),
+                    }),
+                    // A blocking read cannot be interrupted. The file keeps its
+                    // thread, the scan does not keep waiting for it.
+                    Err(_elapsed) => Err(ScanErrorRecord {
+                        id: stable_id("err", &format!("{run_id}:timeout:{}", entry.path.display())),
+                        path: entry.path.to_string_lossy().into_owned(),
+                        code: "parse_timeout".to_string(),
+                        message: format!(
+                            "reading tags took longer than {} s; the file was skipped",
+                            PARSE_FILE_BUDGET.as_secs()
+                        ),
+                    }),
+                };
 
-            for (entry, outcome) in parsed {
-                // `files_done` is advanced by `flush` with the number of rows
-                // actually written — a CUE sheet contributes one entry and many
-                // tracks, so counting entries here double-counted the library
-                // and made `files_indexed` disagree with the database.
                 match outcome {
                     Ok(Some(record)) => {
                         bytes = bytes.saturating_add(u64::try_from(record.file_size).unwrap_or(0));
                         seen.push(path_key(&record.path));
-                        progress.files_indexed = progress.files_indexed.saturating_add(1);
                         pending.push(record);
                         if pending.len() >= config.batch_size {
                             self.flush(&writer, &mut pending).await?;
@@ -615,11 +628,13 @@ impl Scanner {
                         }
                     }
                 }
+
+                progress.current_path = Some(entry.path.to_string_lossy().into_owned());
+                progress.bytes_read = bytes;
+                self.maybe_publish(&mut progress, on_progress, &mut last_emit, false);
             }
 
-            progress.files_indexed = progress
-                .files_indexed
-                .max(self.files_done.load(Ordering::SeqCst));
+            progress.files_indexed = self.files_done.load(Ordering::SeqCst);
             progress.bytes_read = bytes;
             self.maybe_publish(&mut progress, on_progress, &mut last_emit, false);
         }
@@ -701,64 +716,7 @@ impl Scanner {
         Ok(outcome)
     }
 
-    /// Re-parse one chunk file by file, each under its own budget.
-    ///
-    /// Only used after a chunk blew [`PARSE_BUDGET`]. The stuck file keeps its
-    /// worker thread (a blocking read cannot be interrupted), but the scan
-    /// itself moves on: that is the difference between "one broken file" and
-    /// "the library never finishes indexing".
-    async fn reparse_individually(
-        &self,
-        chunk: &[WalkEntry],
-        run_id: &str,
-        full: bool,
-        fingerprints: Arc<HashMap<String, FileFingerprint>>,
-        errors: &mut Vec<ScanErrorRecord>,
-        max_errors: usize,
-    ) -> Vec<(WalkEntry, Result<Option<TrackRecord>, ScanErrorRecord>)> {
-        let mut parsed = Vec::with_capacity(chunk.len());
-        for entry in chunk {
-            let owned = entry.clone();
-            let run = run_id.to_string();
-            let index = Arc::clone(&fingerprints);
-            let task = tokio::task::spawn_blocking(move || {
-                parse_file(&owned, &run, full, &index).map_err(|error| (error, owned))
-            });
-            match tokio::time::timeout(PARSE_FILE_BUDGET, task).await {
-                Ok(Ok(Ok(record))) => parsed.push((entry.clone(), Ok(record))),
-                Ok(Ok(Err((error, _)))) => parsed.push((entry.clone(), Err(error))),
-                Ok(Err(error)) => {
-                    parsed.push((
-                        entry.clone(),
-                        Err(ScanErrorRecord {
-                            id: stable_id("err", &format!("{run_id}:panic:{entry:?}")),
-                            path: entry.path.to_string_lossy().into_owned(),
-                            code: "parser".to_string(),
-                            message: format!("parser task panicked: {error}"),
-                        }),
-                    ));
-                }
-                Err(_elapsed) => {
-                    let record = ScanErrorRecord {
-                        id: stable_id("err", &format!("{run_id}:timeout:{entry:?}")),
-                        path: entry.path.to_string_lossy().into_owned(),
-                        code: "parse_timeout".to_string(),
-                        message: format!(
-                            "reading tags took longer than {} s; the file was skipped",
-                            PARSE_FILE_BUDGET.as_secs()
-                        ),
-                    };
-                    tracing::warn!(path = %record.path, "tag parser timed out on a file");
-                    if errors.len() < max_errors {
-                        errors.push(record.clone());
-                    }
-                    parsed.push((entry.clone(), Err(record)));
-                }
-            }
-        }
-        parsed
-    }
-
+    // (the per-file parser used to live here; it is now `parse_file_isolated`)
     /// Write `pending` (draining it) and account for the rows.
     async fn flush(
         &self,
@@ -866,6 +824,48 @@ impl Drop for RunningGuard {
     fn drop(&mut self) {
         self.flag.store(false, Ordering::SeqCst);
         self.cancel.store(false, Ordering::SeqCst);
+    }
+}
+
+/// Parse one file, surviving anything the tag reader can do.
+///
+/// `lofty` walks arbitrary bytes from disk: a truncated FLAC, a mislabelled
+/// container or a tag with a corrupt length can make it panic. A panic in a
+/// worker must cost exactly one file. `catch_unwind` turns it into a recorded
+/// error the UI can show, instead of unwinding into the scan task and taking
+/// the whole library with it — which is how a single bad file used to stop an
+/// index at a fixed track count, every time.
+fn parse_file_isolated(
+    entry: &WalkEntry,
+    run_id: &str,
+    full: bool,
+    fingerprints: &HashMap<String, FileFingerprint>,
+) -> Result<Option<TrackRecord>, ScanErrorRecord> {
+    // No hook juggling: the panic hook is process-global, and swapping it from
+    // several parsing threads at once would race. The default hook logs the
+    // panic, which is useful; what matters here is that the unwind stops at
+    // this file instead of tearing the scan down.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        parse_file(entry, run_id, full, fingerprints)
+    }));
+
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => {
+            let reason = payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown parser panic".to_string());
+            let record = ScanErrorRecord {
+                id: stable_id("err", &format!("{run_id}:panic:{}", entry.path.display())),
+                path: entry.path.to_string_lossy().into_owned(),
+                code: "parse_panic".to_string(),
+                message: format!("the tag parser failed on this file: {reason}"),
+            };
+            tracing::warn!(path = %record.path, %reason, "tag parser panicked on a file");
+            Err(record)
+        }
     }
 }
 

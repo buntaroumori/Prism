@@ -31,7 +31,9 @@ use crate::audio::AudioError;
 use crate::audio::analysis::Analyzer;
 use crate::audio::decoder::{GaplessPlayer, PlaybackConfig, TrackRequest, probe_format};
 use crate::audio::dsp::DspSettings;
-use crate::audio::engine::backend::{self, BackendKind, OpenedSink, OutputDevice, OutputMode};
+use crate::audio::engine::backend::{
+    self, BackendKind, OpenedSink, OutputDevice, OutputMode, RatePolicy,
+};
 use crate::audio::format::AudioFormat;
 
 /// Transport state as seen by the UI.
@@ -132,6 +134,8 @@ impl Default for EngineStatus {
 #[serde(rename_all = "camelCase")]
 pub struct EngineConfig {
     pub mode: OutputMode,
+    /// Whether the endpoint follows the record's rate or stays pinned to its own.
+    pub rate_policy: RatePolicy,
     pub device_id: Option<String>,
     /// Frames per device period. 512 at 48 kHz ≈ 10.7 ms.
     pub buffer_frames: u32,
@@ -148,6 +152,7 @@ impl Default for EngineConfig {
             // stays available through `player_set_output` but is never the
             // default: taking a device hostage is not a sane first impression.
             mode: OutputMode::Shared,
+            rate_policy: RatePolicy::MatchSource,
             device_id: None,
             buffer_frames: 512,
             dsp: DspSettings::default(),
@@ -203,6 +208,16 @@ enum Command {
     Seek {
         frame: u64,
     },
+    /// Seek by wall-clock position.
+    ///
+    /// The renderer knows what the listener sees on the clock, and nothing
+    /// about frame counting; converting here uses the *playhead's own* format,
+    /// which is the only rate that is certainly correct. A frontend-side
+    /// conversion with a guessed rate is how a seek lands tens of seconds away
+    /// on a 192 kHz file.
+    SeekMs {
+        position_ms: u64,
+    },
     SetDsp {
         dsp: DspSettings,
         restart: bool,
@@ -211,6 +226,9 @@ enum Command {
         mode: OutputMode,
         device: Option<String>,
         buffer_frames: u32,
+    },
+    SetRatePolicy {
+        policy: RatePolicy,
     },
     SetRamPlay {
         enabled: bool,
@@ -333,7 +351,11 @@ impl Engine {
             gain: 0.0,
             last_publish: Instant::now() - Duration::from_secs(1),
             negotiated_exclusive: false,
+            follows_source_rate: false,
             device_format: None,
+            carry: Vec::new(),
+            carry_boundary: None,
+            carry_finished: false,
         };
 
         let worker = std::thread::Builder::new()
@@ -394,6 +416,11 @@ impl Engine {
         self.send(Command::Seek { frame })
     }
 
+    /// Seek to a position in milliseconds of the loaded track.
+    pub fn seek_ms(&self, position_ms: u64) -> Result<(), AudioError> {
+        self.send(Command::SeekMs { position_ms })
+    }
+
     /// Set the software volume. Values are clamped to `-60..=0 dB`; anything
     /// above unity would need a limiter and would break bit-perfect output.
     pub fn set_volume_db(&self, db: f32) {
@@ -430,6 +457,14 @@ impl Engine {
             device,
             buffer_frames,
         })
+    }
+
+    /// Change whether the endpoint follows the record's sample rate.
+    ///
+    /// Takes effect immediately: the device is reopened at the current position,
+    /// which the supervisor guarantees to survive.
+    pub fn set_rate_policy(&self, policy: RatePolicy) -> Result<(), AudioError> {
+        self.send(Command::SetRatePolicy { policy })
     }
 
     pub fn set_ram_play(&self, enabled: bool) -> Result<(), AudioError> {
@@ -493,8 +528,25 @@ struct Supervisor {
     /// True when the open sink is an exclusive backend, which is what enables
     /// per-track rate renegotiation.
     negotiated_exclusive: bool,
+    /// True when the endpoint granted the *source* rate, which is what lets the
+    /// engine follow the record from track to track without asking the driver
+    /// the same question — and failing it — at every boundary.
+    follows_source_rate: bool,
     /// Endpoint configuration as reported by the driver for the open sink.
     device_format: Option<AudioFormat>,
+    /// Decoded frames the ring could not accept yet, interleaved.
+    ///
+    /// A resampler emits a whole input chunk at once — thousands of output
+    /// frames — while the ring only promises the free space it reported a
+    /// moment earlier. Pushing "as much as fits" and discarding the rest is
+    /// precisely what turned every sample-rate conversion into a machine-gun
+    /// crackle: the discarded tail is a discontinuity in the middle of a
+    /// waveform. Whatever does not fit waits here and is offered again.
+    carry: Vec<f32>,
+    /// Offset inside [`Self::carry`] where the next track begins, in frames.
+    carry_boundary: Option<u64>,
+    /// The queue ended inside [`Self::carry`].
+    carry_finished: bool,
 }
 
 impl Supervisor {
@@ -578,6 +630,13 @@ impl Supervisor {
                 Ok(())
             }
             Command::Seek { frame } => self.seek(frame),
+            Command::SeekMs { position_ms } => {
+                let frame = self
+                    .playhead
+                    .format
+                    .map_or(0, |format| format.ms_to_frames(position_ms));
+                self.seek(frame)
+            }
             Command::SetDsp { dsp, restart } => {
                 self.config.dsp = dsp;
                 if !restart {
@@ -626,6 +685,25 @@ impl Supervisor {
             }
             Command::SetRamPlay { enabled } => {
                 self.config.ram_play = enabled;
+                Ok(())
+            }
+            Command::SetRatePolicy { policy } => {
+                if self.config.rate_policy != policy {
+                    self.config.rate_policy = policy;
+                    if self.state != PlaybackState::Stopped {
+                        let position = self.position_frames();
+                        let index = self.index;
+                        let was_paused = self.state == PlaybackState::Paused;
+                        self.start_queue(index, false)?;
+                        self.seek(position)?;
+                        if was_paused {
+                            if let Some(output) = &mut self.output {
+                                let _ = output.sink.pause();
+                            }
+                            self.set_state(PlaybackState::Paused);
+                        }
+                    }
+                }
                 Ok(())
             }
             Command::Shutdown => Ok(()),
@@ -683,6 +761,8 @@ impl Supervisor {
         )?;
 
         self.negotiated_exclusive = opened.negotiation.kind.is_exclusive();
+        self.follows_source_rate =
+            opened.negotiation.format.sample_rate == source_format.sample_rate;
         // Ask the driver what the endpoint is actually configured to do right
         // now. This is the number the user compares against the OS panel, and
         // the only honest source for it.
@@ -776,6 +856,15 @@ impl Supervisor {
         if self.config.mode == OutputMode::Exclusive {
             return *source;
         }
+        if self.config.rate_policy == RatePolicy::MatchSource {
+            // Hand the record's own format to the backend. It answers with the
+            // closest configuration it can grant: on an endpoint free to run at
+            // the source rate that is an exact match and nothing resamples; on
+            // one pinned by the OS mixer it is the mix format, and the decoder
+            // converts — which is the same path as before, only requested
+            // honestly instead of assumed.
+            return *source;
+        }
         self.live_shared_format().unwrap_or(*source)
     }
 
@@ -819,23 +908,52 @@ impl Supervisor {
         Ok(())
     }
 
-    /// Produce at most one period of audio and push it.
+    /// Produce up to one period of audio and hand it to the ring.
     ///
-    /// Returns `false` when the ring is full or the queue ended.
+    /// Returns `false` when there is nothing to do right now: the ring is full,
+    /// the device has not made room, or the queue has been played to its end.
+    ///
+    /// Blocks are never truncated to fit. The decoder answers in whole
+    /// resampler chunks, which are several times a device period whenever the
+    /// file rate differs from the endpoint rate, so the ring is frequently
+    /// smaller than the block in hand. The remainder is kept in `carry` and
+    /// pushed first on the next call — the alternative, dropping it, is a click
+    /// per block, and it is exactly what made 44.1 kHz material sound broken on
+    /// a 192 kHz endpoint while 192 kHz files sounded fine.
     fn fill_once(&mut self) -> Result<bool, AudioError> {
-        let Some((period, channels)) = self.output.as_ref().map(|output| {
+        let Some((period, channels, free)) = self.output.as_ref().map(|output| {
             (
                 output.negotiation.period_frames as usize,
-                output.negotiation.format.channels as usize,
+                usize::from(output.negotiation.format.channels),
+                output.producer.free_frames(),
             )
         }) else {
             return Ok(false);
         };
-        if self
-            .output
-            .as_ref()
-            .is_none_or(|output| output.producer.free_frames() < period)
-        {
+
+        // 1. Anything left over from the previous block goes first, in order.
+        if !self.carry.is_empty() {
+            if free == 0 {
+                return Ok(false);
+            }
+            let mut block = std::mem::take(&mut self.carry);
+            let boundary = self.carry_boundary.take();
+            let finished = self.carry_finished;
+            let before = self.pushed;
+            let (accepted, rest) = self.push_block(&mut block, channels, free);
+            if let Some(offset) = boundary {
+                if offset <= accepted {
+                    self.schedule_boundary(before + offset);
+                } else {
+                    self.carry_boundary = Some(offset - accepted);
+                }
+            }
+            self.carry = rest;
+            self.carry_finished = finished;
+            return Ok(true);
+        }
+
+        if free < period {
             return Ok(false);
         }
 
@@ -856,30 +974,52 @@ impl Supervisor {
             if let Some(offset) = boundary {
                 samples.truncate(offset as usize * channels);
             }
-            self.push(&mut samples, channels);
+            let (_, rest) = self.push_block(&mut samples, channels, free);
+            debug_assert!(rest.is_empty(), "renegotiation keeps at most one period");
+            self.carry.clear();
+            self.carry_boundary = None;
+            self.carry_finished = false;
             self.index = (self.index + 1).min(self.queue.len().saturating_sub(1));
             self.renegotiate()?;
             return Ok(false);
         }
 
-        let frames_before = self.pushed;
-        let written = self.push(&mut samples, channels);
+        let before = self.pushed;
+        let (accepted, rest) = self.push_block(&mut samples, channels, free);
         if let Some(offset) = boundary {
-            // Clamp to what was really written so an overrun cannot move the
-            // boundary past the end of the block.
-            self.schedule_boundary(frames_before + offset.min(written as u64));
+            if offset <= accepted {
+                // Clamp to what was really written so an overrun cannot move
+                // the boundary past the end of the block.
+                self.schedule_boundary(before + offset);
+            } else {
+                self.carry_boundary = Some(offset - accepted);
+            }
         }
 
-        if chunk.ended.is_some() && self.player.as_ref().is_some_and(GaplessPlayer::is_finished) {
+        let finished =
+            chunk.ended.is_some() && self.player.as_ref().is_some_and(GaplessPlayer::is_finished);
+        self.carry = rest;
+        self.carry_finished = finished;
+        if finished && self.carry.is_empty() {
             return Ok(false);
         }
         Ok(true)
     }
 
-    /// Apply the volume ramp and hand the block to the ring.
+    /// Apply the volume ramp and hand `samples` to the ring, up to
+    /// `capacity_frames`.
     ///
-    /// Returns the number of frames accepted.
-    fn push(&mut self, samples: &mut [f32], channels: usize) -> usize {
+    /// Returns the frames accepted and — when the block did not fit — the
+    /// remainder as an owned interleaved buffer, ready to be carried.
+    fn push_block(
+        &mut self,
+        samples: &mut [f32],
+        channels: usize,
+        capacity_frames: usize,
+    ) -> (u64, Vec<f32>) {
+        if channels == 0 || samples.is_empty() {
+            return (0, Vec::new());
+        }
         let target = self.target_gain();
         apply_gain(samples, channels, &mut self.gain, target);
 
@@ -893,18 +1033,25 @@ impl Supervisor {
         }
 
         let Some(output) = self.output.as_mut() else {
-            return 0;
+            return (0, Vec::new());
         };
         let frames = samples.len() / channels;
-        let written = output.producer.push_or_drop(samples);
+        let take = frames.min(capacity_frames);
+        let written = output.producer.push_partial(&samples[..take * channels]);
         self.pushed = self.pushed.saturating_add(written as u64);
-        if written < frames {
+        if written < take {
+            output.stats.overruns.fetch_add(1, Ordering::Relaxed);
             tracing::warn!(
-                dropped = frames - written,
-                "ring overrun, dropping frames to resynchronise"
+                dropped = take - written,
+                "the ring reported free space it could not honour"
             );
         }
-        written
+        let rest = if written < frames {
+            samples[written * channels..].to_vec()
+        } else {
+            Vec::new()
+        };
+        (written as u64, rest)
     }
 
     fn target_gain(&self) -> f32 {
@@ -936,9 +1083,6 @@ impl Supervisor {
     }
 
     fn should_renegotiate(&self) -> bool {
-        if !self.negotiated_exclusive {
-            return false;
-        }
         let Some(player) = self.player.as_ref() else {
             return false;
         };
@@ -946,9 +1090,21 @@ impl Supervisor {
             return false;
         };
         let current = output.negotiation.format;
-        next.sample_rate != current.sample_rate
-            || next.channels != current.channels
-            || next.sample_format != current.sample_format
+        if self.negotiated_exclusive {
+            // An exclusive stream *is* the record's format: anything that
+            // differs has to be reopened or it would be resampled.
+            return next.sample_rate != current.sample_rate
+                || next.channels != current.channels
+                || next.sample_format != current.sample_format;
+        }
+        // In shared mode only the rate is worth reopening for, and only when
+        // this endpoint has already proved it can follow one. Without that
+        // proof (Windows shared mode is pinned to the system mix format) every
+        // boundary would reopen the device and be granted the same format,
+        // which turns a gapless album into a stutter.
+        self.config.rate_policy == RatePolicy::MatchSource
+            && self.follows_source_rate
+            && next.sample_rate != current.sample_rate
     }
 
     fn renegotiate(&mut self) -> Result<(), AudioError> {
@@ -981,7 +1137,10 @@ impl Supervisor {
 
         // Everything has been decoded *and* played: stop cleanly instead of
         // letting the ring starve into an underrun storm.
-        if self.player.as_ref().is_some_and(GaplessPlayer::is_finished) && self.backlog() == 0 {
+        if self.player.as_ref().is_some_and(GaplessPlayer::is_finished)
+            && self.backlog() == 0
+            && self.carry.is_empty()
+        {
             self.teardown();
             return Ok(());
         }
@@ -1155,6 +1314,9 @@ impl Supervisor {
 
     /// Stop the sink and the decoder but keep the queue and the playhead.
     fn teardown_playback(&mut self) {
+        self.carry.clear();
+        self.carry_boundary = None;
+        self.carry_finished = false;
         if let Some(mut output) = self.output.take() {
             output.refill.close();
             output.sink.stop();
@@ -1204,8 +1366,14 @@ impl Supervisor {
             None => (None, None, None, 0, 0, 0),
         };
 
+        // The length of the first track is not known when the queue starts —
+        // the player has not opened the file yet — so `Playhead::reset` leaves
+        // it empty and nothing ever filled it in. Every snapshot therefore said
+        // "length unknown" for the whole of the first track, and the bar, which
+        // needs a maximum to be draggable, stayed disabled at 0:00.
+        let duration = self.current_duration();
         let track = self.playhead.request.as_ref().map(|request| NowPlaying {
-            duration_frames: self.playhead.duration,
+            duration_frames: duration,
             source_format: self.playhead.format,
             ..NowPlaying::from(request)
         });
@@ -1214,7 +1382,7 @@ impl Supervisor {
         status.state = self.state;
         status.track = track;
         status.position_frames = self.position_frames();
-        status.duration_frames = self.playhead.duration;
+        status.duration_frames = duration;
         status.source_format = self.playhead.format;
         status.output_format = output_format;
         status.device_format = self.device_format;
@@ -1232,6 +1400,19 @@ impl Supervisor {
         status.overruns = overruns;
         status.queue_index = self.index;
         status.queue_len = self.queue.len();
+    }
+
+    /// Length of the track whose playhead is live, in source frames.
+    ///
+    /// Read from the playhead when it knows, and otherwise asked of the player
+    /// once and cached. While a boundary is pending the player has already
+    /// moved on to the *next* file, so its answer belongs to that track and
+    /// must not be borrowed by this one.
+    fn current_duration(&mut self) -> Option<u64> {
+        if self.playhead.duration.is_none() && self.playhead.pending.is_none() {
+            self.playhead.duration = self.player.as_ref().and_then(GaplessPlayer::current_total);
+        }
+        self.playhead.duration
     }
 
     fn emit(&self, event: EngineEvent) {

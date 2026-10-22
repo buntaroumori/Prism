@@ -3,7 +3,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { toUiError, type UiError } from "@/lib/errors";
 import { playerApi } from "@/lib/ipc";
-import type { AudioFormat, OutputDevice, OutputMode } from "@/types/ipc";
+import type { AudioFormat, OutputDevice, OutputMode, RatePolicy } from "@/types/ipc";
 
 /** Buffer sizes exposed in the UI; the engine accepts 32–8192 frames. */
 export const BUFFER_CHOICES = [64, 128, 256, 512, 1024, 2048] as const;
@@ -15,6 +15,14 @@ interface OutputStore {
    * field stays because `player_set_output` speaks in modes.
    */
   mode: OutputMode;
+  /**
+   * Whether the endpoint follows the record's rate.
+   *
+   * Persisted like the device, and applied to the engine on every boot: a
+   * preference that only reaches the engine when its panel is opened is not a
+   * preference, it is a decoration.
+   */
+  ratePolicy: RatePolicy;
   deviceId: string | null;
   bufferFrames: number;
   devices: OutputDevice[];
@@ -27,6 +35,9 @@ interface OutputStore {
   loadDeviceFormat: () => Promise<void>;
   setDevice: (deviceId: string | null) => Promise<void>;
   setBufferFrames: (frames: number) => Promise<void>;
+  setRatePolicy: (policy: RatePolicy) => Promise<void>;
+  /** Push the persisted configuration into the engine, exactly once per boot. */
+  applyStored: () => Promise<void>;
   clearError: () => void;
 }
 
@@ -42,6 +53,7 @@ export const useOutputStore = create<OutputStore>()(
   persist(
     (set, get) => ({
       mode: "shared",
+      ratePolicy: "matchSource",
       deviceId: null,
       bufferFrames: 512,
       devices: [],
@@ -93,21 +105,43 @@ export const useOutputStore = create<OutputStore>()(
         }
       },
 
+      setRatePolicy: async (ratePolicy) => {
+        try {
+          await playerApi.setRatePolicy(ratePolicy);
+          set({ ratePolicy, error: null });
+        } catch (cause) {
+          set({ error: toUiError(cause) });
+        }
+      },
+
+      applyStored: async () => {
+        // The engine is the one that must end up with the persisted choices:
+        // the store is just where they are remembered between runs.
+        try {
+          await playerApi.setRatePolicy(get().ratePolicy);
+          await playerApi.setOutput(get().mode, get().deviceId, get().bufferFrames);
+          set({ error: null });
+        } catch (cause) {
+          set({ error: toUiError(cause) });
+        }
+      },
+
       clearError: () => {
         set({ error: null });
       },
     }),
     {
       name: "prism.output.preferences",
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       // `mode` is not persisted: it is a constant of the product, and a stored
       // `"auto"` from an older build would quietly reintroduce exclusive mode.
       partialize: (state) => ({
         deviceId: state.deviceId,
         bufferFrames: state.bufferFrames,
+        ratePolicy: state.ratePolicy,
       }),
-      migrate: () => ({ deviceId: null, bufferFrames: 512 }),
+      migrate: () => ({ deviceId: null, bufferFrames: 512, ratePolicy: "matchSource" }),
     },
   ),
 );

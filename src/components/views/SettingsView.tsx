@@ -64,6 +64,8 @@ function OutputSection(): JSX.Element {
   const deviceFormat = useOutputStore((state) => state.deviceFormat);
   const setDevice = useOutputStore((state) => state.setDevice);
   const setBufferFrames = useOutputStore((state) => state.setBufferFrames);
+  const ratePolicy = useOutputStore((state) => state.ratePolicy);
+  const setRatePolicy = useOutputStore((state) => state.setRatePolicy);
   const loadDevices = useOutputStore((state) => state.loadDevices);
   const status = usePlaybackStore((state) => state.status);
 
@@ -77,7 +79,7 @@ function OutputSection(): JSX.Element {
   return (
     <Section
       title="Output"
-      description="Prism plays through the system mixer, so it coexists with every other application and the endpoint never disappears from under one of them. The engine reads the device's live configuration at open time and matches it exactly; the rate shown below is the one the driver reports, not an assumption."
+      description="Prism plays through the system mixer, so it coexists with every other application and the endpoint never disappears from under one of them. What the driver actually granted is read back at open time and shown below; whether the endpoint is allowed to follow the record's rate is the choice underneath."
     >
       <Row
         label="Output device"
@@ -123,6 +125,28 @@ function OutputSection(): JSX.Element {
             {live === null ? "" : `${String(live.channels)} ch`}
           </span>
         </div>
+      </Row>
+
+      <Row
+        label="Sample rate"
+        hint={
+          ratePolicy === "matchSource"
+            ? "The endpoint is asked for each track's own rate, so a 44.1 kHz record plays at 44.1 kHz and nothing converts it. When the operating system pins the endpoint to one format, the engine detects the refusal and converts instead — the request is never assumed to be granted."
+            : "The endpoint keeps the rate the driver reports and every track is converted to it. One clock for the whole session, at the cost of a resampling stage on everything that differs."
+        }
+      >
+        <Segmented
+          label="Sample rate policy"
+          layoutId="settings-rate-policy"
+          value={ratePolicy}
+          onChange={(next) => {
+            void setRatePolicy(next === "fixed" ? "fixed" : "matchSource");
+          }}
+          options={[
+            { value: "matchSource", label: "Follow the record" },
+            { value: "fixed", label: "Device rate" },
+          ]}
+        />
       </Row>
 
       <Row label="Buffer" hint={bufferHint(bufferFrames, latencyMs)}>
@@ -627,6 +651,8 @@ function AppearanceSection(): JSX.Element {
   const showHomeStats = useUiStore((state) => state.showHomeStats);
   const showSpectrum = useUiStore((state) => state.showSpectrum);
   const setAppearance = useUiStore((state) => state.setAppearance);
+  const effects = useUiStore((state) => state.effects);
+  const measured = useUiStore((state) => state.measuredEffects);
   const reset = useUiStore((state) => state.resetAppearance);
 
   return (
@@ -693,6 +719,33 @@ function AppearanceSection(): JSX.Element {
             { value: "off", label: "Off" },
             { value: "subtle", label: "Subtle" },
             { value: "full", label: "Full" },
+          ]}
+        />
+      </Row>
+
+      <Row
+        label="Visual effects"
+        hint={
+          effects === "auto"
+            ? `Automatic. The shell times its own frames once at start-up and drops the layers that need a real GPU when the compositor cannot keep up${measured === "reduced" ? " — which is what happened on this machine, so the blurred orbs and backdrop filters are off." : "."}`
+            : effects === "reduced"
+              ? "Reduced. No backdrop filters, no drifting orbs, no grain: the interface paints flat and stays responsive on software-rendered WebKit."
+              : "Full. Blurred ambience and frosted surfaces everywhere, at the cost of a GPU-backed compositor."
+        }
+      >
+        <Segmented
+          label="Visual effects"
+          layoutId="settings-effects"
+          value={effects}
+          onChange={(next) => {
+            setAppearance({
+              effects: next === "full" ? "full" : next === "reduced" ? "reduced" : "auto",
+            });
+          }}
+          options={[
+            { value: "auto", label: "Auto" },
+            { value: "full", label: "Full" },
+            { value: "reduced", label: "Reduced" },
           ]}
         />
       </Row>

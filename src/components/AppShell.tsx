@@ -15,9 +15,11 @@ import { SettingsView } from "@/components/views/SettingsView";
 import { SystemView } from "@/components/views/SystemView";
 import { useAlbumCoverKey } from "@/hooks/useAlbumCoverKey";
 import { useArtworkPalette } from "@/hooks/useArtworkPalette";
+import { useFrameBudget } from "@/hooks/useFrameBudget";
 import { usePlayerBridge } from "@/hooks/usePlayerBridge";
 import { useScanEvents } from "@/hooks/useScanEvents";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { useOutputStore } from "@/stores/outputStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore, type ShellRoute } from "@/stores/uiStore";
 import type { CoverPalette } from "@/types/ipc";
@@ -33,7 +35,11 @@ import type { CoverPalette } from "@/types/ipc";
 export function AppShell(): JSX.Element {
   usePlayerBridge();
   useScanEvents();
+  // Measures its own frame pacing and, on a compositor that cannot keep up,
+  // sheds the layers that need a real GPU. See `useFrameBudget`.
+  useFrameBudget();
   const loadOverview = useLibraryStore((state) => state.loadOverview);
+  const applyStoredOutput = useOutputStore((state) => state.applyStored);
   const libraryError = useLibraryStore((state) => state.error);
   const playbackError = usePlaybackStore((state) => state.error);
   const clearLibraryError = useLibraryStore((state) => state.clearError);
@@ -45,6 +51,13 @@ export function AppShell(): JSX.Element {
     void loadOverview();
   }, [loadOverview]);
 
+  // The device, buffer and rate policy are remembered between runs, so they
+  // have to be handed to the engine once the shell is alive — otherwise the
+  // panel shows a choice the engine never received.
+  useEffect(() => {
+    void applyStoredOutput();
+  }, [applyStoredOutput]);
+
   const route = useUiStore((state) => state.route);
   const params = useUiStore((state) => state.params);
   const intensity = useUiStore((state) => state.ambientIntensity);
@@ -53,6 +66,10 @@ export function AppShell(): JSX.Element {
   const glassOpacity = useUiStore((state) => state.glassOpacity);
   const corners = useUiStore((state) => state.corners);
   const density = useUiStore((state) => state.density);
+  const measuredEffects = useUiStore((state) => state.measuredEffects);
+  const effectsPreference = useUiStore((state) => state.effects);
+  const resolvedEffects =
+    effectsPreference === "auto" ? (measuredEffects ?? "full") : effectsPreference;
 
   // The palette follows the *album* currently loaded, so a queue of tracks from
   // one record does not re-tint the window on every skip.
@@ -74,8 +91,13 @@ export function AppShell(): JSX.Element {
       style={tokens}
       data-route={route}
       data-density={density}
+      data-effects={resolvedEffects}
     >
-      <AmbientBackground palette={palette} intensity={intensity} />
+      <AmbientBackground
+        palette={palette}
+        intensity={intensity}
+        reduced={resolvedEffects === "reduced"}
+      />
 
       <Sidebar />
 

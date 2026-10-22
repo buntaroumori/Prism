@@ -54,6 +54,12 @@ jobs:
       - name: Boot smoke test
         run: node scripts/smoke-ui.mjs --no-build
 
+      # The smoke test proves the bundle mounts; this drives it. Every
+      # assertion in it is a defect that shipped once — dead album tiles, a
+      # frozen playhead, a volume rail that snaps back.
+      - name: Interaction behaviour
+        run: node scripts/ui-behaviour.mjs --no-build
+
   database:
     name: SQLite schema & FTS5
     runs-on: ubuntu-24.04

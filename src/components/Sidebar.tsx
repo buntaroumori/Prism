@@ -88,7 +88,7 @@ export function Sidebar(): JSX.Element {
   return (
     <aside
       className={cn(
-        "relative z-20 flex h-full shrink-0 flex-col border-r border-white/[0.07] bg-oled-900/55 backdrop-blur-3xl",
+        "sidebar-glass relative z-20 flex h-full shrink-0 flex-col border-r border-white/[0.07] bg-oled-900/55 backdrop-blur-3xl",
         "transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
         collapsed ? "w-[76px]" : "w-[236px]",
       )}

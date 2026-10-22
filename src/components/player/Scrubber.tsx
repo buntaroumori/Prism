@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type JSX } from "react";
 
 import { Slider } from "@/components/ui/Slider";
+import { useSmoothPlayhead } from "@/hooks/useSmoothPlayhead";
 import { formatPosition } from "@/lib/format";
 import type { PlayerStatus } from "@/types/ipc";
 
@@ -33,8 +34,16 @@ export function Scrubber({ status, positionMs, durationMs, onSeek }: ScrubberPro
   const [held, setHeld] = useState<number | null>(null);
 
   const known = durationMs !== null && durationMs > 0;
-  const target = preview ?? held ?? positionMs;
-  const value = Math.min(target, known ? durationMs : 0);
+  const playing = status.state === "playing" || status.state === "buffering";
+  // The engine's last word is an anchor; between anchors the clock keeps the
+  // bar moving. Without this the position sits still whenever a tick is late,
+  // which is exactly the "it does not advance" report.
+  const live = useSmoothPlayhead(positionMs, playing, known ? durationMs : null);
+  const target = preview ?? held ?? live;
+  // Never clamp an unknown length to zero: that pinned both the label and the
+  // fill at the start of the track for the whole session. With no length the
+  // bar simply shows how far it has got.
+  const value = known ? Math.min(target, durationMs) : target;
   const waiting = status.state === "buffering";
 
   // Drop the held target as soon as the engine has caught up (or the hold

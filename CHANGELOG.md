@@ -8,6 +8,63 @@ traceable to the delivery document of the phase that introduced it (`docs/PHASE-
 
 _No unreleased changes._
 
+## [0.1.3] — 2026-10-22
+
+A defect-driven release. Nothing new to learn: every change here answers something
+that was reported from a listening session, and each one is covered by a test that
+would have caught it.
+
+### Fixed
+
+- **Crackle on Windows whenever the record's rate differs from the device's.** The decoder
+  handed the playback ring blocks sized in the _output_ domain; a block larger than the ring's
+  free space was silently truncated, so every buffer carried a hole. At 44.1 kHz into a 192 kHz
+  endpoint that is a discontinuity every ~90 ms — dense, machine-gun crackle — while 192 kHz
+  files, which need no conversion, played cleanly. The pump now carries the remainder to the
+  next fill, reads the input proportional to the frames still missing
+  (`DspChain::input_frames_for`), converts in 256-frame chunks instead of 1024, and the device
+  period no longer drops below 5 ms. A regression test pins it: a 3-second 44.1 kHz track played
+  into a loopback pinned at 88.2 kHz must reach the device whole (`a_resampled_track_reaches_the_device_whole`),
+  and a sine survives any input chunking without a step (`a_tone_survives_any_chunking_without_a_step`).
+- **The player bar never advanced and could not be dragged.** The engine published
+  `durationFrames: null` for the whole first track: the length was read once, before the decoder
+  had opened the file, and never again. The bar's maximum was therefore unknown, which disabled
+  the seek control and clamped the label to 0:00. The snapshot now asks the decoder for the
+  length on every publish (`EngineStatus::current_duration`), the UI falls back to the catalogue's
+  duration, and the position is extrapolated from the last tick with the wall clock so a late or
+  missing tick can never freeze the bar.
+- **Clicking a cover or an artist name on Home did nothing.** The rails capture the pointer on
+  press to implement drag-to-scroll; pointer capture retargets the following `click` to the rail,
+  so the tile never saw it. Capture now begins with the movement, after the 4-pixel threshold,
+  and a press that does not move is a click.
+- **The volume rail could be lowered but not slid.** Every commit cleared the optimistic value
+  before the engine's new level had been read back, so the control redrew at the previous level
+  and looked as if it refused the gesture. The committed level is now held until the engine
+  reports it, and every transport command refreshes the snapshot.
+- **Scanning stopped at a fixed count and then refused to run again.** Parsing is now one task
+  per file under a single deadline per wave, with the tag reader isolated behind `catch_unwind`:
+  a file that panics is recorded against itself, a file that blocks costs one budget instead of a
+  whole chunk, and the scan continues for as long as the library is long. Cancel is honoured
+  between files and the `running` flag is released through a guard, so the next scan starts
+  immediately.
+- **Settings never reached the engine.** The device, buffer and rate policy are persisted in the
+  renderer; nothing applied them at boot. They are now pushed to the engine once the shell mounts.
+
+### Added
+
+- **Sample-rate policy** (`player_set_rate_policy`, Settings → Output): _Follow the record_ asks
+  the endpoint for each track's own rate and renegotiates at a boundary when the device has
+  proved it can follow; _Device rate_ pins the endpoint and converts everything. When the OS
+  refuses — Windows shared mode is pinned to the mix format — the engine detects the refusal,
+  keeps converting, and does not reopen the device at every track.
+- **Automatic effects budget** (`useFrameBudget`): the shell times its own frame pacing once and
+  drops the layers that need a real GPU — blurred orbs, backdrop filters, grain — when the
+  compositor cannot keep up. Overridable in Settings → Appearance. This is aimed at the Linux
+  partition that composites WebKit in software.
+- **Interaction behaviour test** (`scripts/ui-behaviour.mjs`, in CI after the boot smoke):
+  drives the production bundle with a pointer — tiles, artist links, seek drag, volume drag,
+  and a track whose container declares no length.
+
 ## [0.1.2] — 2026-10-21
 
 A product and accuracy release. `0.1.1` proved the pipelines and the window; this

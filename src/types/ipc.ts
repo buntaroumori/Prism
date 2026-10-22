@@ -451,6 +451,16 @@ export type BackendKind = z.infer<typeof BackendKindSchema>;
 export const OutputModeSchema = z.enum(["auto", "exclusive", "shared", "asio"]);
 export type OutputMode = z.infer<typeof OutputModeSchema>;
 
+/**
+ * Whether the endpoint follows the record's sample rate.
+ *
+ * `matchSource` asks the device for the track's own rate — the endpoint
+ * reconfigures and nothing is resampled. `fixed` keeps the endpoint at its
+ * configured rate and converts every track to it.
+ */
+export const RatePolicySchema = z.enum(["matchSource", "fixed"]);
+export type RatePolicy = z.infer<typeof RatePolicySchema>;
+
 /** Full engine snapshot returned by `player_status`. */
 export const PlayerStatusSchema = z.object({
   state: PlaybackStateSchema,

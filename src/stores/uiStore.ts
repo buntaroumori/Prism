@@ -29,6 +29,17 @@ export type Density = "comfortable" | "compact";
 /** Accent policy: follow the artwork, or pin a colour. */
 export type AccentSource = "artwork" | "fixed";
 
+/**
+ * How much of the interface may cost the compositor.
+ *
+ * `auto` lets the shell measure its own frame pacing and decide; `full` and
+ * `reduced` override it. `reduced` keeps the palette, the covers and the
+ * typography and drops the layers that need a real GPU: the drifting blurred
+ * orbs, the backdrop filters and the grain overlay.
+ */
+export type EffectsLevel = "auto" | "full" | "reduced";
+export type ResolvedEffects = "full" | "reduced";
+
 interface UiState {
   sidebarCollapsed: boolean;
   route: ShellRoute;
@@ -51,6 +62,9 @@ interface UiState {
   showRailArrows: boolean;
   showHomeStats: boolean;
   showSpectrum: boolean;
+  effects: EffectsLevel;
+  /** Result of the one-shot frame-pacing probe; `null` until it has run. */
+  measuredEffects: ResolvedEffects | null;
 
   /* ------------------------------------------------------------ navigation */
   toggleSidebar: () => void;
@@ -60,6 +74,9 @@ interface UiState {
   setRoute: (route: ShellRoute) => void;
   back: () => void;
 
+  setMeasuredEffects: (effects: ResolvedEffects) => void;
+  /** What the shell should actually render, given the preference and the probe. */
+  resolvedEffects: () => ResolvedEffects;
   setAmbientIntensity: (intensity: AmbientIntensity) => void;
   setPaletteKey: (key: string | null) => void;
   setAppearance: (patch: Partial<AppearanceState>) => void;
@@ -80,6 +97,7 @@ export type AppearanceState = Pick<
   | "showRailArrows"
   | "showHomeStats"
   | "showSpectrum"
+  | "effects"
 >;
 
 const DEFAULT_APPEARANCE: AppearanceState = {
@@ -94,6 +112,7 @@ const DEFAULT_APPEARANCE: AppearanceState = {
   showRailArrows: true,
   showHomeStats: true,
   showSpectrum: true,
+  effects: "auto",
 };
 
 /** Bounds the slider can produce; the store clamps every write. */
@@ -116,7 +135,22 @@ export const useUiStore = create<UiState>()(
       route: "home",
       params: { albumId: null, artistId: null },
       paletteKey: null,
+      measuredEffects: null,
       ...DEFAULT_APPEARANCE,
+
+      setMeasuredEffects: (measuredEffects) => {
+        set({ measuredEffects });
+      },
+
+      resolvedEffects: () => {
+        const { effects, measuredEffects } = get();
+        if (effects !== "auto") {
+          return effects;
+        }
+        // Before the probe has run, assume the machine is capable: the probe
+        // exists to correct a slow compositor, not to punish every start-up.
+        return measuredEffects ?? "full";
+      },
 
       toggleSidebar: () => {
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed }));
@@ -187,7 +221,7 @@ export const useUiStore = create<UiState>()(
     }),
     {
       name: "prism.shell.preferences",
-      version: 3,
+      version: 4,
       storage: createJSONStorage(() => localStorage),
       partialize: (state): AppearanceState & { sidebarCollapsed: boolean } => ({
         sidebarCollapsed: state.sidebarCollapsed,
@@ -202,14 +236,16 @@ export const useUiStore = create<UiState>()(
         showRailArrows: state.showRailArrows,
         showHomeStats: state.showHomeStats,
         showSpectrum: state.showSpectrum,
+        effects: state.effects,
       }),
-      // v1 stored `activeSection`; v2 introduced the router; v3 splits the
-      // appearance knobs out of the ambient switch and adds the mosaic size.
+      // v1 stored `activeSection`; v2 introduced the router; v3 split the
+      // appearance knobs out of the ambient switch and added the mosaic size;
+      // v4 lets the compositor budget be chosen or measured.
       migrate: (persisted, version) => {
         if (version < 2) {
           return { ...DEFAULT_APPEARANCE, sidebarCollapsed: false };
         }
-        if (version < 3) {
+        if (version < 4) {
           return { ...DEFAULT_APPEARANCE, ...(persisted as object) };
         }
         return persisted;

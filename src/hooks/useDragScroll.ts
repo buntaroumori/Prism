@@ -32,6 +32,7 @@ interface DragScroll {
  */
 export function useDragScroll(): DragScroll {
   const ref = useRef<HTMLDivElement | null>(null);
+  const pressed = useRef(false);
   const dragging = useRef(false);
   /** Set by `finish` when the gesture moved: the click that follows is fake. */
   const suppressClick = useRef(false);
@@ -106,8 +107,16 @@ export function useDragScroll(): DragScroll {
         return;
       }
       stopInertia();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      dragging.current = true;
+      // The pointer is deliberately *not* captured here.
+      //
+      // Capturing on press retargets the subsequent `click` to the capturing
+      // element — the rail — so pressing a card and releasing it over the same
+      // card delivered the click to the rail instead of the button inside it.
+      // Every tile in every rail became inert: no album, no artist, nothing.
+      // Capture starts with the movement, below, where the gesture really
+      // becomes a drag.
+      dragging.current = false;
+      pressed.current = true;
       suppressClick.current = false;
       moved.current = 0;
       startX.current = event.clientX;
@@ -121,10 +130,19 @@ export function useDragScroll(): DragScroll {
 
   const onPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const node = ref.current;
-    if (!dragging.current || node === null) {
+    if (!pressed.current || node === null) {
       return;
     }
     const delta = event.clientX - startX.current;
+    if (!dragging.current) {
+      if (Math.abs(delta) <= 4) {
+        return;
+      }
+      // A real drag: from here the gesture owns the pointer, and the click it
+      // produces on release must be swallowed.
+      dragging.current = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
     if (Math.abs(delta) > Math.abs(moved.current)) {
       moved.current = delta;
     }
@@ -138,14 +156,14 @@ export function useDragScroll(): DragScroll {
 
   const finish = useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragging.current) {
+      if (!pressed.current) {
         return;
       }
+      pressed.current = false;
+      // Only a gesture that actually moved suppresses the click; a plain press
+      // and release must reach the card, or the rail is decoration.
+      suppressClick.current = dragging.current && Math.abs(moved.current) > 4;
       dragging.current = false;
-      // A press that moved is a drag. The browser still delivers a `click` to
-      // whatever card sits under the pointer on release, which made every
-      // dragged rail navigate into an album.
-      suppressClick.current = Math.abs(moved.current) > 4;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }

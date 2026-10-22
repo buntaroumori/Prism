@@ -34,8 +34,8 @@ mod cpal_out;
 mod wasapi_excl;
 
 pub use backend::{
-    BackendKind, Negotiation, OpenedSink, OutputDevice, OutputMode, OutputSink, RefillSignal,
-    SinkDescriptor,
+    BackendKind, Negotiation, OpenedSink, OutputDevice, OutputMode, OutputSink, RatePolicy,
+    RefillSignal, SinkDescriptor,
 };
 pub use supervisor::{
     Engine, EngineConfig, EngineEvent, EngineStatus, NowPlaying, PlaybackState, SinkOpener,

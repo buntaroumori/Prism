@@ -17,9 +17,13 @@ use rubato::{
 
 use crate::audio::AudioError;
 
-/// Input frames per resampler call. 1024 frames is 21 ms at 48 kHz: small
-/// enough to keep latency low, large enough for the sinc kernel to amortise.
-const CHUNK_FRAMES: usize = 1024;
+/// Input frames per resampler call.
+///
+/// 256 frames is 5.8 ms at 44.1 kHz. Every call emits its whole output block at
+/// once, so this is the granularity of the pump's bursts: at 1024 frames a
+/// 44.1 → 192 conversion delivered 21 ms of audio per call, which is longer
+/// than the ring and therefore guaranteed to overflow it.
+const CHUNK_FRAMES: usize = 256;
 /// Sinc kernel length.
 const SINC_LEN: usize = 256;
 /// Relative cutoff frequency (fraction of the lower Nyquist).
@@ -312,5 +316,70 @@ mod tests {
             amplitude < 0.02,
             "30 kHz should be suppressed when converting to 48 kHz, got {amplitude:.4}"
         );
+    }
+}
+
+#[cfg(test)]
+mod streaming {
+    use super::*;
+
+    /// Converting a tone must not introduce a step at every input chunk.
+    ///
+    /// No discontinuity is a *property of the filter*, not of the chunk
+    /// schedule: pushing the same signal in different block sizes must produce
+    /// the same waveform, with no sample-to-sample jump larger than the tone's
+    /// own slope. This is the unit-level guard for the field report — the
+    /// machine-gun crackle that appeared only when the source rate differed
+    /// from the device rate, i.e. only when this stage ran.
+    #[test]
+    fn a_tone_survives_any_chunking_without_a_step() {
+        for (input_rate, output_rate) in [
+            (44_100u32, 192_000u32),
+            (96_000, 192_000),
+            (192_000, 44_100),
+        ] {
+            const HZ: f32 = 440.0;
+            let expected = 0.5 * 2.0 * std::f32::consts::PI * HZ / output_rate as f32 * 1.5;
+            for block in [64usize, 256, 1_000, 4_096] {
+                let frames = input_rate as usize / 4;
+                let input: Vec<f32> = (0..frames)
+                    .map(|index| {
+                        0.5 * (2.0 * std::f32::consts::PI * HZ * index as f32 / input_rate as f32)
+                            .sin()
+                    })
+                    .collect();
+
+                let mut resampler =
+                    SincResampler::new(input_rate, output_rate, 1).expect("resampler");
+                let mut output =
+                    Vec::with_capacity(frames * output_rate as usize / input_rate as usize);
+                for chunk in input.chunks(block) {
+                    resampler.push(chunk).expect("push");
+                    output.extend(resampler.drain(usize::MAX));
+                }
+                output.extend(resampler.drain(usize::MAX));
+
+                assert!(
+                    output.len() as f32
+                        > frames as f32 * output_rate as f32 / input_rate as f32 * 0.9,
+                    "{input_rate}->{output_rate} at {block}-frame blocks produced {} frames",
+                    output.len()
+                );
+
+                let mut worst = 0.0f32;
+                let mut at = 0usize;
+                for index in 1..output.len() {
+                    let delta = (output[index] - output[index - 1]).abs();
+                    if delta > worst {
+                        worst = delta;
+                        at = index;
+                    }
+                }
+                assert!(
+                    worst < expected,
+                    "{input_rate}->{output_rate} at {block}-frame blocks stepped by {worst:.5} at sample {at} (a smooth tone moves {expected:.5} per sample)"
+                );
+            }
+        }
     }
 }

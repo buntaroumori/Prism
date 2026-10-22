@@ -7,7 +7,7 @@
 //!   [`tags::TrackTags`], including the technical properties the UI badges
 //!   (bit depth, sample rate, DSD rate) and the ReplayGain 2 values.
 //! * [`scanner`] — walk a root with `walkdir`, parse files in parallel with
-//!   `rayon`, expand CUE sheets into virtual tracks and hand batches to the
+//!   the blocking pool, expand CUE sheets into virtual tracks and hand batches to the
 //!   database writer.
 //! * [`crate::db`] — the SQL side: deterministic ids, upserts and the FTS5
 //!   index that search reads.

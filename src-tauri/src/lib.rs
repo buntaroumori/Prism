@@ -364,6 +364,7 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::player::player_set_muted,
             commands::player::player_set_dsp,
             commands::player::player_set_output,
+            commands::player::player_set_rate_policy,
             commands::player::player_set_ram_play,
             commands::player::player_devices,
             commands::player::player_device_format,

@@ -9,7 +9,7 @@ use tauri::State;
 
 use crate::audio::decoder::TrackRequest;
 use crate::audio::dsp::DspSettings;
-use crate::audio::engine::{EngineStatus, OutputDevice, OutputMode, PlaybackState};
+use crate::audio::engine::{EngineStatus, OutputDevice, OutputMode, PlaybackState, RatePolicy};
 use crate::audio::format::AudioFormat;
 use crate::error::PrismError;
 use crate::state::AppState;
@@ -110,9 +110,13 @@ pub fn player_stop(state: State<'_, AppState>) -> Result<(), PrismError> {
 }
 
 /// Seek inside the current track, in frames of the source rate.
+/// Seek the loaded track.
+///
+/// Takes a position in milliseconds, not frames: the engine owns the source
+/// rate, so the conversion happens where the truth is.
 #[tauri::command]
-pub fn player_seek(state: State<'_, AppState>, frame: u64) -> Result<(), PrismError> {
-    state.engine().seek(frame)?;
+pub fn player_seek(state: State<'_, AppState>, position_ms: u64) -> Result<(), PrismError> {
+    state.engine().seek_ms(position_ms)?;
     Ok(())
 }
 
@@ -167,6 +171,21 @@ pub fn player_set_output(
         )));
     }
     state.engine().set_output(mode, device, buffer_frames)?;
+    Ok(())
+}
+
+/// Choose whether the endpoint follows each record's sample rate.
+///
+/// This is the setting that decides what happens when the DAC is configured for
+/// 192 kHz and the record is 44.1 kHz: follow the record (the endpoint
+/// reconfigures, nothing resamples) or stay pinned to the device rate and
+/// convert. Playback continues at the same position either way.
+#[tauri::command]
+pub fn player_set_rate_policy(
+    state: State<'_, AppState>,
+    policy: RatePolicy,
+) -> Result<(), PrismError> {
+    state.engine().set_rate_policy(policy)?;
     Ok(())
 }
 

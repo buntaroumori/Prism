@@ -47,11 +47,23 @@ PipeWire.
 
 The application itself requests `Shared`. Coexisting with every other sound source is a product
 requirement, not a preference, so there is no engine-mode switch in the interface; the exclusive
-backends remain compiled and reachable for diagnostics and future endpoints. In shared mode the
-stream is opened in the endpoint's **live** configuration — `IAudioClient`/cpal are asked at open
-time, never assumed — and the DSP chain resamples the file into it. Asking for the file's own format
-instead is what made a 44.1 kHz file play through Windows' 24/192 mixer and sound broken while the
-badge blamed the endpoint.
+backends remain compiled and reachable for diagnostics and future endpoints.
+
+Shared output asks a second question, and since 0.1.3 it is the user's: **what rate should the
+endpoint run at** (`RatePolicy`, Settings → Output).
+
+- `MatchSource` (the default) hands the backend the _record's_ format. An endpoint free to follow —
+  ALSA `hw:`, PipeWire, an exclusive stream — is then opened at the file's own rate and nothing
+  converts it. A boundary between two rates reopens the device, but only after the endpoint has
+  proved once that it grants what it is asked for (`follows_source_rate`).
+- `Fixed` asks the driver for its live configuration and converts every track into it.
+
+Whatever is requested, the answer is what matters. `negotiator` records the format the driver
+actually granted, and when that is not the source rate the DSP chain resamples into it. Windows
+shared mode is pinned to the system mix format and will refuse a 44.1 kHz request on a 24/192
+endpoint; the engine sees the refusal, keeps converting, and does not reopen the device at every
+track. Requesting the source format _without_ that check is what once made a 44.1 kHz file play
+through the mixer as if it were broken while the badge blamed the endpoint.
 
 ### Negotiation and commit
 
@@ -84,8 +96,21 @@ aborts because a DAC disappeared, and the queue is never cleared.
 An exclusive endpoint owns the clock, so a mixed-rate queue is played bit-perfectly by reopening
 the device at every rate change. The supervisor detects the boundary inside a decoded block, keeps
 the outgoing track's tail, drops at most one period of the incoming track, and rebuilds the device
-and player at the new native rate. Mixed endpoints are locked to the graph rate instead, and the
-DSP chain resamples — which is why `bitPerfect` is false there by construction.
+and player at the new native rate.
+
+A shared endpoint follows the same path when — and only when — it granted the source rate on the
+previous open, and only for a _rate_ change: channel and container changes are converted instead,
+because reopening the graph for them buys nothing audible and costs a gap. Endpoints locked to the
+graph rate never reopen mid-queue and the DSP chain resamples, which is why `bitPerfect` is false
+there by construction.
+
+The blocks the pump writes must also fit: a decoded chunk larger than the ring's free space used to
+be truncated, which is a hole in the waveform at every fill. `fill_once` now carries the remainder
+(`carry`), reads the input proportional to the frames still missing
+(`DspChain::input_frames_for`) and converts in 256-frame chunks, so a 44.1 → 192 kHz stream has no
+discontinuity at any block boundary. The resampler's own continuity is pinned by
+`a_tone_survives_any_chunking_without_a_step`; the end-to-end frame count by
+`a_resampled_track_reaches_the_device_whole`.
 
 ## 3. Bit-perfect path
 
@@ -343,6 +368,13 @@ persisted "Off" setting both collapse it to flat black.
   when `__TAURI_INTERNALS__` exists, or a `DesktopRequired` screen explaining
   that playback and scanning live in the Rust process. There is no browser mode
   with fake data.
+- **The interface measures its own compositor.** `useFrameBudget` samples 45
+  frames once, 1.5 s after the first paint; a median above 24 ms means the
+  expensive layers are paid for on the CPU, so the shell sets
+  `data-effects="reduced"` and paints flat surfaces instead of backdrop filters,
+  drifting orbs and grain. The preference (`auto` / `full` / `reduced`) lives in
+  Appearance. This is what separates "fluid" from "torpid" on the same build
+  when one machine has a GL driver and the other composites in software.
 
 ### 10.4 Contracts
 

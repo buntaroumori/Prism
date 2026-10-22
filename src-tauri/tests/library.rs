@@ -498,6 +498,86 @@ async fn scan_is_cancellable_and_reports_progress() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn cancelling_a_scan_releases_the_scanner_and_a_new_scan_starts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("library");
+    // Enough files that the scan is still parsing when the cancel lands.
+    for index in 0..400u32 {
+        let path = root.join(format!("Bulk/Record/track-{index:04}.wav"));
+        write_wav(&path, 0.02, 8_000, 1, 16);
+        tag_wav(
+            &path,
+            &Fixture {
+                artist: "Bulk",
+                album: "Record",
+                track: (index % 9) + 1,
+                total: 9,
+                title: &format!("Track {index:04}"),
+                genre: "Test",
+                year: 2026,
+            },
+        );
+    }
+    let pool = pool_for(temp.path()).await;
+    let scanner = Scanner::new(pool.clone());
+
+    let running = scanner.clone();
+    let spawned_root = root.clone();
+    let handle = tokio::spawn(async move {
+        running
+            .scan(
+                ScanConfig {
+                    roots: vec![spawned_root],
+                    ..ScanConfig::default()
+                },
+                ScanTrigger::Manual,
+                |_| {},
+            )
+            .await
+    });
+
+    // Cancel as soon as the scanner admits it is parsing. Sleeping a fixed
+    // interval made this test lie: on a fast machine the scan finished first and
+    // the assertion below failed for the wrong reason.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    while scanner.progress().is_none() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    assert!(
+        scanner.is_running(),
+        "the scan finished before it could be cancelled"
+    );
+    scanner.cancel();
+
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(30), handle)
+        .await
+        .expect("a cancelled scan must return promptly")
+        .expect("join")
+        .expect("scan");
+    assert_eq!(outcome.status, "cancelled");
+    assert!(
+        !scanner.is_running(),
+        "the scanner must accept a new scan immediately after a cancel"
+    );
+
+    // The failure the user reported: after a cancel the next scan answered
+    // "already running" until the process restarted.
+    let second = scanner
+        .scan(
+            ScanConfig {
+                roots: vec![root.clone()],
+                ..ScanConfig::default()
+            },
+            ScanTrigger::Manual,
+            |_| {},
+        )
+        .await
+        .expect("a second scan must start");
+    assert_eq!(second.status, "completed");
+    assert!(!scanner.is_running());
+}
+
+#[tokio::test]
 async fn fts_search_ranks_titles_and_folds_diacritics() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("library");

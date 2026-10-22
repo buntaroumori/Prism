@@ -55,6 +55,7 @@ import {
   type OutputMode,
   type PlayerStatus,
   type PlayerTick,
+  type RatePolicy,
   type PluginMessage,
   type PluginSnapshot,
   type PrismErrorPayload,
@@ -283,12 +284,16 @@ export const playerApi = {
   pause: (): Promise<void> => commandVoid("player_pause"),
   resume: (): Promise<void> => commandVoid("player_resume"),
   stop: (): Promise<void> => commandVoid("player_stop"),
-  seek: (frame: number): Promise<void> => commandVoidWithArgs("player_seek", { frame }),
+  /** Seek by position in milliseconds; the engine converts to frames. */
+  seek: (positionMs: number): Promise<void> =>
+    commandVoidWithArgs("player_seek", { positionMs: Math.max(0, Math.round(positionMs)) }),
   setVolumeDb: (volumeDb: number): Promise<void> =>
     commandVoidWithArgs("player_set_volume", { volumeDb }),
   setMuted: (muted: boolean): Promise<void> => commandVoidWithArgs("player_set_muted", { muted }),
   setOutput: (mode: OutputMode, device: string | null, bufferFrames: number): Promise<void> =>
     commandVoidWithArgs("player_set_output", { mode, device, bufferFrames }),
+  setRatePolicy: (policy: RatePolicy): Promise<void> =>
+    commandVoidWithArgs("player_set_rate_policy", { policy }),
   setRamPlay: (enabled: boolean): Promise<void> =>
     commandVoidWithArgs("player_set_ram_play", { enabled }),
   devices: (mode: OutputMode): Promise<OutputDevice[]> =>

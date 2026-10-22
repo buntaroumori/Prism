@@ -450,6 +450,31 @@ pub fn live_device_format(kind: BackendKind, device: Option<&str>) -> Option<Aud
     }
 }
 
+/// What the engine asks the endpoint to run at.
+///
+/// This is the difference between the two ways a player can survive a device
+/// whose mixer clock is not the record's clock, and it is a decision the
+/// listener is allowed to make because the two answers trade different things:
+///
+///   * [`RatePolicy::MatchSource`] hands the *track's* rate to the backend. The
+///     endpoint reconfigures per record, so a 44.1 kHz FLAC is played at
+///     44.1 kHz and nothing resamples it. When the endpoint or the OS mixer
+///     refuses (Windows shared mode is pinned to the system mix format), the
+///     backend grants what it can and the engine resamples exactly as before —
+///     the request is a preference, never a promise the hardware can break.
+///   * [`RatePolicy::Fixed`] keeps the endpoint at the configuration the driver
+///     reports and converts every track to it. One rate for the whole session,
+///     no reconfiguration gap between tracks of different rates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum RatePolicy {
+    /// Follow the record: ask for the source rate on every track.
+    #[default]
+    MatchSource,
+    /// Pin the endpoint to its own configured rate and resample everything.
+    Fixed,
+}
+
 /// Backend preference order for a mode, before any endpoint is chosen.
 #[must_use]
 pub fn preferred_kinds(mode: OutputMode) -> Vec<BackendKind> {

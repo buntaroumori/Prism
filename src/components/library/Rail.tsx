@@ -42,7 +42,9 @@ export function Rail({ title, caption, action, children, className }: RailProps)
         <div className="flex shrink-0 items-center gap-2">
           {action}
           {showArrows ? (
-            <div className="flex items-center gap-1">
+            // `no-drag` keeps the arrows out of the window's drag region on the
+            // Home header, where the rail title sits inside the title bar.
+            <div className="no-drag flex items-center gap-1">
               <RailArrow
                 direction={-1}
                 disabled={!rail.canScrollLeft}

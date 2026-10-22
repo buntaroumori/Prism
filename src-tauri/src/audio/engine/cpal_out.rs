@@ -282,6 +282,12 @@ pub fn negotiate(
         // every host can honour.
         buffer_frames.clamp(64, 2_048)
     };
+    // A fixed frame count means a different amount of time at different rates.
+    // 512 frames is 11.6 ms at 44.1 kHz — perfectly comfortable — and 2.7 ms at
+    // 192 kHz, which asks the machine for 375 wake-ups per second. Every
+    // scheduling hiccup at that rate is a hole in the waveform, so the period
+    // is widened to at least 5 ms while the *ring* keeps the user's choice.
+    let period = period.max((rate / 200).clamp(64, 2_048));
 
     let rates: Vec<u32> = {
         let mut rates = common_rates(rate.max(96_000));

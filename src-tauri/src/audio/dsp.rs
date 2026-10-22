@@ -98,6 +98,7 @@ pub struct DspChain {
     channels: usize,
     pending: Vec<f32>,
     latency_frames: u64,
+    input_rate: u32,
     output_rate: u32,
 }
 
@@ -175,6 +176,7 @@ impl DspChain {
             channels,
             pending: Vec::new(),
             latency_frames,
+            input_rate: source.sample_rate,
             output_rate: output.sample_rate,
         })
     }
@@ -260,6 +262,26 @@ impl DspChain {
                 *sample *= self.master_gain;
             }
         }
+    }
+
+    /// How many input frames produce `output_frames` output frames.
+    ///
+    /// The decoder uses this to read a proportional slice of the file instead
+    /// of a block sized for the *output* rate: at 44.1 kHz into a 192 kHz
+    /// endpoint the naive read asked for 4.35× more audio than it needed per
+    /// call, which produced 40 ms bursts fighting a 10 ms ring.
+    #[must_use]
+    pub fn input_frames_for(&self, output_frames: usize) -> usize {
+        if self.input_rate == 0 || self.output_rate == 0 {
+            return output_frames;
+        }
+        if self.input_rate == self.output_rate {
+            return output_frames;
+        }
+        // One guard frame absorbs the rounding; the resampler buffers the rest.
+        (output_frames.saturating_mul(self.input_rate as usize) / self.output_rate as usize)
+            .max(1)
+            .saturating_add(1)
     }
 
     /// Resampler latency expressed in output frames.

@@ -220,6 +220,27 @@ impl Harness {
         self.control(opens).map(|control| (opens, control))
     }
 
+    /// An endpoint that pins its own clock, like Windows shared mode.
+    ///
+    /// It answers every request with `rate`, which is what makes the engine
+    /// fall back to resampling and what reproduced the field crackle.
+    fn opener_pinned(harness: Arc<Self>, wake: Duration, rate: u32) -> SinkOpener {
+        Arc::new(move |_mode, _device, format, buffer_frames| {
+            let ordinal = harness.opens.fetch_add(1, Ordering::AcqRel) + 1;
+            let pinned = AudioFormat {
+                sample_rate: rate,
+                ..*format
+            };
+            let (opened, control) = loopback(ordinal, pinned, 512, buffer_frames, wake);
+            harness
+                .controls
+                .lock()
+                .expect("controls")
+                .insert(ordinal, control);
+            Ok(opened)
+        })
+    }
+
     fn opener(harness: Arc<Self>, wake: Duration) -> SinkOpener {
         Arc::new(move |_mode, _device, format, buffer_frames| {
             let ordinal = harness.opens.fetch_add(1, Ordering::AcqRel) + 1;
@@ -873,4 +894,141 @@ fn stopping_during_an_endpoint_swap_never_leaves_a_dangling_device() {
         .count();
     assert_eq!(live, 0, "every loopback device must be stopped");
     engine.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 9. The snapshot the UI reads while a track plays
+// ---------------------------------------------------------------------------
+
+/// The player bar is driven entirely by `EngineStatus` and by the tick projected
+/// from it, so a snapshot that omits the source format or the total length is
+/// not a cosmetic detail: `PlayerTick::from_status` converts frames to
+/// milliseconds *through* the source rate, and with no rate every tick reports
+/// zero. The bar then stands still at 0:00 and the seek control disables
+/// itself, which is exactly what was reported from the field.
+#[test]
+fn the_published_snapshot_carries_the_format_the_length_and_a_moving_playhead() {
+    let harness = Arc::new(Harness::default());
+    let engine = engine_with(Arc::clone(&harness), Duration::from_millis(2));
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let track = write_wav(&dir.path().join("playhead.wav"), 30.0);
+    engine
+        .play(vec![request(&track, "playhead")], 0)
+        .expect("command accepted");
+
+    assert!(
+        wait_until(Duration::from_secs(5), || {
+            engine.status().state == PlaybackState::Playing
+        }),
+        "playback never started: {:?}",
+        engine.status()
+    );
+
+    let status = engine.status();
+    let source = status.source_format.expect("a source format");
+    assert_eq!(
+        (source.sample_rate, source.channels),
+        (FORMAT.sample_rate, FORMAT.channels),
+        "the snapshot must name the source rate the playhead is expressed in"
+    );
+    assert_eq!(
+        status.duration_frames,
+        Some(u64::from(FORMAT.sample_rate) * 30),
+        "the snapshot must carry the track length"
+    );
+    assert_eq!(
+        status
+            .track
+            .as_ref()
+            .and_then(|track| track.duration_frames),
+        Some(u64::from(FORMAT.sample_rate) * 30),
+        "the now-playing block repeats the same length for the tick"
+    );
+
+    let start = status.position_frames;
+    assert!(
+        wait_until(Duration::from_secs(5), || {
+            engine.status().position_frames > start
+        }),
+        "the playhead never moved past {start} frames"
+    );
+    assert!(
+        engine.status().position_frames < u64::from(FORMAT.sample_rate) * 30,
+        "the playhead ran past the end of the track"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 10. Resampled playback reaches the device whole
+// ---------------------------------------------------------------------------
+
+/// A device that refuses the record's rate forces the resampler, and that path
+/// used to hand the ring blocks larger than its free space: the remainder was
+/// dropped, so every buffer carried a hole. The audible result was a dense
+/// crackle, and the measurable one is *fewer frames played than the track
+/// contains*. This test pins both: the device runs at twice the source rate and
+/// must still consume the whole record.
+#[test]
+fn a_resampled_track_reaches_the_device_whole() {
+    const DEVICE_RATE: u32 = 88_200;
+    const SECONDS: u64 = 3;
+
+    let harness = Arc::new(Harness::default());
+    let engine = Engine::with_opener(
+        EngineConfig::default(),
+        Harness::opener_pinned(Arc::clone(&harness), Duration::from_millis(1), DEVICE_RATE),
+    )
+    .expect("engine");
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let track = write_wav(&dir.path().join("whole.wav"), SECONDS as f32);
+
+    engine
+        .play(vec![request(&track, "whole")], 0)
+        .expect("command accepted");
+
+    assert!(
+        wait_until(Duration::from_secs(10), || {
+            engine.status().state == PlaybackState::Playing
+        }),
+        "playback never started: {:?}",
+        engine.status()
+    );
+    // Read the snapshot while the device is open: teardown clears it at the end
+    // of the queue, which is correct and unhelpful for this assertion.
+    let live = engine.status();
+    assert_eq!(
+        live.output_format.map(|format| format.sample_rate),
+        Some(DEVICE_RATE),
+        "the endpoint answered with its own clock, which is the case under test"
+    );
+    assert_eq!(
+        live.source_format.map(|format| format.sample_rate),
+        Some(FORMAT.sample_rate),
+        "the source stayed at its own rate, so the decoder had to convert"
+    );
+    assert_eq!(
+        live.overruns, 0,
+        "frames were dropped on the way to the device"
+    );
+
+    assert!(
+        wait_until(Duration::from_secs(20), || {
+            engine.status().state == PlaybackState::Stopped
+        }),
+        "the track never finished: {:?}",
+        engine.status()
+    );
+
+    let consumed = harness
+        .latest()
+        .map(|(_, control)| control.frames_consumed.load(Ordering::Acquire))
+        .expect("an endpoint was opened") as u64;
+    let expected = u64::from(DEVICE_RATE) * SECONDS;
+    let tolerance = u64::from(DEVICE_RATE) / 2;
+    assert!(
+        consumed.abs_diff(expected) < tolerance,
+        "the device played {consumed} frames of a {expected}-frame track"
+    );
 }

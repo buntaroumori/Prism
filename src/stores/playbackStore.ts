@@ -63,6 +63,16 @@ interface PlaybackStore {
   index: number;
   /** Optimistic volume while the user drags; the engine echoes the truth. */
   pendingVolumeDb: number | null;
+  /**
+   * The level the user released the slider on, held until the engine reports it
+   * back.
+   *
+   * Without this the bar snaps to the stale snapshot the instant the drag ends:
+   * `player_set_volume` returns before the next `player_status` is fetched, so
+   * the control would redraw at the previous level and look like it refused the
+   * gesture — the reported "I can lower it but I cannot slide it".
+   */
+  committedVolumeDb: number | null;
   error: UiError | null;
   /**
    * A track the engine had to skip. Recoverable by definition — playback moved
@@ -73,6 +83,8 @@ interface PlaybackStore {
   busy: boolean;
 
   hydrate: () => Promise<void>;
+  /** Re-read the engine snapshot; the only way `status` becomes current. */
+  refresh: () => Promise<void>;
   applyEvent: (event: EngineEvent) => void;
   applyTick: (tick: PlayerTick) => void;
   play: (entries: QueueEntry[], index: number) => Promise<void>;
@@ -108,7 +120,11 @@ export function playheadMs(status: PlayerStatus | null, tick: PlayerTick | null)
 }
 
 /** Duration of the loaded track in milliseconds, from either source. */
-export function durationMs(status: PlayerStatus | null, tick: PlayerTick | null): number | null {
+export function durationMs(
+  status: PlayerStatus | null,
+  tick: PlayerTick | null,
+  catalogueMs: number | null = null,
+): number | null {
   if (tick?.durationMs !== null && tick?.durationMs !== undefined && tick.durationMs > 0) {
     return tick.durationMs;
   }
@@ -118,7 +134,14 @@ export function durationMs(status: PlayerStatus | null, tick: PlayerTick | null)
       return Math.round((status.durationFrames * 1000) / rate);
     }
   }
-  return status?.track !== null && status?.track !== undefined ? null : null;
+  // The engine only knows a length once the container declares one. The
+  // catalogue indexed the same file with the same header, so its duration is a
+  // truthful fallback — and a bar that is never disabled is worth more than a
+  // bar that is disabled "honestly" over a stream that plays perfectly well.
+  if (catalogueMs !== null && catalogueMs > 0) {
+    return catalogueMs;
+  }
+  return null;
 }
 
 /** Convert a queue entry to the engine contract. */
@@ -168,6 +191,7 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
   queue: [],
   index: 0,
   pendingVolumeDb: null,
+  committedVolumeDb: null,
   error: null,
   notice: null,
   busy: false,
@@ -179,8 +203,29 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
         status,
         index: status.queueIndex,
         pendingVolumeDb: null,
+        committedVolumeDb: null,
         error: null,
       });
+    } catch (cause) {
+      set({ error: toUiError(cause) });
+    }
+  },
+
+  refresh: async () => {
+    try {
+      const status = await playerApi.status();
+      set((state) => ({
+        status,
+        index: status.queueIndex,
+        // Once the engine reports the level the user committed, the optimistic
+        // copy has done its job and must not outrank the driver any longer.
+        committedVolumeDb:
+          state.committedVolumeDb !== null &&
+          Math.abs(status.volumeDb - state.committedVolumeDb) < 0.05
+            ? null
+            : state.committedVolumeDb,
+        error: null,
+      }));
     } catch (cause) {
       set({ error: toUiError(cause) });
     }
@@ -216,6 +261,9 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
           index: event.index,
           tick: null,
         });
+        // The event carries the identity of the new track, not the snapshot:
+        // its length and source rate arrive with the next `player_status`.
+        void get().refresh();
         break;
       }
       case "deviceChanged": {
@@ -228,6 +276,7 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
             bitPerfect: event.bit_perfect,
           },
         });
+        void get().refresh();
         break;
       }
       case "outputError": {
@@ -272,6 +321,7 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
       return;
     }
     set({ busy: false });
+    void get().refresh();
   },
 
   playTracks: async (tracks, index) => {
@@ -291,6 +341,7 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
         await playerApi.resume();
       }
       set({ error: null });
+      void get().refresh();
     } catch (cause) {
       set({ error: toUiError(cause) });
     } finally {
@@ -308,6 +359,7 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
     try {
       await playerApi.play(queue.map(toRequest), nextIndex);
       set({ index: nextIndex, tick: null, error: null });
+      void get().refresh();
     } catch (cause) {
       set({ error: toUiError(cause) });
     } finally {
@@ -329,6 +381,7 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
     try {
       await playerApi.play(queue.map(toRequest), target);
       set({ index: target, tick: null, error: null });
+      void get().refresh();
     } catch (cause) {
       set({ error: toUiError(cause) });
     } finally {
@@ -364,30 +417,32 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
 
   seekMs: async (ms) => {
     const status = get().status;
-    const rate = status?.sourceFormat?.sampleRate ?? 44_100;
-    const frame = Math.max(0, Math.round((ms * rate) / 1000));
+    const target = Math.max(0, Math.round(ms));
     // Optimistic: the slider follows the click immediately; the next tick
     // corrects it once the device has actually flushed.
     set({
       tick: {
-        positionMs: Math.max(0, Math.round(ms)),
+        positionMs: target,
         durationMs: get().tick?.durationMs ?? null,
         playing: get().tick?.playing ?? status?.state === "playing",
       },
     });
     try {
-      await playerApi.seek(frame);
+      await playerApi.seek(target);
+      void get().refresh();
     } catch (cause) {
       set({ error: toUiError(cause) });
     }
   },
 
   setVolumeDb: async (db) => {
+    set({ committedVolumeDb: db });
     try {
       await playerApi.setVolumeDb(db);
+      await get().refresh();
       set({ pendingVolumeDb: null, error: null });
     } catch (cause) {
-      set({ error: toUiError(cause), pendingVolumeDb: null });
+      set({ error: toUiError(cause), pendingVolumeDb: null, committedVolumeDb: null });
     }
   },
 

@@ -6,6 +6,15 @@ interface AmbientBackgroundProps {
   palette: CoverPalette | null;
   /** `off` paints the OLED flat colour only. */
   intensity: "off" | "subtle" | "full";
+  /**
+   * `reduced` swaps the three blurred, drifting orbs for one static gradient.
+   *
+   * The blobs are the most expensive thing in the product on a software
+   * compositor: three 50-rem surfaces with a 170 px blur, translated every
+   * frame. A single radial gradient over the same palette keeps the mood and
+   * costs one paint.
+   */
+  reduced?: boolean;
 }
 
 /**
@@ -20,7 +29,11 @@ interface AmbientBackgroundProps {
  * The orbs are scaled by the artwork's mean lightness: a white album sleeve
  * produces the same bloom as a dark one without washing the interface out.
  */
-export function AmbientBackground({ palette, intensity }: AmbientBackgroundProps): JSX.Element {
+export function AmbientBackground({
+  palette,
+  intensity,
+  reduced = false,
+}: AmbientBackgroundProps): JSX.Element {
   if (intensity === "off") {
     return <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-oled-950" />;
   }
@@ -36,6 +49,22 @@ export function AmbientBackground({ palette, intensity }: AmbientBackgroundProps
   const primary = (0.3 * strength * (0.55 + (1 - lift) * 0.75)).toFixed(3);
   const secondary = (0.2 * strength * (0.55 + (1 - lift) * 0.8)).toFixed(3);
   const tertiary = (0.16 * strength).toFixed(3);
+
+  if (reduced) {
+    return (
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute inset-0 bg-oled-950" />
+        <div
+          className="absolute inset-0"
+          style={{
+            background: `radial-gradient(90% 60% at 20% 0%, ${accent} 0%, transparent 60%), radial-gradient(70% 55% at 92% 12%, ${highlight} 0%, transparent 62%)`,
+            opacity: Number(primary) * 0.55,
+          }}
+        />
+        <div className="absolute inset-0 bg-[radial-gradient(120%_85%_at_50%_0%,transparent_18%,rgb(8_8_10/0.6)_72%,rgb(8_8_10/0.92)_100%)]" />
+      </div>
+    );
+  }
 
   return (
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">

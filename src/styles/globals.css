@@ -196,6 +196,38 @@
   will-change: transform;
 }
 
+/*
+ * Reduced effects.
+ *
+ * Set on the shell root when the frame-pacing probe finds a compositor that
+ * cannot carry the full interface (typically a Linux install without a working
+ * GL driver, where WebKit paints in software). The palette, the covers and the
+ * typography are untouched; what goes is everything that needs a real GPU:
+ * the backdrop filters re-sample the whole scene on every scroll, and the
+ * orbs would repaint a 54-rem blurred surface per frame.
+ */
+[data-effects="reduced"] .glass-bar,
+[data-effects="reduced"] .sidebar-glass {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background-color: rgb(10 10 12 / 0.94);
+}
+
+[data-effects="reduced"] .grain {
+  display: none;
+}
+
+[data-effects="reduced"] .ambient-orb {
+  animation: none;
+  will-change: auto;
+}
+
+[data-effects="reduced"] img {
+  /* Decoded covers are the other large surface; keep them out of the filter
+     pipeline entirely. */
+  filter: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -152,6 +152,16 @@ impl SampleProducer {
         frames.min(written_frames)
     }
 
+    /// Push as much as fits, leaving the caller in charge of the remainder.
+    ///
+    /// The audio pump uses this instead of [`Self::push_or_drop`]: a block that
+    /// does not fit must be carried, never discarded, because a discarded tail
+    /// is a waveform discontinuity — an audible click — in the middle of a
+    /// track.
+    pub fn push_partial(&mut self, samples: &[f32]) -> usize {
+        self.push(samples)
+    }
+
     /// Push as much as fits and count what did not.
     pub fn push_or_drop(&mut self, samples: &[f32]) -> usize {
         let frames = samples.len() / self.channels;
