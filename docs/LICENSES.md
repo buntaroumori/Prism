@@ -10,17 +10,17 @@ licence has to coexist with. It is generated from `Cargo.lock` and `pnpm-lock.ya
 
 | Set | Packages | Enforced |
 | :-- | -------: | :------- |
-| Rust, linked into the binary | 651 | by this audit |
+| Rust, linked into the binary | 647 | by this audit |
 | Rust, build-only | 39 | runs on the build machine, never linked |
 | npm, bundled into the frontend | 20 | by this audit |
 
-Of the 671 shipped packages, **652** are permissive, **19** carry a notice obligation and **0** require a decision. No GPL, AGPL, SSPL or CDDL package appears anywhere in the graph.
+Of the 667 shipped packages, **648** are permissive, **19** carry a notice obligation and **0** require a decision. No GPL, AGPL, SSPL or CDDL package appears anywhere in the graph.
 
 ### Licences in use
 
 | Licence | Packages | Status |
 | :------ | -------: | :----- |
-| MIT | 500 | Permissive |
+| MIT | 496 | Permissive |
 | Apache-2.0 | 76 | Permissive |
 | Zlib | 20 | Permissive |
 | Unicode-3.0 | 18 | Permissive |
@@ -166,8 +166,6 @@ instead of bundling private copies.
 | `crc-catalog` | 2.5.0 | MIT | Permissive |
 | `crc32fast` | 1.5.2 | MIT | Permissive |
 | `crossbeam-channel` | 0.5.17 | MIT | Permissive |
-| `crossbeam-deque` | 0.8.8 | MIT | Permissive |
-| `crossbeam-epoch` | 0.9.21 | MIT | Permissive |
 | `crossbeam-queue` | 0.3.14 | MIT | Permissive |
 | `crossbeam-utils` | 0.8.23 | MIT | Permissive |
 | `crypto-common` | 0.1.7 | MIT | Permissive |
@@ -447,8 +445,6 @@ instead of bundling private copies.
 | `rand_core` | 0.6.4 | MIT | Permissive |
 | `rand_pcg` | 0.10.2 | MIT | Permissive |
 | `raw-window-handle` | 0.6.2 | MIT | Permissive |
-| `rayon` | 1.12.0 | MIT | Permissive |
-| `rayon-core` | 1.13.0 | MIT | Permissive |
 | `realfft` | 3.5.0 | MIT | Permissive |
 | `redox_syscall` | 0.5.18 | MIT | Permissive |
 | `redox_syscall` | 0.9.5 | MIT | Permissive |
