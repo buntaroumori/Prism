@@ -1,25 +1,37 @@
-# Media
+# Media assets
 
-Screenshots in this folder are captured from the running application, never mocked.
+These assets support the project documentation.
 
-## Capturing on Linux (headless CI or workstation)
+## Application screenshots
+
+| File              | View                                           |
+| :---------------- | :--------------------------------------------- |
+| `home.png`        | Home with genre-based album shelves            |
+| `library.png`     | Library album grid, sorting and genre filter   |
+| `now-playing.png` | Now Playing with artwork and spectrum analysis |
+| `appearance.png`  | Appearance settings                            |
+
+The screenshots are referenced by the [repository README](../../README.md#screenshots). Keep their
+filenames stable when replacing them so documentation links remain valid.
+
+## Profiling diagrams
+
+| File                      | Workload                                                   |
+| :------------------------ | :--------------------------------------------------------- |
+| `flamegraph-decode.svg`   | Decode and DSP processing without a sample-rate conversion |
+| `flamegraph-resample.svg` | Decode, DSP and resampling                                 |
+
+See [Performance and validation](../PERFORMANCE.md#cpu-profiling) for the commands used to profile
+these paths.
+
+## Local capture tool
+
+`scripts/capture-screenshots.sh` starts the Tauri application under Xvfb on Linux and writes an
+`overview.png` capture. It requires Xvfb, ImageMagick and D-Bus:
 
 ```bash
-sudo apt-get install -y xvfb imagemagick dbus-x11
 ./scripts/capture-screenshots.sh
 ```
 
-The script starts a private X server (`1440x900x24`), launches the Tauri shell inside a D-Bus
-session, waits for the WebView to paint the diagnostics screen, and writes:
-
-- `overview.png` — shell, ambient canvas, live library counters and engine status.
-
-Planned captures for later phases: modular layout editor, parametric EQ, lyrics panel, Discord RPC
-card, and a 60-second fast-scroll recording exported as GIF at 60 FPS.
-
-- `home-fresh-install.png` — the **0.1.1** release binary on a pristine data directory: Home, the
-  empty-state card, the counter row and the "Recently added" empty state. Captured under Xvfb with
-  `WEBKIT_DISABLE_COMPOSITING_MODE=1`; this is the frame that used to be a black window.
-
-The v0.1.1 release was verified the same way: a `--features tauri/custom-protocol` build, a fresh
-`XDG_*` root, and a screenshot of the window — not a browser tab.
+The capture script is a development utility; the curated screenshots above are maintained as
+documentation assets.

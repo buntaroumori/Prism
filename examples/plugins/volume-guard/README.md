@@ -1,35 +1,53 @@
-# Volume Guard (example plugin)
+# Volume Guard
 
-A complete, working plugin that demonstrates the whole Lua host contract:
-manifest validation, declared capabilities, typed settings, the three hooks and
-the `prism` API.
+Volume Guard is a small Lua plugin that applies a configured output level whenever the track
+changes. It demonstrates manifest settings, lifecycle hooks, playback events and capability-gated
+host calls.
 
+## Requirements
+
+Prism must be built with the `lua-plugins` feature:
+
+```bash
+pnpm tauri dev -- --features lua-plugins
 ```
-examples/plugins/volume-guard/
-├── plugin.toml   # manifest: identity, capabilities, settings schema
-├── main.lua      # the plugin
-└── README.md
-```
 
-## Install
+The default build does not include the Lua runtime.
 
-1. Build with the Lua runtime: `cargo tauri dev --features lua-plugins`, or
-   `cargo build --features lua-plugins`.
-2. Open **Settings → Plugins → Folder** and copy this directory into it.
-3. Press **Rescan**, then enable _Volume Guard_.
+## Installation
 
-## What it does
+1. Copy the `volume-guard` directory into the Prism plugin folder.
+2. Open **Settings → Plugins** and select **Rescan**.
+3. Enable **Volume Guard**.
+4. Configure the target level and optional notifications.
 
-On every `track_changed` event it applies `target_db` through
-`prism.set_volume`, and optionally announces the change with
-`prism.emit`. Both settings are validated twice: once by the manifest schema
-(rejects out-of-range values before they are stored) and once by the plugin
-before it calls the host.
+**Settings → Plugins → Folder** opens the plugin directory on the current system.
 
-## What it cannot do
+## Settings
 
-The sandbox removes `io`, `os`, `package`, `debug`, `dofile`, `loadfile`,
-`load`, `require` and `print`. A plugin cannot read a file, spawn a process,
-open a socket or reach the network; it receives only the host functions its
-manifest declares, and a call without the matching capability fails with a
-permission error.
+| Setting     | Type    | Default | Description                                       |
+| :---------- | :------ | :------ | :------------------------------------------------ |
+| `target_db` | Number  | `-12.0` | Level applied on a track change, from −40 to 0 dB |
+| `announce`  | Boolean | `false` | Emit a notification after applying the level      |
+
+The manifest constrains both settings. The plugin also validates the target before calling the
+host.
+
+## Implementation
+
+- `on_load` reads the saved configuration and logs the initial level.
+- `on_config` reads updated settings after a configuration change.
+- `on_event` listens for `track_changed` and applies the configured level.
+- `prism.set_volume` performs the volume change through `player:control`.
+- `prism.log` and `prism.emit` use their respective declared capabilities.
+
+The event callback receives a JSON string. This example only matches the event kind and therefore
+does not require a JSON decoder.
+
+## Sandbox
+
+The plugin cannot directly access files, processes, sockets or the network. Its available host
+functions are limited by the capabilities declared in `plugin.toml`. Runtime errors and exhausted
+resource budgets disable the plugin for the session without stopping playback.
+
+See [Plugin development](../../../docs/PLUGINS.md) for the complete manifest and host API reference.

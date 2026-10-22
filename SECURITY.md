@@ -2,47 +2,72 @@
 
 ## Supported versions
 
-| Version         | Supported |
-| :-------------- | :-------- |
-| 0.1.x (current) | Yes       |
-| < 0.1           | No        |
+| Version          | Status      |
+| :--------------- | :---------- |
+| 0.1.x            | Supported   |
+| Earlier versions | Unsupported |
+
+Security fixes are applied to the current development line and included in a subsequent release.
 
 ## Reporting a vulnerability
 
-Email **security@prism-audio.dev** with a description, affected version, reproduction steps and any
-proof-of-concept. Do not open a public issue before a fix is available.
+Use a [private GitHub security advisory](https://github.com/buntaroumori/Prism/security/advisories/new)
+for suspected vulnerabilities. Do not include exploitable details in a public issue.
 
-- Acknowledgement within 72 hours.
-- Coordinated disclosure: 90 days or a released fix, whichever comes first.
-- Reporters are credited in the release notes unless they ask to remain anonymous.
+A useful report contains:
 
-## Threat model
+- the affected version and operating system;
+- the relevant feature or input format;
+- reproduction steps and expected security impact;
+- a minimal proof of concept where appropriate;
+- any known mitigations.
 
-Prism plays untrusted local media and talks to a small set of public metadata APIs. The relevant
-assets are the user's files, credentials-free local state, and the integrity of the audio path.
+Disclosure timing should be coordinated according to severity, exploitability and the availability
+of a fix. Reporter credit can be included in release notes when requested.
 
-### Controls in place
+## Security boundaries
 
-- **WebView isolation**: strict CSP, no remote code, `freezePrototype`, asset protocol restricted to
-  `$APPDATA` and `$APPCACHE`, capabilities scoped to one window.
-- **IPC**: every command validates its arguments; responses are schema-checked before rendering.
-- **Rust memory safety**: `unsafe` is denied outside explicitly documented audio backend boundaries;
-  those blocks carry `// SAFETY:` justifications and are fuzzed.
-- **Parsers**: symphonia, lofty and the CUE parser are fuzzed with `cargo-fuzz` before release;
-  malformed files fail closed with a `scan_errors` row.
-- **Network**: TLS only (rustls), timeouts, no credentials, responses size-capped.
-- **Plugins** (FASE 5): capability-based permissions, instruction budgets, no raw filesystem or
-  device handles, wasmtime sandbox for untrusted UI extensions.
+Prism processes local media and metadata that may be malformed or untrusted. The principal assets
+are local files, application state, playback availability and the integrity of the desktop process.
 
-### Out of scope
+### Desktop and IPC
 
-- Denial of service through enormous local libraries on underpowered hardware.
-- Unsigned builds downloaded from third parties (verify `SHA256SUMS.txt` from the official release).
-- Vulnerabilities in WebView2/WebKitGTK themselves — report upstream, but tell us so we can pin.
+- The WebView uses a restrictive content security policy and a minimal Tauri capability set.
+- Asset protocol access is limited to application data and cache directories.
+- IPC commands expose typed inputs and results; frontend payloads are validated with Zod.
+- Browser navigation, development shortcuts and unrelated browser menus are disabled in the
+  desktop interface.
 
-## Hardening roadmap
+### Catalogue and parsers
 
-- Code signing for Windows installers.
-- Reproducible builds with `cargo auditable` metadata.
-- minisign signatures for release checksums.
-- `cargo deny` in CI with an explicit licence allowlist.
+- SQL values are bound, and sort or filter fragments are selected from fixed definitions.
+- Metadata parser failures are isolated per file and recorded without aborting the entire scan.
+- Filesystem identity checks and path handling are centralised in the catalogue and scanner.
+- Online artwork and metadata providers use HTTPS and do not require application credentials.
+
+### Plugins
+
+Plugin runtimes are optional and disabled in default builds. Enabled plugins run with:
+
+- capabilities explicitly declared in their manifests;
+- no direct filesystem, process or network API from the host;
+- memory and execution budgets;
+- separate runtime instances and session-scoped failure handling.
+
+A plugin should still be treated as code installed by the local user. Capability declarations limit
+the host surface; they are not a substitute for reviewing an untrusted plugin.
+
+## Release verification
+
+Release packages are accompanied by `SHA256SUMS.txt` and a generated third-party licence inventory.
+Downloaded artefacts should be obtained from the project repository and checked against the
+published checksums before installation.
+
+Packages are not currently accompanied by a project code-signing signature. Reports about release
+workflow integrity, dependency substitution or checksum publication are in scope.
+
+## Third-party components
+
+Security issues in Rust, npm, WebView2, WebKitGTK or operating-system components may also need to be
+reported upstream. Dependency updates and mitigations are evaluated through the normal repository
+review process.
