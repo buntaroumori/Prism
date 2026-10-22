@@ -33,7 +33,7 @@ export function SystemView(): JSX.Element {
           error={
             error ?? {
               code: "unexpected",
-              message: "The backend returned no data and no diagnostic message.",
+              message: "Prism could not read its system information. Try again.",
             }
           }
           refreshing={refreshing}
@@ -49,9 +49,7 @@ export function SystemView(): JSX.Element {
         <div>
           <h1 className="text-[27px] font-semibold tracking-[-0.03em] text-white">System</h1>
           <p className="mt-1 text-[13px] text-white/40">
-            {snapshot.appInfo.name} {snapshot.appInfo.version} · Tauri{" "}
-            {snapshot.appInfo.tauriVersion} · {snapshot.appInfo.targetOs}/
-            {snapshot.appInfo.targetArch}
+            {snapshot.appInfo.name} {snapshot.appInfo.version} · {snapshot.appInfo.targetOs}
           </p>
         </div>
         <p className="font-mono text-[10.5px] text-white/25">{snapshot.appInfo.databasePath}</p>
@@ -80,7 +78,7 @@ export function SystemView(): JSX.Element {
 
       <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] pt-6 text-[11px] text-white/25">
         <p>{snapshot.appInfo.name} · MIT licensed</p>
-        <p>Rust 2024 · Tauri v2 · SQLite WAL · Built for close listening</p>
+        <p>Your music stays on this device</p>
       </footer>
     </div>
   );

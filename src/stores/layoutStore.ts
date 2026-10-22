@@ -40,6 +40,8 @@ const DEFAULT_MODULES = PRESETS.editorial;
 interface LayoutState {
   preset: NowPlayingPreset;
   modules: NowPlayingModule[];
+  modulePickerOpen: boolean;
+  setModulePickerOpen: (open: boolean) => void;
   setPreset: (preset: Exclude<NowPlayingPreset, "custom">) => void;
   toggleModule: (module: NowPlayingModule) => void;
   moveModule: (module: NowPlayingModule, direction: -1 | 1) => void;
@@ -59,6 +61,11 @@ export const useLayoutStore = create<LayoutState>()(
     (set, get) => ({
       preset: "editorial",
       modules: [...DEFAULT_MODULES],
+      modulePickerOpen: false,
+
+      setModulePickerOpen: (modulePickerOpen) => {
+        set({ modulePickerOpen });
+      },
 
       setPreset: (preset) => {
         set({ preset, modules: [...PRESETS[preset]] });
@@ -95,25 +102,38 @@ export const useLayoutStore = create<LayoutState>()(
     }),
     {
       name: "prism.layout.now-playing",
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({ preset: state.preset, modules: state.modules }),
+      partialize: (state) => ({
+        preset: state.preset,
+        modules: state.modules,
+        modulePickerOpen: state.modulePickerOpen,
+      }),
       // v2 drops the signal-path module: its facts now live in Settings →
       // Output, where the device format is read from the driver instead of
       // being restated next to the artwork. A stored layout may still name it,
       // so unknown ids are filtered and an empty deck falls back to the preset.
       migrate: (persisted) => {
-        const candidate = persisted as { modules?: string[]; preset?: NowPlayingPreset } | null;
+        const candidate = persisted as {
+          modules?: string[];
+          preset?: NowPlayingPreset;
+          modulePickerOpen?: boolean;
+        } | null;
         const known: readonly string[] = NOW_PLAYING_MODULES;
         const modules = (candidate?.modules ?? []).filter((module): module is NowPlayingModule =>
           known.includes(module),
         );
         if (modules.length === 0) {
-          return { preset: "editorial", modules: [...DEFAULT_MODULES] };
+          return {
+            preset: "editorial",
+            modules: [...DEFAULT_MODULES],
+            modulePickerOpen: candidate?.modulePickerOpen ?? false,
+          };
         }
         return {
           preset: candidate?.preset ?? "custom",
           modules,
+          modulePickerOpen: candidate?.modulePickerOpen ?? false,
         };
       },
     },

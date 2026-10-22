@@ -52,11 +52,12 @@ says so instead of faking an interface.
 
 ## Interface
 
-Prism's v0.1.0 shell is a real, running diagnostics surface: an OLED canvas with a slow ambient
-spectrum backdrop, a collapsible navigation rail, and live panels for the SQLite engine
-(journal mode, durability, integrity probe, page geometry, migration ledger), runtime identity and
-library aggregates. Every value is fetched from the Rust backend over validated IPC — nothing on
-screen is sample data.
+Prism's shell is a listening interface: curated Home collections and genre shelves, a persistent
+album mosaic, album and artist pages, user-owned playlists, a modular Now Playing deck and live
+output controls. Appearance, filtering, ordering and layout choices survive restarts; desktop
+context menus, borderless fullscreen and track selection behave like application controls rather
+than browser substitutes. Every value is fetched from the Rust backend over validated IPC —
+nothing on screen is sample data.
 
 Reproducible screenshots are generated from the running app with
 [`scripts/capture-screenshots.sh`](scripts/capture-screenshots.sh) (Xvfb + D-Bus + ImageMagick) and
@@ -88,10 +89,12 @@ itself. No synthetic or mocked screenshot is shipped.
 
 ### Catalogue (FASE 3)
 
-- **Mass indexing** — streaming `walkdir` + `rayon` parsing in 512-file chunks, 256-row transactions,
-  deterministic SHA-256 row identities, incremental `(mtime, size)` fingerprinting, CUE expansion into
-  sample-accurate virtual tracks, a resumable scan ledger and per-file error isolation that never
-  aborts a 100 000-file scan.
+- **Mass indexing** — streaming `walkdir`, bounded per-file parsing with isolated deadlines,
+  256-row transactions, deterministic SHA-256 row identities, incremental `(mtime, size)`
+  fingerprinting, CUE expansion into sample-accurate virtual tracks, a resumable scan ledger and
+  per-file error isolation that never aborts a 100 000-file scan. MusicBrainz recording ids are
+  searchable metadata, not unique file identities, so duplicate recordings across pressings or
+  roots cannot abort a batch.
 - **Instant search** — FTS5 with diacritic folding, operator-safe query construction, `bm25` ranking
   with per-column weights, highlight snippets, and quality filters (bit depth, sample rate, format,
   year, genre, lossless-only).
@@ -144,6 +147,9 @@ itself. No synthetic or mocked screenshot is shipped.
 
 ### Library and listening interface (FASE 5)
 
+- **User-owned playlists and genre browsing** — SQLite-backed playlists preserve explicit order and
+  reject duplicate entries; any track can be assigned from its context menu. Home ranks genre
+  shelves by distinct albums, and Library applies the same genre predicate to its grid and count.
 - **500 000 rows, 52 pixels each** — `@tanstack/react-virtual` renders 30–60 rows whatever the library
   holds, and a windowed data layer (`useTrackWindow`) fetches the 500-row pages the viewport needs,
   keeping twelve of them in a bounded, farthest-first-evicted cache. Loading rows are skeletons at the

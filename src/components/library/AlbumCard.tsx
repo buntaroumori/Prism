@@ -5,6 +5,7 @@ import { CoverArt } from "@/components/ui/CoverArt";
 import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/uiStore";
+import { useContextMenuStore } from "@/stores/contextMenuStore";
 import type { AlbumRow } from "@/types/ipc";
 
 interface AlbumCardProps {
@@ -27,12 +28,18 @@ interface AlbumCardProps {
 export function AlbumCard({ album, onPlay, busy = false, size }: AlbumCardProps): JSX.Element {
   const openAlbum = useUiStore((state) => state.openAlbum);
   const openArtist = useUiStore((state) => state.openArtist);
+  const openAt = useContextMenuStore((state) => state.openAt);
   const meta = [album.year === null ? null : String(album.year), album.quality]
     .filter((value): value is string => value !== null && value.length > 0)
     .join(" · ");
 
   return (
     <div
+      data-interactive
+      onContextMenu={(event) => {
+        event.preventDefault();
+        openAt(event.clientX, event.clientY, { kind: "album", album });
+      }}
       className={cn("group relative shrink-0", size === undefined && "w-[172px]")}
       style={size === undefined ? undefined : { width: `${String(size)}px` }}
     >

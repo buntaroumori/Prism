@@ -1,30 +1,20 @@
-import { ArrowLeft, Disc3, Play, Shuffle, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Play, Shuffle, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useState, type JSX } from "react";
 
+import { TrackTable } from "@/components/library/TrackTable";
 import { CoverArt } from "@/components/ui/CoverArt";
 import { Button } from "@/components/ui/Button";
-import { formatCount, formatDuration, formatLibraryDuration } from "@/lib/format";
+import { formatCount, formatLibraryDuration } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
-import { cn } from "@/lib/utils";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { AlbumDetail, TrackRow } from "@/types/ipc";
 
-/**
- * One record.
- *
- * Ordered by disc and track number (never by the sort the browse grid uses),
- * with every artist name a link and every row a play button. This is the only
- * surface where a track list is the primary content, which is why the library
- * itself does not need one.
- */
+/** One record, ordered by disc and track number with a section per disc. */
 export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
   const back = useUiStore((state) => state.back);
   const openArtist = useUiStore((state) => state.openArtist);
   const playTracks = usePlaybackStore((state) => state.playTracks);
-  const currentId = usePlaybackStore((state) => state.status?.track?.trackId ?? null);
-  const playing = usePlaybackStore((state) => state.status?.state === "playing");
-
   const [detail, setDetail] = useState<AlbumDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +31,7 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
       })
       .catch((cause: unknown) => {
         if (active) {
-          setError(cause instanceof Error ? cause.message : "Cannot open this album");
+          setError(cause instanceof Error ? cause.message : "This album could not be opened");
         }
       });
     return () => {
@@ -55,7 +45,9 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
     }
     return [...detail.tracks.items].sort((a, b) => {
       const disc = (a.discNo ?? 1) - (b.discNo ?? 1);
-      return disc !== 0 ? disc : (a.trackNo ?? 0) - (b.trackNo ?? 0);
+      return disc !== 0
+        ? disc
+        : (a.trackNo ?? 0) - (b.trackNo ?? 0) || a.title.localeCompare(b.title);
     });
   }, [detail]);
 
@@ -79,13 +71,12 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
   }
 
   const album = detail.album;
-
   const play = (index: number, shuffle = false): void => {
     if (tracks.length === 0) {
       return;
     }
     const order = shuffle ? shuffled(tracks) : tracks;
-    void playTracks(order, index);
+    void playTracks(order, shuffle ? 0 : index);
   };
 
   return (
@@ -121,6 +112,7 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
           <p className="tabular mt-1 text-[11.5px] text-white/30">
             {formatCount(album.trackCount)} tracks · {formatLibraryDuration(album.durationMs)} ·{" "}
             {album.quality}
+            {album.discCount > 1 ? ` · ${String(album.discCount)} discs` : ""}
           </p>
 
           <div className="mt-5 flex items-center gap-2.5">
@@ -148,101 +140,20 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
         </div>
       </header>
 
-      <ol className="mt-9 divide-y divide-white/[0.045]">
-        {tracks.map((track, index) => (
-          <TrackLine
-            key={track.id}
-            track={track}
-            index={index}
-            current={currentId === track.id}
-            playing={playing && currentId === track.id}
-            onPlay={() => {
-              play(index);
-            }}
-            onOpenArtist={openArtist}
-          />
-        ))}
-      </ol>
+      <div className="mt-9">
+        <TrackTable tracks={tracks} discCount={album.discCount} onPlay={play} />
+      </div>
 
       {tracks.length === 0 ? (
         <p className="mt-8 text-[12.5px] text-white/35">
-          This album has no playable files. Run a scan from Settings → Library.
+          No playable files are available for this album. Scan its folder again from Settings.
         </p>
       ) : null}
     </div>
   );
 }
 
-function TrackLine({
-  track,
-  index,
-  current,
-  playing,
-  onPlay,
-  onOpenArtist,
-}: {
-  track: TrackRow;
-  index: number;
-  current: boolean;
-  playing: boolean;
-  onPlay: () => void;
-  onOpenArtist: (id: string) => void;
-}): JSX.Element {
-  return (
-    <li
-      className={cn(
-        "group flex items-center gap-4 px-2 py-2.5 transition-colors hover:bg-white/[0.03]",
-        current && "bg-accent/[0.05]",
-        track.missing && "opacity-45",
-      )}
-    >
-      <button
-        type="button"
-        onClick={onPlay}
-        aria-label={`Play ${track.title}`}
-        className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-[11px] text-white/30 group-hover:text-white"
-      >
-        <span className="group-hover:hidden">
-          {playing ? (
-            <Disc3 className="h-3.5 w-3.5 animate-spin text-accent" aria-hidden="true" />
-          ) : (
-            String(track.trackNo ?? index + 1).padStart(2, "0")
-          )}
-        </span>
-        <Play className="hidden h-3 w-3 fill-current group-hover:block" aria-hidden="true" />
-      </button>
-
-      <div className="min-w-0 flex-1">
-        <p className={cn("truncate text-[13px]", current ? "text-accent" : "text-white/85")}>
-          {track.title}
-        </p>
-        {track.artist !== "" && track.artist !== track.albumArtist ? (
-          <p className="truncate text-[11px] text-white/35">
-            <ArtistLink id={track.artistId} name={track.artist} onOpen={onOpenArtist} />
-          </p>
-        ) : null}
-      </div>
-
-      <span className="tabular shrink-0 text-[11.5px] text-white/30">
-        {track.durationMs > 0 ? formatDuration(track.durationMs) : "—"}
-      </span>
-
-      <span
-        className={cn(
-          "hidden shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-[0.08em] uppercase sm:inline",
-          track.lossless
-            ? "border-positive/25 bg-positive/[0.08] text-positive/85"
-            : "border-white/10 bg-white/[0.04] text-white/35",
-        )}
-        title={`${track.format} · ${track.quality}`}
-      >
-        {track.quality}
-      </span>
-    </li>
-  );
-}
-
-/** A name that navigates. Rendered as a button so it is keyboard reachable. */
+/** A name that navigates. */
 export function ArtistLink({
   id,
   name,
@@ -264,10 +175,10 @@ export function ArtistLink({
       onClick={() => {
         onOpen(id);
       }}
-      className={cn(
-        "max-w-full truncate text-left transition-colors hover:text-white hover:underline hover:decoration-white/30 hover:underline-offset-2",
-        className,
-      )}
+      className={
+        className ??
+        "max-w-full truncate text-left transition-colors hover:text-white hover:underline hover:decoration-white/30 hover:underline-offset-2"
+      }
     >
       {label}
     </button>

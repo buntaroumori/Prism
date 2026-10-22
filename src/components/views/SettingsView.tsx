@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useOutputStore, BUFFER_CHOICES } from "@/stores/outputStore";
+import { useLayoutStore } from "@/stores/layoutStore";
 import { COVER_SIZE_MAX, COVER_SIZE_MIN, useUiStore } from "@/stores/uiStore";
 import type { DiscordStatus, LibraryRoot } from "@/types/ipc";
 
@@ -39,7 +40,7 @@ export function SettingsView(): JSX.Element {
       <header>
         <h1 className="text-[27px] font-semibold tracking-[-0.03em] text-white">Settings</h1>
         <p className="mt-1 text-[13px] text-white/40">
-          Changes apply to the running engine immediately.
+          Your choices are saved and applied to this installation.
         </p>
       </header>
 
@@ -79,11 +80,11 @@ function OutputSection(): JSX.Element {
   return (
     <Section
       title="Output"
-      description="Prism plays through the system mixer, so it coexists with every other application and the endpoint never disappears from under one of them. What the driver actually granted is read back at open time and shown below; whether the endpoint is allowed to follow the record's rate is the choice underneath."
+      description="Choose where your music plays and how Prism handles songs with different sample rates."
     >
       <Row
         label="Output device"
-        hint="Physical playback endpoints only. Loopback and capture nodes are filtered out."
+        hint="Speakers, headphones and other playback devices available on this computer."
       >
         <div className="flex min-w-0 items-center gap-2">
           <select
@@ -115,7 +116,7 @@ function OutputSection(): JSX.Element {
 
       <Row
         label="Device configuration"
-        hint="Queried from the driver at runtime. In shared mode the operating system owns this format; the engine converts to it."
+        hint="The format currently reported by your playback device."
       >
         <div className="flex items-center gap-2">
           <span className="tabular rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[11.5px] text-white/70">
@@ -131,8 +132,8 @@ function OutputSection(): JSX.Element {
         label="Sample rate"
         hint={
           ratePolicy === "matchSource"
-            ? "The endpoint is asked for each track's own rate, so a 44.1 kHz record plays at 44.1 kHz and nothing converts it. When the operating system pins the endpoint to one format, the engine detects the refusal and converts instead — the request is never assumed to be granted."
-            : "The endpoint keeps the rate the driver reports and every track is converted to it. One clock for the whole session, at the cost of a resampling stage on everything that differs."
+            ? "Each song plays at its own sample rate when your device allows it. Otherwise, Prism converts it automatically."
+            : "Your device keeps one sample rate and every song is converted to match it."
         }
       >
         <Segmented
@@ -166,10 +167,10 @@ function OutputSection(): JSX.Element {
 
       <p className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-3.5 py-2.5 text-[11px] leading-relaxed text-white/35">
         {bufferFrames <= 128
-          ? "At this size the engine keeps a handful of milliseconds in flight: seeking feels immediate, but a busy machine or a USB DAC with a loose clock will produce the occasional click. Choose it when the machine is idle and the endpoint is solid."
+          ? "The shortest response time, best for a computer with a stable audio connection. If you hear interruptions, choose a larger buffer."
           : bufferFrames <= 512
-            ? "The balanced setting: low enough that transport buttons feel instant, deep enough to absorb a background compile or a browser tab waking up. This is the right default for most libraries."
-            : "A deep buffer trades latency for resilience: nothing can starve the device, so dropouts disappear on slow disks, network shares and virtual machines. Seeking and pausing will feel a fraction of a second behind the click."}
+            ? "A balance between responsive controls and uninterrupted playback. This is the best choice for most systems."
+            : "The most resilient option for slow drives or network folders. Controls may take a moment longer to respond."}
       </p>
     </Section>
   );
@@ -233,7 +234,7 @@ function LibrarySection(): JSX.Element {
   return (
     <Section
       title="Library folders"
-      description="Prism indexes these directories recursively. Removing a folder also removes the tracks it contributed from the catalogue — files on disk are untouched, but the library stops listing what is no longer indexed."
+      description="Prism finds music in these folders and the folders inside them. Removing a folder only removes its music from Prism; your files are not deleted."
     >
       <div className="space-y-2">
         {roots.length === 0 ? (
@@ -538,7 +539,10 @@ function PresenceSection(): JSX.Element {
       });
   }, []);
 
-  const apply = async (enabled: boolean): Promise<void> => {
+  const apply = async (
+    enabled: boolean,
+    showPaused = status?.showPaused ?? true,
+  ): Promise<void> => {
     setBusy(true);
     setError(null);
     try {
@@ -548,6 +552,7 @@ function PresenceSection(): JSX.Element {
         showCover: status?.showCover ?? true,
         showTimestamps: status?.showTimestamps ?? true,
         showQuality: status?.showQuality ?? true,
+        showPaused,
       });
       setStatus(next);
     } catch (cause) {
@@ -576,7 +581,7 @@ function PresenceSection(): JSX.Element {
         />
       </Row>
 
-      <Row label="State" hint="The worker reconnects with exponential backoff.">
+      <Row label="State" hint="Prism reconnects automatically if Discord is closed or restarted.">
         <div className="flex items-center gap-2">
           <StatusPill
             tone={
@@ -601,6 +606,24 @@ function PresenceSection(): JSX.Element {
             </span>
           ) : null}
         </div>
+      </Row>
+
+      <Row
+        label="While paused"
+        hint="Keep the current song visible, or clear Discord until you resume."
+      >
+        <Segmented
+          label="Discord activity while paused"
+          layoutId="settings-discord-paused"
+          value={(status?.showPaused ?? true) ? "show" : "hide"}
+          onChange={(next) => {
+            void apply(status?.enabled ?? false, next === "show");
+          }}
+          options={[
+            { value: "show", label: "Show activity" },
+            { value: "hide", label: "Hide activity" },
+          ]}
+        />
       </Row>
 
       <div className="flex items-center gap-2">
@@ -650,6 +673,8 @@ function AppearanceSection(): JSX.Element {
   const showRailArrows = useUiStore((state) => state.showRailArrows);
   const showHomeStats = useUiStore((state) => state.showHomeStats);
   const showSpectrum = useUiStore((state) => state.showSpectrum);
+  const spectrumModuleVisible = useLayoutStore((state) => state.modules.includes("spectrum"));
+  const toggleModule = useLayoutStore((state) => state.toggleModule);
   const setAppearance = useUiStore((state) => state.setAppearance);
   const effects = useUiStore((state) => state.effects);
   const measured = useUiStore((state) => state.measuredEffects);
@@ -658,7 +683,7 @@ function AppearanceSection(): JSX.Element {
   return (
     <Section
       title="Appearance"
-      description="Every control here writes a CSS custom property on the shell root, so the window restyles in one frame and a slider move costs no React render. Preferences persist per machine."
+      description="Adjust how Prism looks. Every choice is applied immediately and remembered on this computer."
     >
       <Row label="Accent" hint="Follow the playing artwork, or pin a colour of your own.">
         <div className="flex items-center gap-2">
@@ -727,10 +752,10 @@ function AppearanceSection(): JSX.Element {
         label="Visual effects"
         hint={
           effects === "auto"
-            ? `Automatic. The shell times its own frames once at start-up and drops the layers that need a real GPU when the compositor cannot keep up${measured === "reduced" ? " — which is what happened on this machine, so the blurred orbs and backdrop filters are off." : "."}`
+            ? `Prism chooses the best balance for this computer${measured === "reduced" ? ". Simpler effects are currently active." : "."}`
             : effects === "reduced"
-              ? "Reduced. No backdrop filters, no drifting orbs, no grain: the interface paints flat and stays responsive on software-rendered WebKit."
-              : "Full. Blurred ambience and frosted surfaces everywhere, at the cost of a GPU-backed compositor."
+              ? "A simpler, faster presentation with fewer visual layers."
+              : "All visual layers, including frosted panels and moving background colour."
         }
       >
         <Segmented
@@ -822,12 +847,15 @@ function AppearanceSection(): JSX.Element {
         />
       </Row>
 
-      <Row label="Spectrum" hint="The analyser in Now Playing. Off saves the FFT work entirely.">
+      <Row label="Spectrum" hint="Show the live frequency analyser in Now Playing.">
         <Toggle
           label="Spectrum"
           checked={showSpectrum}
           onChange={(checked) => {
             setAppearance({ showSpectrum: checked });
+            if (checked !== spectrumModuleVisible) {
+              toggleModule("spectrum");
+            }
           }}
         />
       </Row>

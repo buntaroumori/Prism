@@ -196,6 +196,30 @@ impl ArtworkService {
         asset
     }
 
+    /// Resolve the best local hint for a track's *album*, not just its folder.
+    ///
+    /// Multi-disc records commonly keep artwork beside disc one while the
+    /// current file is under `CD2/`. Using the first available file of the
+    /// album keeps embedded/folder artwork and the Discord cover consistent.
+    pub async fn hint_for_track(&self, track_id: &str, current_path: Option<PathBuf>) -> CoverHint {
+        let first: Option<String> = sqlx::query_scalar(
+            "SELECT first.path FROM tracks AS current \
+             JOIN tracks AS first ON first.album_id = current.album_id \
+             WHERE current.id = ?1 AND first.missing = 0 \
+             ORDER BY first.disc_no ASC, first.track_no ASC, first.path ASC LIMIT 1",
+        )
+        .bind(track_id)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten();
+        let track_path = first.map(PathBuf::from).or(current_path);
+        let folder = track_path
+            .as_ref()
+            .and_then(|path| path.parent().map(Path::to_path_buf));
+        CoverHint { track_path, folder }
+    }
+
     /// An HTTPS URL for `(artist, album)`, for surfaces that cannot read a file.
     ///
     /// Discord Rich Presence is the reason this exists: `large_image` accepts a

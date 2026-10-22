@@ -132,6 +132,58 @@ impl AlbumSort {
     }
 }
 
+/// A curated Home collection whose "See all" page must return the same rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AlbumCollection {
+    RecentlyAdded,
+    RecentlyPlayed,
+    MostPlayed,
+    HighResolution,
+    RecentReleases,
+    Rediscover,
+}
+
+impl AlbumCollection {
+    fn where_clause(self) -> &'static str {
+        match self {
+            Self::RecentlyAdded => "available_tracks > 0",
+            Self::RecentlyPlayed => "last_played_at IS NOT NULL",
+            Self::MostPlayed => "play_count > 0",
+            Self::HighResolution => {
+                "max_sample_rate > 48000 OR max_bit_depth > 16 OR id IN (\
+                 SELECT album_id FROM tracks WHERE dsd_rate IS NOT NULL)"
+            }
+            Self::RecentReleases => "year = (SELECT MAX(year) FROM albums WHERE year IS NOT NULL)",
+            // Once a record is played it leaves this shelf. Unplayed records
+            // come first, then the ones least recently heard; the previous
+            // hash ordering returned the same albums forever.
+            Self::Rediscover => {
+                "available_tracks > 0 AND (last_played_at IS NULL OR \
+                 last_played_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-30 days'))"
+            }
+        }
+    }
+
+    fn order_by(self) -> &'static str {
+        match self {
+            Self::RecentlyAdded => "added_at DESC, sort_title COLLATE NOCASE ASC",
+            Self::RecentlyPlayed => "last_played_at DESC, sort_title COLLATE NOCASE ASC",
+            Self::MostPlayed => {
+                "play_count DESC, last_played_at DESC, sort_title COLLATE NOCASE ASC"
+            }
+            Self::HighResolution => {
+                "max_bit_depth DESC, max_sample_rate DESC, sort_title COLLATE NOCASE ASC"
+            }
+            Self::RecentReleases => "year DESC, sort_title COLLATE NOCASE ASC",
+            Self::Rediscover => {
+                "last_played_at ASC NULLS FIRST, play_count ASC, added_at DESC, \
+                 sort_title COLLATE NOCASE ASC"
+            }
+        }
+    }
+}
+
 /// Everything the Home screen renders, in one round-trip.
 ///
 /// Six rails, each justified by a different reason to reach for a record:
@@ -147,6 +199,17 @@ pub struct HomeRails {
     pub high_resolution: Vec<AlbumRow>,
     pub recent_releases: Vec<AlbumRow>,
     pub rediscover: Vec<AlbumRow>,
+    /// The genres with the most distinct albums, each with its own shelf.
+    pub genres: Vec<GenreRail>,
+}
+
+/// One genre and the albums that carry it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenreRail {
+    pub name: String,
+    pub album_count: i64,
+    pub albums: Vec<AlbumRow>,
 }
 
 /// One row of the track list. Field names and casing match
@@ -508,6 +571,48 @@ fn track_row_from_sql(row: &sqlx::sqlite::SqliteRow) -> Result<TrackRow, PrismEr
     })
 }
 
+/// Read one playlist in its explicit, user-owned order.
+pub async fn playlist_tracks(
+    pool: &SqlitePool,
+    playlist_id: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<Page<TrackRow>, PrismError> {
+    let limit = limit.clamp(1, MAX_PAGE_SIZE);
+    let offset = offset.min(5_000_000);
+    let from = " FROM playlist_items AS pi \
+         JOIN tracks AS t ON t.id = pi.track_id \
+         LEFT JOIN albums AS al ON al.id = t.album_id \
+         LEFT JOIN cover_cache AS cc ON cc.id = al.cover_id";
+    let total =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM playlist_items WHERE playlist_id = ?1")
+            .bind(playlist_id)
+            .fetch_one(pool)
+            .await?;
+
+    let sql = format!(
+        "{TRACK_SELECT}, NULL AS highlight{from} \
+         WHERE pi.playlist_id = ?1 ORDER BY pi.position ASC, pi.added_at ASC, pi.id ASC \
+         LIMIT ?2 OFFSET ?3"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(playlist_id)
+        .bind(i64::from(limit))
+        .bind(i64::from(offset))
+        .fetch_all(pool)
+        .await?;
+    let items = rows
+        .iter()
+        .map(track_row_from_sql)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Page {
+        items,
+        total,
+        limit,
+        offset,
+    })
+}
+
 /// Container formats whose samples reach the DAC unchanged.
 #[must_use]
 pub fn is_lossless(format: &str) -> bool {
@@ -517,7 +622,7 @@ pub fn is_lossless(format: &str) -> bool {
     )
 }
 
-/// Browse the album grid.
+/// Browse the album grid (compatibility wrapper for artist/detail queries).
 pub async fn albums(
     pool: &SqlitePool,
     text: Option<&str>,
@@ -526,36 +631,73 @@ pub async fn albums(
     limit: u32,
     offset: u32,
 ) -> Result<Page<AlbumRow>, PrismError> {
+    albums_filtered(pool, text, artist_id, None, None, Some(sort), limit, offset).await
+}
+
+/// Browse albums with a genre or a Home collection applied.
+///
+/// The count and the page share one filter function, and Home uses the same
+/// `AlbumCollection` predicates. A shelf can therefore never claim one thing
+/// while its "See all" page silently opens an unrelated grid.
+#[allow(clippy::too_many_arguments)]
+pub async fn albums_filtered(
+    pool: &SqlitePool,
+    text: Option<&str>,
+    artist_id: Option<&str>,
+    genre: Option<&str>,
+    collection: Option<AlbumCollection>,
+    sort: Option<AlbumSort>,
+    limit: u32,
+    offset: u32,
+) -> Result<Page<AlbumRow>, PrismError> {
     let limit = limit.clamp(1, MAX_PAGE_SIZE);
     let offset = offset.min(5_000_000);
 
-    let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM albums WHERE 1 = 1");
-    if let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) {
-        count
-            .push(" AND (title LIKE ")
-            .push_bind(format!("%{}%", escape_like(text)))
-            .push(" ESCAPE '\\' OR album_artist_name LIKE ")
-            .push_bind(format!("%{}%", escape_like(text)))
-            .push(" ESCAPE '\\')");
-    }
-    if let Some(artist_id) = artist_id {
-        count
-            .push(" AND (artist_id = ")
-            .push_bind(artist_id.to_string())
-            .push(" OR album_artist_id = ")
-            .push_bind(artist_id.to_string())
-            .push(")");
-    }
+    let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM v_album_summary WHERE 1 = 1");
+    push_album_filters(&mut count, text, artist_id, genre, collection);
     let total: i64 = count.build_query_scalar().fetch_one(pool).await?;
 
-    let order = sort.order_by();
-
-    // The projected list is the shared constant, never a copy: a hand-written
-    // list here is how `artist_id` went missing and every album tile started
-    // failing to decode.
+    let order = sort.map_or_else(
+        || {
+            collection.map_or_else(
+                || AlbumSort::default().order_by(),
+                AlbumCollection::order_by,
+            )
+        },
+        AlbumSort::order_by,
+    );
     let mut builder = QueryBuilder::<Sqlite>::new(format!(
         "SELECT {ALBUM_COLUMNS} FROM v_album_summary WHERE 1 = 1"
     ));
+    push_album_filters(&mut builder, text, artist_id, genre, collection);
+    builder
+        .push(" ORDER BY ")
+        .push(order)
+        .push(", id ASC LIMIT ")
+        .push_bind(i64::from(limit))
+        .push(" OFFSET ")
+        .push_bind(i64::from(offset));
+
+    let rows = builder.build().fetch_all(pool).await?;
+    let items = rows
+        .iter()
+        .map(album_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Page {
+        items,
+        total,
+        limit,
+        offset,
+    })
+}
+
+fn push_album_filters(
+    builder: &mut QueryBuilder<'_, Sqlite>,
+    text: Option<&str>,
+    artist_id: Option<&str>,
+    genre: Option<&str>,
+    collection: Option<AlbumCollection>,
+) {
     if let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) {
         builder
             .push(" AND (title LIKE ")
@@ -572,26 +714,21 @@ pub async fn albums(
             .push_bind(artist_id.to_string())
             .push(")");
     }
-    builder
-        .push(" ORDER BY ")
-        .push(order)
-        .push(", id ASC LIMIT ")
-        .push_bind(i64::from(limit))
-        .push(" OFFSET ")
-        .push_bind(i64::from(offset));
-
-    let rows = builder.build().fetch_all(pool).await?;
-    let mut items = Vec::with_capacity(rows.len());
-    for row in &rows {
-        items.push(album_from_row(row)?);
+    if let Some(genre) = genre.map(str::trim).filter(|genre| !genre.is_empty()) {
+        builder
+            .push(
+                " AND id IN (SELECT album_id FROM tracks \
+                 WHERE album_id IS NOT NULL AND genre = ",
+            )
+            .push_bind(genre.to_string())
+            .push(" COLLATE NOCASE)");
     }
-
-    Ok(Page {
-        items,
-        total,
-        limit,
-        offset,
-    })
+    if let Some(collection) = collection {
+        builder
+            .push(" AND (")
+            .push(collection.where_clause())
+            .push(")");
+    }
 }
 
 /// Columns every album read model selects. One definition, so a rail can never
@@ -692,53 +829,74 @@ async fn rail(
     rows.iter().map(album_from_row).collect()
 }
 
+async fn collection_rail(
+    pool: &SqlitePool,
+    collection: AlbumCollection,
+    limit: u32,
+) -> Result<Vec<AlbumRow>, PrismError> {
+    rail(
+        pool,
+        &format!("WHERE {}", collection.where_clause()),
+        collection.order_by(),
+        limit,
+    )
+    .await
+}
+
+async fn genre_albums(
+    pool: &SqlitePool,
+    genre: &str,
+    limit: u32,
+) -> Result<Vec<AlbumRow>, PrismError> {
+    let sql = format!(
+        "SELECT {ALBUM_COLUMNS} FROM v_album_summary \
+         WHERE available_tracks > 0 AND id IN ( \
+             SELECT album_id FROM tracks \
+             WHERE album_id IS NOT NULL AND genre = ?1 COLLATE NOCASE \
+         ) ORDER BY added_at DESC, sort_title COLLATE NOCASE ASC LIMIT ?2"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(genre)
+        .bind(i64::from(limit.clamp(1, 60)))
+        .fetch_all(pool)
+        .await?;
+    rows.iter().map(album_from_row).collect()
+}
+
 /// Build every Home rail in one call.
 ///
 /// `recently_played` and `most_played` are empty until playback has actually
-/// happened — `play_history` is written by `library_note_play` when the engine
-/// starts a track. The UI hides a rail it has no evidence for instead of
-/// inventing records, which is the difference between an editorial page and a
-/// mock-up.
+/// happened. Rediscover excludes anything heard in the last thirty days, so
+/// listening to a suggestion really changes the shelf. Genre shelves are ranked
+/// by distinct albums rather than by how long a single album happens to be.
 pub async fn home(pool: &SqlitePool, limit: u32) -> Result<HomeRails, PrismError> {
     let limit = limit.clamp(1, 40);
-    let recently_added = rail(pool, "WHERE available_tracks > 0", "added_at DESC", limit).await?;
-    let recently_played = rail(
-        pool,
-        "WHERE last_played_at IS NOT NULL",
-        "last_played_at DESC",
-        limit,
+    let recently_added = collection_rail(pool, AlbumCollection::RecentlyAdded, limit).await?;
+    let recently_played = collection_rail(pool, AlbumCollection::RecentlyPlayed, limit).await?;
+    let most_played = collection_rail(pool, AlbumCollection::MostPlayed, limit).await?;
+    let high_resolution = collection_rail(pool, AlbumCollection::HighResolution, limit).await?;
+    let recent_releases = collection_rail(pool, AlbumCollection::RecentReleases, limit).await?;
+    let rediscover = collection_rail(pool, AlbumCollection::Rediscover, limit).await?;
+
+    let top_genres = sqlx::query_as::<_, (String, i64)>(
+        "SELECT genre, COUNT(DISTINCT album_id) FROM tracks \
+         WHERE missing = 0 AND album_id IS NOT NULL AND trim(genre) <> '' \
+         GROUP BY genre COLLATE NOCASE \
+         ORDER BY COUNT(DISTINCT album_id) DESC, genre COLLATE NOCASE ASC LIMIT 4",
     )
+    .fetch_all(pool)
     .await?;
-    let most_played = rail(
-        pool,
-        "WHERE play_count > 0",
-        "play_count DESC, last_played_at DESC",
-        limit,
-    )
-    .await?;
-    let high_resolution = rail(
-        pool,
-        "WHERE max_sample_rate > 48000 OR max_bit_depth > 16",
-        "max_bit_depth DESC, max_sample_rate DESC, sort_title COLLATE NOCASE ASC",
-        limit,
-    )
-    .await?;
-    let recent_releases = rail(
-        pool,
-        "WHERE year IS NOT NULL AND year >= (SELECT MAX(year) - 12 FROM albums WHERE year IS NOT NULL)",
-        "year DESC, sort_title COLLATE NOCASE ASC",
-        limit,
-    )
-    .await?;
-    // Deterministic "rediscover": order by a hash of the id, so the rail is
-    // stable within a session but different from every curated one.
-    let rediscover = rail(
-        pool,
-        "WHERE available_tracks > 0",
-        "length(id) || substr(id, 3, 4) ASC",
-        limit,
-    )
-    .await?;
+    let mut genres = Vec::with_capacity(top_genres.len());
+    for (name, album_count) in top_genres {
+        let albums = genre_albums(pool, &name, limit).await?;
+        if !albums.is_empty() {
+            genres.push(GenreRail {
+                name,
+                album_count,
+                albums,
+            });
+        }
+    }
 
     Ok(HomeRails {
         recently_added,
@@ -747,6 +905,7 @@ pub async fn home(pool: &SqlitePool, limit: u32) -> Result<HomeRails, PrismError
         high_resolution,
         recent_releases,
         rediscover,
+        genres,
     })
 }
 

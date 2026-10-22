@@ -3,6 +3,7 @@ import {
   Compass,
   Disc3,
   LibraryBig,
+  ListMusic,
   PanelLeftClose,
   PanelLeftOpen,
   Settings2,
@@ -26,6 +27,7 @@ interface NavItem {
 const NAV_ITEMS: readonly NavItem[] = [
   { id: "home", label: "Home", icon: Compass, section: "primary" },
   { id: "library", label: "Library", icon: LibraryBig, section: "primary" },
+  { id: "playlists", label: "Playlists", icon: ListMusic, section: "primary" },
   { id: "now-playing", label: "Now Playing", icon: Disc3, section: "primary" },
   { id: "settings", label: "Settings", icon: Settings2, section: "secondary" },
   { id: "system", label: "System", icon: SlidersHorizontal, section: "secondary" },
@@ -50,7 +52,10 @@ export function Sidebar(): JSX.Element {
   const secondary = NAV_ITEMS.filter((item) => item.section === "secondary");
 
   const renderItem = (item: NavItem): JSX.Element => {
-    const isActive = route === item.id;
+    const isActive =
+      route === item.id ||
+      (item.id === "playlists" && route === "playlist") ||
+      (item.id === "library" && (route === "album" || route === "artist"));
     return (
       <button
         key={item.id}
@@ -101,7 +106,7 @@ export function Sidebar(): JSX.Element {
           <div className="min-w-0">
             <p className="truncate text-[13px] font-semibold tracking-tight text-white">Prism</p>
             <p className="truncate text-[9px] font-medium tracking-[0.22em] text-white/30 uppercase">
-              Reference player
+              Your music
             </p>
           </div>
         ) : null}

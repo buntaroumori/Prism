@@ -14,6 +14,8 @@ import {
   OutputDeviceSchema,
   PlayerStatusSchema,
   PlayerTickSchema,
+  PlaylistDetailSchema,
+  PlaylistRowSchema,
   PluginMessageSchema,
   TrackRequestSchema,
   ArtistRowSchema,
@@ -55,6 +57,8 @@ import {
   type OutputMode,
   type PlayerStatus,
   type PlayerTick,
+  type PlaylistDetail,
+  type PlaylistRow,
   type RatePolicy,
   type PluginMessage,
   type PluginSnapshot,
@@ -70,6 +74,7 @@ import {
   type TrackRequest,
   type TrackRow,
   type AlbumSort,
+  type AlbumCollection,
 } from "@/types/ipc";
 
 /**
@@ -166,6 +171,12 @@ export const systemApi = {
   openDataFolder: (): Promise<void> => commandVoid("open_data_folder"),
 };
 
+export const windowApi = {
+  setFullscreen: (fullscreen: boolean): Promise<void> =>
+    commandVoidWithArgs("window_set_fullscreen", { fullscreen }),
+  isFullscreen: (): Promise<boolean> => command("window_is_fullscreen", z.boolean()),
+};
+
 const Z_BOOLEAN = z.boolean();
 const Z_NUMBER = z.number().int();
 const Z_ROOTS = z.array(LibraryRootSchema);
@@ -210,6 +221,8 @@ export const libraryApi = {
   albums: (options?: {
     text?: string;
     artistId?: string;
+    genre?: string;
+    collection?: AlbumCollection;
     sort?: AlbumSort;
     limit?: number;
     offset?: number;
@@ -217,6 +230,8 @@ export const libraryApi = {
     command("library_albums", AlbumPageSchema, {
       text: options?.text ?? null,
       artistId: options?.artistId ?? null,
+      genre: options?.genre ?? null,
+      collection: options?.collection ?? null,
       sort: options?.sort ?? null,
       limit: options?.limit ?? null,
       offset: options?.offset ?? null,
@@ -265,6 +280,25 @@ export const discordApi = {
   configure: (config: DiscordConfig): Promise<DiscordStatus> =>
     command("discord_configure", DiscordStatusSchema, { config }),
   clear: (): Promise<boolean> => command("discord_clear", Z_BOOLEAN),
+};
+
+const Z_PLAYLISTS = z.array(PlaylistRowSchema);
+
+export const playlistApi = {
+  list: (): Promise<PlaylistRow[]> => command("playlist_list", Z_PLAYLISTS),
+  create: (name: string): Promise<PlaylistRow> =>
+    command("playlist_create", PlaylistRowSchema, { name }),
+  detail: (id: string, limit?: number, offset?: number): Promise<PlaylistDetail> =>
+    command("playlist_detail", PlaylistDetailSchema, {
+      id,
+      limit: limit ?? null,
+      offset: offset ?? null,
+    }),
+  addTracks: (playlistId: string, trackIds: string[]): Promise<PlaylistRow> =>
+    command("playlist_add_tracks", PlaylistRowSchema, { playlistId, trackIds }),
+  removeTrack: (playlistId: string, trackId: string): Promise<PlaylistRow> =>
+    command("playlist_remove_track", PlaylistRowSchema, { playlistId, trackId }),
+  delete: (id: string): Promise<boolean> => command("playlist_delete", Z_BOOLEAN, { id }),
 };
 
 /**

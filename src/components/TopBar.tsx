@@ -1,5 +1,12 @@
-import { ChevronRight, Loader2, Search, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { ChevronRight, Loader2, Maximize2, Minimize2, Search, X } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type JSX,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 
 import { StatusPill } from "@/components/ui/StatusPill";
 import { formatCount } from "@/lib/format";
@@ -8,11 +15,16 @@ import { cn } from "@/lib/utils";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore, type ShellRoute } from "@/stores/uiStore";
+import { useWindowStore } from "@/stores/windowStore";
+import { useContextMenuStore } from "@/stores/contextMenuStore";
 import type { GlobalSearch } from "@/types/ipc";
 
 const ROUTE_LABELS: Record<ShellRoute, string> = {
   home: "Home",
   library: "Library",
+  collection: "Collection",
+  playlists: "Playlists",
+  playlist: "Playlist",
   "now-playing": "Now Playing",
   settings: "Settings",
   system: "System",
@@ -41,6 +53,9 @@ export function TopBar(): JSX.Element {
   const scan = useLibraryStore((state) => state.scan);
   const progress = useLibraryStore((state) => state.progress);
   const playback = usePlaybackStore((state) => state.playTracks);
+  const fullscreen = useWindowStore((state) => state.fullscreen);
+  const toggleFullscreen = useWindowStore((state) => state.toggleFullscreen);
+  const openAt = useContextMenuStore((state) => state.openAt);
 
   const [text, setText] = useState("");
   const [results, setResults] = useState<GlobalSearch | null>(null);
@@ -201,6 +216,10 @@ export function TopBar(): JSX.Element {
                         openAlbum(album.id);
                         setOpen(false);
                       }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        openAt(event.clientX, event.clientY, { kind: "album", album });
+                      }}
                     />
                   ))}
                 </Group>
@@ -227,6 +246,10 @@ export function TopBar(): JSX.Element {
                         void playback([track], 0);
                         setOpen(false);
                       }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        openAt(event.clientX, event.clientY, { kind: "track", track });
+                      }}
                     />
                   ))}
                 </Group>
@@ -243,7 +266,22 @@ export function TopBar(): JSX.Element {
         ) : null}
       </div>
 
-      <div className="no-drag flex w-[210px] shrink-0 items-center justify-end gap-2.5">
+      <div className="no-drag flex w-[250px] shrink-0 items-center justify-end gap-2.5">
+        <button
+          type="button"
+          aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+          title={fullscreen ? "Exit fullscreen (F11)" : "Fullscreen (F11)"}
+          onClick={() => {
+            void toggleFullscreen();
+          }}
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/35 transition-colors hover:bg-white/[0.06] hover:text-white"
+        >
+          {fullscreen ? (
+            <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
+          ) : (
+            <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+        </button>
         {running ? (
           <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] py-1 pr-3 pl-2.5">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-white/50" aria-hidden="true" />
@@ -292,15 +330,18 @@ function Row({
   primary,
   secondary,
   onPick,
+  onContextMenu,
 }: {
   primary: string;
   secondary: string;
   onPick: () => void;
+  onContextMenu?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 }): JSX.Element {
   return (
     <button
       type="button"
       onClick={onPick}
+      onContextMenu={onContextMenu}
       className="flex w-full min-w-0 items-center gap-2 rounded-xl px-2.5 py-1.5 text-left hover:bg-white/[0.05]"
     >
       <span className="truncate text-[12.5px] text-white/85">{primary}</span>

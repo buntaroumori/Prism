@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
-use crate::artwork::{ArtworkService, CoverHint};
+use crate::artwork::ArtworkService;
 use crate::audio::engine::{EngineStatus, PlaybackState};
 
 pub use rpc::{Activity, DiscordRpc, DiscordState, DiscordStatus};
@@ -55,6 +55,10 @@ pub struct DiscordConfig {
     pub show_timestamps: bool,
     /// Publish the bit-perfect badge as `small_text`.
     pub show_quality: bool,
+    /// Keep the current record visible while playback is paused. When false,
+    /// pausing clears the activity without forgetting it; resuming restores
+    /// the same track and its position immediately.
+    pub show_paused: bool,
 }
 
 impl Default for DiscordConfig {
@@ -65,6 +69,7 @@ impl Default for DiscordConfig {
             show_cover: true,
             show_timestamps: true,
             show_quality: true,
+            show_paused: true,
         }
     }
 }
@@ -130,6 +135,7 @@ impl DiscordConfig {
 /// Presence snapshot handed to Discord.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrackPresence {
+    pub track_id: String,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -151,6 +157,7 @@ impl TrackPresence {
             i64::try_from(frames.saturating_mul(1_000) / u64::from(rate)).unwrap_or(i64::MAX)
         };
         Some(Self {
+            track_id: track.track_id.clone(),
             title: track.title.clone(),
             artist: track.artist.clone(),
             album: track.album.clone(),
@@ -259,6 +266,15 @@ impl DiscordService {
             (config, rpc)
         };
 
+        // Hiding a paused record is a presentation choice, not a stop command.
+        // Keep `inner.last` and the RPC worker alive so resume can publish the
+        // very same record without waiting for another track change.
+        if presence.as_ref().is_some_and(|track| !track.playing) && !config.show_paused {
+            rpc.clear();
+            self.inner.write().last_activity = None;
+            return;
+        }
+
         // 1. Text goes out immediately, so a track change is visible before
         //    any artwork request has had time to hit the network.
         if let Some(activity) = self.activity_for(&config, presence.as_ref(), None) {
@@ -271,14 +287,16 @@ impl DiscordService {
         }
 
         // 2. Artwork resolves asynchronously and republishes when ready.
-        let hint = CoverHint {
-            track_path: presence.path.as_ref().map(std::path::PathBuf::from),
-            folder: presence.path.as_ref().and_then(|path| {
-                std::path::Path::new(path)
-                    .parent()
-                    .map(std::path::Path::to_path_buf)
-            }),
-        };
+        // A disc-two folder often has no cover of its own. Resolve the first
+        // file of the album instead of caching a false negative for the whole
+        // record merely because the current track lives in `CD2/`.
+        let hint = self
+            .artwork
+            .hint_for_track(
+                &presence.track_id,
+                presence.path.as_ref().map(std::path::PathBuf::from),
+            )
+            .await;
         let cover = self
             .artwork
             .ensure(&presence.artist, &presence.album, &hint)
@@ -350,17 +368,24 @@ impl DiscordService {
         let artist = presence.artist.trim();
         let album = presence.album.trim();
 
-        let details = match (title.is_empty(), artist.is_empty()) {
-            (false, false) => format!("{title} — {artist}"),
-            (false, true) => title.to_string(),
-            (true, false) => artist.to_string(),
-            (true, true) => "Idle".to_string(),
+        // Discord exposes two activity lines plus the cover caption. Use each
+        // field once: song, artist, album. The old renderer put the album in
+        // both `state` and `large_text`, which is why it appeared twice.
+        let details = if !title.is_empty() {
+            title.to_string()
+        } else if !artist.is_empty() {
+            artist.to_string()
+        } else {
+            "Unknown track".to_string()
         };
-        let state = match (album.is_empty(), presence.playing) {
-            (false, true) => album.to_string(),
-            (false, false) => format!("{album} · Paused"),
-            (true, true) => "Playing".to_string(),
-            (true, false) => "Paused".to_string(),
+        let state = if !artist.is_empty() {
+            artist.to_string()
+        } else if !album.is_empty() {
+            album.to_string()
+        } else if presence.playing {
+            "Playing".to_string()
+        } else {
+            "Paused".to_string()
         };
 
         let now_ms = i64::try_from(
@@ -393,14 +418,18 @@ impl DiscordService {
             } else {
                 ASSET_PAUSED.to_string()
             }),
-            small_text: config
-                .show_quality
-                .then_some(if presence.bit_perfect {
-                    "Bit-perfect"
-                } else {
-                    "Prism"
-                })
-                .map(ToString::to_string),
+            small_text: if !presence.playing {
+                Some("Paused".to_string())
+            } else {
+                config
+                    .show_quality
+                    .then_some(if presence.bit_perfect {
+                        "Bit-perfect"
+                    } else {
+                        "Prism"
+                    })
+                    .map(ToString::to_string)
+            },
         })
     }
 }
@@ -429,6 +458,7 @@ mod tests {
 
     fn presence() -> TrackPresence {
         TrackPresence {
+            track_id: "track-1".into(),
             title: "Everything In Its Right Place".into(),
             artist: "Radiohead".into(),
             album: "Kid A".into(),
@@ -464,11 +494,9 @@ mod tests {
         let activity = service
             .activity_for(&DiscordConfig::default(), Some(&presence()), None)
             .expect("activity");
-        assert_eq!(
-            activity.details,
-            "Everything In Its Right Place — Radiohead"
-        );
-        assert_eq!(activity.state, "Kid A");
+        assert_eq!(activity.details, "Everything In Its Right Place");
+        assert_eq!(activity.state, "Radiohead");
+        assert_eq!(activity.large_text.as_deref(), Some("Kid A"));
         let start = activity.start_timestamp.expect("start");
         let end = activity.end_timestamp.expect("end");
         assert_eq!(end - start, 240_000);
@@ -484,8 +512,33 @@ mod tests {
             .activity_for(&DiscordConfig::default(), Some(&paused), None)
             .expect("activity");
         assert!(activity.start_timestamp.is_none());
-        assert_eq!(activity.state, "Kid A · Paused");
+        assert_eq!(activity.state, "Radiohead");
         assert_eq!(activity.small_image.as_deref(), Some(ASSET_PAUSED));
+        assert_eq!(activity.small_text.as_deref(), Some("Paused"));
+    }
+
+    #[tokio::test]
+    async fn hidden_pause_is_forgotten_visually_but_not_for_resume() {
+        let service = test_service();
+        service
+            .configure(DiscordConfig {
+                enabled: true,
+                client_id: "123456789012345678".into(),
+                show_cover: false,
+                show_paused: false,
+                ..DiscordConfig::default()
+            })
+            .expect("configure");
+        let mut track = presence();
+        track.playing = false;
+        service.publish(Some(track.clone())).await;
+        assert_eq!(service.inner.read().last_activity, None);
+        assert_eq!(service.inner.read().last.as_ref(), Some(&track));
+
+        track.playing = true;
+        service.publish(Some(track)).await;
+        assert!(service.inner.read().last_activity.is_some());
+        service.shutdown();
     }
 
     #[tokio::test]
@@ -514,6 +567,7 @@ mod tests {
             .activity_for(
                 &DiscordConfig::default(),
                 Some(&TrackPresence {
+                    track_id: String::new(),
                     title: String::new(),
                     artist: String::new(),
                     album: String::new(),
@@ -526,7 +580,7 @@ mod tests {
                 None,
             )
             .expect("activity");
-        assert_eq!(activity.details, "Idle");
+        assert_eq!(activity.details, "Unknown track");
         assert_eq!(activity.state, "Paused");
         // Discord requires at least two characters per field.
         assert!(activity.to_json()["details"].as_str().unwrap().len() >= 2);

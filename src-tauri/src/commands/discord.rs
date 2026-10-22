@@ -25,6 +25,7 @@ pub struct DiscordStateDto {
     pub show_cover: bool,
     pub show_timestamps: bool,
     pub show_quality: bool,
+    pub show_paused: bool,
 }
 
 fn to_dto(config: DiscordConfig, status: DiscordStatus) -> DiscordStateDto {
@@ -39,6 +40,7 @@ fn to_dto(config: DiscordConfig, status: DiscordStatus) -> DiscordStateDto {
         show_cover: config.show_cover,
         show_timestamps: config.show_timestamps,
         show_quality: config.show_quality,
+        show_paused: config.show_paused,
     }
 }
 
@@ -60,6 +62,9 @@ pub async fn discord_configure(
         .configure(config.clone())
         .map_err(PrismError::invalid)?;
     config.save(state.pool()).await?;
+    // Apply a changed pause preference to the record that is loaded right now,
+    // rather than waiting for the next transport event.
+    state.discord().sync(&state.engine().status()).await;
     Ok(to_dto(config, status))
 }
 

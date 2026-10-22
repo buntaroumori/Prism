@@ -58,7 +58,13 @@ struct Fixture<'a> {
 }
 
 fn tag_wav(path: &Path, fixture: &Fixture<'_>) {
+    tag_wav_on_disc(path, fixture, 1);
+}
+
+fn tag_wav_on_disc(path: &Path, fixture: &Fixture<'_>, disc: u32) {
     let mut tag = Tag::new(TagType::Id3v2);
+    tag.set_disk(disc);
+    tag.set_disk_total(if disc > 1 { 2 } else { 1 });
     tag.set_title(fixture.title.to_string());
     tag.set_artist(fixture.artist.to_string());
     tag.set_album(fixture.album.to_string());
@@ -68,6 +74,12 @@ fn tag_wav(path: &Path, fixture: &Fixture<'_>) {
     tag.set_track_total(fixture.total);
     tag.set_year(fixture.year);
     tag.insert_text(ItemKey::ReplayGainTrackGain, "-6.25 dB".to_string());
+    // A recording id is not a file id: all fixtures intentionally share one,
+    // as duplicate pressings and multi-disc editions do in real libraries.
+    tag.insert_text(
+        ItemKey::MusicBrainzTrackId,
+        "0d4c1d3e-77e4-4f35-9f3d-1024shared".to_string(),
+    );
     tag.save_to_path(path, WriteOptions::default())
         .expect("write id3v2 tag");
 }
@@ -691,7 +703,7 @@ async fn browse_filters_and_facets_cover_the_library() {
     scan(&pool, &root, ScanConfig::default()).await;
 
     // Album grid.
-    let albums = search::albums(&pool, None, None, search::AlbumSort::Title, 50, 0)
+    let albums = search::albums(&pool, None, None, AlbumSort::Title, 50, 0)
         .await
         .expect("albums");
     assert_eq!(albums.total, 4);
@@ -1066,5 +1078,194 @@ async fn root_track_counter_escapes_like_wildcards() {
         row.try_get::<i64, _>("tracks").expect("tracks"),
         2,
         "the % in the root path must be a literal, not a wildcard"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 0.1.4 — duplicate recording ids, playlists, collections and multi-disc art
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn playlists_keep_the_users_order_and_never_duplicate_a_track() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("library");
+    build_library(&root);
+    let pool = pool_for(temp.path()).await;
+    scan(&pool, &root, ScanConfig::default()).await;
+
+    let tracks = search::tracks(
+        &pool,
+        TrackQuery {
+            sort: TrackSort::Title,
+            limit: 20,
+            ..TrackQuery::default()
+        },
+    )
+    .await
+    .expect("tracks")
+    .items;
+    assert!(tracks.len() >= 2);
+    let first = tracks[0].id.clone();
+    let second = tracks[1].id.clone();
+
+    let playlist = prism_lib::commands::playlists::create_in(&pool, "Evening".into())
+        .await
+        .expect("create playlist");
+    assert!(
+        prism_lib::commands::playlists::create_in(&pool, " evening ".into())
+            .await
+            .is_err(),
+        "names are unique without regard to case or surrounding space"
+    );
+
+    let updated = prism_lib::commands::playlists::add_tracks_in(
+        &pool,
+        playlist.id.clone(),
+        vec![second.clone(), first.clone(), second.clone()],
+    )
+    .await
+    .expect("add tracks");
+    assert_eq!(updated.track_count, 2, "the repeated id is a no-op");
+
+    let page = search::playlist_tracks(&pool, &playlist.id, 50, 0)
+        .await
+        .expect("playlist page");
+    let ids: Vec<String> = page.items.into_iter().map(|track| track.id).collect();
+    assert_eq!(ids, vec![second, first], "explicit order is preserved");
+}
+
+#[tokio::test]
+async fn home_see_all_queries_match_their_shelves_and_rediscover_reacts_to_plays() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("library");
+    build_library(&root);
+    let pool = pool_for(temp.path()).await;
+    scan(&pool, &root, ScanConfig::default()).await;
+
+    let home = search::home(&pool, 24).await.expect("home");
+    let fresh = search::albums_filtered(
+        &pool,
+        None,
+        None,
+        None,
+        Some(search::AlbumCollection::RecentReleases),
+        None,
+        50,
+        0,
+    )
+    .await
+    .expect("fresh collection");
+    let fresh_ids: Vec<String> = fresh.items.iter().map(|album| album.id.clone()).collect();
+    let rail_ids: Vec<String> = home
+        .recent_releases
+        .iter()
+        .map(|album| album.id.clone())
+        .collect();
+    assert_eq!(
+        fresh_ids, rail_ids,
+        "See all and the shelf share one predicate"
+    );
+    assert!(
+        fresh.items.iter().all(|album| album.year == Some(2016)),
+        "Fresh releases means the newest year, not a twelve-year window"
+    );
+
+    let electronic =
+        search::albums_filtered(&pool, None, None, Some("Electronic"), None, None, 50, 0)
+            .await
+            .expect("genre collection");
+    let genre = home
+        .genres
+        .iter()
+        .find(|genre| genre.name == "Electronic")
+        .expect("Electronic genre shelf");
+    assert_eq!(genre.albums.len(), electronic.items.len());
+
+    let played_id = electronic.items[0].id.clone();
+    let track_id: String = sqlx::query_scalar("SELECT id FROM tracks WHERE album_id = ?1 LIMIT 1")
+        .bind(&played_id)
+        .fetch_one(&pool)
+        .await
+        .expect("played track");
+    CatalogWriter::new(pool.clone())
+        .note_play(&track_id, 1_000, false)
+        .await
+        .expect("note play");
+    let after = search::home(&pool, 24).await.expect("home after play");
+    assert!(
+        !after.rediscover.iter().any(|album| album.id == played_id),
+        "a record that was just heard must leave Rediscover"
+    );
+    assert!(
+        after
+            .recently_played
+            .iter()
+            .any(|album| album.id == played_id),
+        "the same play enters Recently played"
+    );
+}
+
+#[tokio::test]
+async fn multi_disc_albums_stay_ordered_and_artwork_hints_use_disc_one() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("library");
+    let first_path = root.join("Artist/Box Set/CD1/01 Opening.wav");
+    let second_path = root.join("Artist/Box Set/CD2/01 Closing.wav");
+    for (path, track, title, disc) in [
+        (&first_path, 1, "Opening", 1),
+        (&second_path, 2, "Closing", 2),
+    ] {
+        write_wav(path, 0.1, 44_100, 2, 16);
+        tag_wav_on_disc(
+            path,
+            &Fixture {
+                artist: "Artist",
+                album: "Box Set",
+                track,
+                total: 2,
+                title,
+                genre: "Jazz",
+                year: 2024,
+            },
+            disc,
+        );
+    }
+    let pool = pool_for(temp.path()).await;
+    scan(&pool, &root, ScanConfig::default()).await;
+
+    let albums = search::albums(&pool, None, None, AlbumSort::Title, 10, 0)
+        .await
+        .expect("albums");
+    let album = albums
+        .items
+        .iter()
+        .find(|album| album.title == "Box Set")
+        .expect("box set");
+    assert_eq!(album.disc_count, 2);
+    assert_eq!(album.track_count, 2);
+    let tracks = search::tracks(
+        &pool,
+        TrackQuery {
+            album_id: Some(album.id.clone()),
+            sort: TrackSort::Album,
+            limit: 10,
+            ..TrackQuery::default()
+        },
+    )
+    .await
+    .expect("ordered tracks")
+    .items;
+    let discs: Vec<Option<i64>> = tracks.iter().map(|track| track.disc_no).collect();
+    assert_eq!(discs, vec![Some(1), Some(2)]);
+
+    let artwork = prism_lib::artwork::ArtworkService::new(pool.clone(), temp.path().join("covers"))
+        .expect("artwork service");
+    let hint = artwork
+        .hint_for_track(&tracks[1].id, Some(PathBuf::from(&tracks[1].path)))
+        .await;
+    assert_eq!(
+        hint.track_path,
+        Some(first_path),
+        "a CD2 track must not make the album miss its CD1 artwork"
     );
 }

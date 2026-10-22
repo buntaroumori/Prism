@@ -24,6 +24,8 @@ export interface QueueEntry {
   durationMs: number;
   startMs?: number | null;
   endMs?: number | null;
+  /** Full catalogue row retained for artwork and context-menu actions. */
+  catalogue: TrackRow;
 }
 
 /**
@@ -174,6 +176,7 @@ function fromRow(row: TrackRow): QueueEntry {
     durationMs: row.durationMs,
     startMs: row.cueStartMs,
     endMs: row.cueEndMs,
+    catalogue: row,
   };
 }
 
@@ -451,11 +454,22 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
   },
 
   setMuted: async (muted) => {
+    const previous = get().status?.muted ?? false;
+    // Mute has no transport event of its own. Update the control immediately
+    // and then read the engine back, instead of waiting for an unrelated play
+    // or seek to refresh the snapshot.
+    set((state) => ({
+      status: state.status === null ? state.status : { ...state.status, muted },
+    }));
     try {
       await playerApi.setMuted(muted);
+      await get().refresh();
       set({ error: null });
     } catch (cause) {
-      set({ error: toUiError(cause) });
+      set((state) => ({
+        status: state.status === null ? state.status : { ...state.status, muted: previous },
+        error: toUiError(cause),
+      }));
     }
   },
 

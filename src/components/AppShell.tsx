@@ -3,12 +3,15 @@ import { useEffect, type CSSProperties, type JSX } from "react";
 import { Info, TriangleAlert, X } from "lucide-react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
+import { ContextMenuHost } from "@/components/ContextMenuHost";
 import { PlayerBar } from "@/components/player/PlayerBar";
 import { Sidebar } from "@/components/Sidebar";
 import { TopBar } from "@/components/TopBar";
 import { HomeView } from "@/components/views/HomeView";
 import { LibraryView } from "@/components/views/LibraryView";
 import { NowPlayingView } from "@/components/views/NowPlayingView";
+import { PlaylistsView } from "@/components/views/PlaylistsView";
+import { PlaylistView } from "@/components/views/PlaylistView";
 import { AlbumView } from "@/components/views/AlbumView";
 import { ArtistView } from "@/components/views/ArtistView";
 import { SettingsView } from "@/components/views/SettingsView";
@@ -16,12 +19,14 @@ import { SystemView } from "@/components/views/SystemView";
 import { useAlbumCoverKey } from "@/hooks/useAlbumCoverKey";
 import { useArtworkPalette } from "@/hooks/useArtworkPalette";
 import { useFrameBudget } from "@/hooks/useFrameBudget";
+import { useDesktopControls } from "@/hooks/useDesktopControls";
 import { usePlayerBridge } from "@/hooks/usePlayerBridge";
 import { useScanEvents } from "@/hooks/useScanEvents";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { useOutputStore } from "@/stores/outputStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
-import { useUiStore, type ShellRoute } from "@/stores/uiStore";
+import { usePlaylistStore } from "@/stores/playlistStore";
+import { useUiStore, type RouteParams, type ShellRoute } from "@/stores/uiStore";
 import type { CoverPalette } from "@/types/ipc";
 
 /**
@@ -35,10 +40,12 @@ import type { CoverPalette } from "@/types/ipc";
 export function AppShell(): JSX.Element {
   usePlayerBridge();
   useScanEvents();
+  useDesktopControls();
   // Measures its own frame pacing and, on a compositor that cannot keep up,
   // sheds the layers that need a real GPU. See `useFrameBudget`.
   useFrameBudget();
   const loadOverview = useLibraryStore((state) => state.loadOverview);
+  const loadPlaylists = usePlaylistStore((state) => state.load);
   const applyStoredOutput = useOutputStore((state) => state.applyStored);
   const libraryError = useLibraryStore((state) => state.error);
   const playbackError = usePlaybackStore((state) => state.error);
@@ -49,7 +56,8 @@ export function AppShell(): JSX.Element {
 
   useEffect(() => {
     void loadOverview();
-  }, [loadOverview]);
+    void loadPlaylists();
+  }, [loadOverview, loadPlaylists]);
 
   // The device, buffer and rate policy are remembered between runs, so they
   // have to be handed to the engine once the shell is alive — otherwise the
@@ -64,6 +72,7 @@ export function AppShell(): JSX.Element {
   const accentSource = useUiStore((state) => state.accentSource);
   const accentColor = useUiStore((state) => state.accentColor);
   const glassOpacity = useUiStore((state) => state.glassOpacity);
+  const tintStrength = useUiStore((state) => state.tintStrength);
   const corners = useUiStore((state) => state.corners);
   const density = useUiStore((state) => state.density);
   const measuredEffects = useUiStore((state) => state.measuredEffects);
@@ -81,6 +90,7 @@ export function AppShell(): JSX.Element {
     accentSource,
     accentColor,
     glassOpacity,
+    tintStrength,
     corners,
     density,
   });
@@ -91,11 +101,13 @@ export function AppShell(): JSX.Element {
       style={tokens}
       data-route={route}
       data-density={density}
+      data-corners={corners}
       data-effects={resolvedEffects}
     >
       <AmbientBackground
         palette={palette}
         intensity={intensity}
+        colourBleed={tintStrength / 100}
         reduced={resolvedEffects === "reduced"}
       />
 
@@ -170,6 +182,8 @@ export function AppShell(): JSX.Element {
 
         <PlayerBar />
       </div>
+
+      <ContextMenuHost />
     </div>
   );
 }
@@ -186,10 +200,10 @@ function PageTransition({
   params,
 }: {
   route: ShellRoute;
-  params: { albumId: string | null; artistId: string | null };
+  params: RouteParams;
 }): JSX.Element {
   const reduce = useReducedMotion();
-  const key = `${route}:${params.albumId ?? ""}:${params.artistId ?? ""}`;
+  const key = `${route}:${params.albumId ?? ""}:${params.artistId ?? ""}:${params.collection ?? ""}:${params.genre ?? ""}:${params.playlistId ?? ""}`;
 
   return (
     <AnimatePresence mode="wait" initial={false}>
@@ -199,10 +213,17 @@ function PageTransition({
         animate={{ opacity: 1, y: 0 }}
         exit={reduce === true ? { opacity: 1, y: 0 } : { opacity: 0, y: -6 }}
         transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-        className="h-full"
+        className="min-h-full"
       >
         {route === "home" ? <HomeView /> : null}
         {route === "library" ? <LibraryView /> : null}
+        {route === "collection" ? (
+          <LibraryView collection={params.collection} genre={params.genre} />
+        ) : null}
+        {route === "playlists" ? <PlaylistsView /> : null}
+        {route === "playlist" && params.playlistId !== null ? (
+          <PlaylistView playlistId={params.playlistId} />
+        ) : null}
         {route === "album" && params.albumId !== null ? (
           <AlbumView albumId={params.albumId} />
         ) : null}
@@ -231,6 +252,7 @@ function paletteTokens(
     accentSource: "artwork" | "fixed";
     accentColor: string;
     glassOpacity: number;
+    tintStrength: number;
     corners: "sharp" | "soft" | "round";
     density: "comfortable" | "compact";
   },
@@ -242,11 +264,12 @@ function paletteTokens(
     "--prism-glass": (0.012 + (appearance.glassOpacity / 100) * 0.06).toFixed(4),
     "--prism-radius":
       appearance.corners === "sharp"
-        ? "0.25rem"
+        ? "0rem"
         : appearance.corners === "round"
-          ? "1.25rem"
+          ? "1.5rem"
           : "0.75rem",
-    "--prism-row-gap": appearance.density === "compact" ? "0.35rem" : "0.6rem",
+    "--prism-row-gap": appearance.density === "compact" ? "0.3rem" : "0.65rem",
+    "--prism-grid-gap": appearance.density === "compact" ? "1rem" : "1.75rem",
   };
 
   if (appearance.accentSource === "fixed") {
@@ -264,16 +287,22 @@ function paletteTokens(
       ? {
           "--prism-accent": palette.accent,
           "--prism-accent-soft": palette.accentSoft,
-          "--prism-surface": palette.surface,
-          "--prism-background": palette.background,
+          "--prism-surface": mixTint(palette.surface, "#12131c", appearance.tintStrength),
+          "--prism-background": mixTint(palette.background, "#08080a", appearance.tintStrength),
           "--prism-highlight": palette.highlight,
           "--prism-highlight-alt": palette.highlightAlt,
         }
       : {
-          "--prism-surface": palette.surface,
-          "--prism-background": palette.background,
+          "--prism-surface": mixTint(palette.surface, "#12131c", appearance.tintStrength),
+          "--prism-background": mixTint(palette.background, "#08080a", appearance.tintStrength),
         }),
   } as CSSProperties;
+}
+
+/** Mix an artwork colour with the neutral shell at the user's chosen strength. */
+function mixTint(colour: string, neutral: string, strength: number): string {
+  const percent = Math.min(100, Math.max(0, strength));
+  return `color-mix(in srgb, ${colour} ${String(percent)}%, ${neutral})`;
 }
 
 /** `#rrggbb` → rgba() at the given alpha, for the soft accent token. */

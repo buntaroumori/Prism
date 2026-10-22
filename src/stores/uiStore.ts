@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import type { AlbumCollection } from "@/types/ipc";
+
 /**
  * Top-level destinations.
  *
@@ -9,13 +11,33 @@ import { createJSONStorage, persist } from "zustand/middleware";
  * deep-linked (or survives a reload) is not a link.
  */
 export type ShellRoute =
-  "home" | "library" | "now-playing" | "settings" | "system" | "album" | "artist";
+  | "home"
+  | "library"
+  | "collection"
+  | "playlists"
+  | "playlist"
+  | "now-playing"
+  | "settings"
+  | "system"
+  | "album"
+  | "artist";
 
 /** Detail payload for the parameterised routes. */
 export interface RouteParams {
   albumId: string | null;
   artistId: string | null;
+  collection: AlbumCollection | null;
+  genre: string | null;
+  playlistId: string | null;
 }
+
+const NO_PARAMS: RouteParams = {
+  albumId: null,
+  artistId: null,
+  collection: null,
+  genre: null,
+  playlistId: null,
+};
 
 /** Ambient canvas intensity, persisted per user. */
 export type AmbientIntensity = "off" | "subtle" | "full";
@@ -71,6 +93,8 @@ interface UiState {
   navigate: (route: ShellRoute, params?: Partial<RouteParams>) => void;
   openAlbum: (albumId: string) => void;
   openArtist: (artistId: string) => void;
+  openCollection: (collection: AlbumCollection | null, genre?: string) => void;
+  openPlaylist: (playlistId: string) => void;
   setRoute: (route: ShellRoute) => void;
   back: () => void;
 
@@ -133,7 +157,7 @@ export const useUiStore = create<UiState>()(
     (set, get) => ({
       sidebarCollapsed: false,
       route: "home",
-      params: { albumId: null, artistId: null },
+      params: { ...NO_PARAMS },
       paletteKey: null,
       measuredEffects: null,
       ...DEFAULT_APPEARANCE,
@@ -162,21 +186,35 @@ export const useUiStore = create<UiState>()(
           params: {
             albumId: params?.albumId ?? null,
             artistId: params?.artistId ?? null,
+            collection: params?.collection ?? null,
+            genre: params?.genre ?? null,
+            playlistId: params?.playlistId ?? null,
           },
           ...(route === "home" ? { paletteKey: state.paletteKey } : {}),
         }));
       },
 
       openAlbum: (albumId) => {
-        set({ route: "album", params: { albumId, artistId: null } });
+        set({ route: "album", params: { ...NO_PARAMS, albumId } });
       },
 
       openArtist: (artistId) => {
-        set({ route: "artist", params: { albumId: null, artistId } });
+        set({ route: "artist", params: { ...NO_PARAMS, artistId } });
+      },
+
+      openCollection: (collection, genre) => {
+        set({
+          route: "collection",
+          params: { ...NO_PARAMS, collection, genre: genre ?? null },
+        });
+      },
+
+      openPlaylist: (playlistId) => {
+        set({ route: "playlist", params: { ...NO_PARAMS, playlistId } });
       },
 
       setRoute: (route) => {
-        set({ route, params: { albumId: null, artistId: null } });
+        set({ route, params: { ...NO_PARAMS } });
       },
 
       back: () => {
@@ -184,7 +222,11 @@ export const useUiStore = create<UiState>()(
         // them. A full history stack would be a router, and this is not one.
         const route = get().route;
         if (route === "album" || route === "artist") {
-          set({ route: "library", params: { albumId: null, artistId: null } });
+          set({ route: "library", params: { ...NO_PARAMS } });
+        } else if (route === "collection") {
+          set({ route: "home", params: { ...NO_PARAMS } });
+        } else if (route === "playlist") {
+          set({ route: "playlists", params: { ...NO_PARAMS } });
         }
       },
 
@@ -211,6 +253,7 @@ export const useUiStore = create<UiState>()(
             showRailArrows: next.showRailArrows,
             showHomeStats: next.showHomeStats,
             showSpectrum: next.showSpectrum,
+            effects: next.effects,
           };
         });
       },

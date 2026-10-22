@@ -20,6 +20,7 @@ import {
   type TrackWindow,
 } from "@/hooks/useTrackWindow";
 import { usePlaybackStore } from "@/stores/playbackStore";
+import { useContextMenuStore } from "@/stores/contextMenuStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { TrackQuery, TrackRow } from "@/types/ipc";
 
@@ -78,6 +79,18 @@ export function VirtualTrackList({
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const window = useTrackWindow(query, fetcher);
   const [selected, setSelected] = useState<number>(-1);
+
+  useEffect(() => {
+    const clear = (event: PointerEvent): void => {
+      if (!(event.target as Element | null)?.closest("[role='gridcell']")) {
+        setSelected(-1);
+      }
+    };
+    document.addEventListener("pointerdown", clear);
+    return () => {
+      document.removeEventListener("pointerdown", clear);
+    };
+  }, []);
 
   // Rows read the transport themselves through atomic selectors: this component
   // never subscribes to the playback store, so a track change re-renders the two
@@ -265,9 +278,7 @@ function ListFooter({ window }: { window: TrackWindow }): JSX.Element {
       <span className="tabular">
         {window.loading ? "Loading…" : `${formatCount(window.total)} tracks`}
       </span>
-      <span className="text-[10px] tracking-[0.14em] text-white/20 uppercase">
-        Virtualised · 52 px rows
-      </span>
+      <span className="text-[10px] text-white/20">Double-click a song to play it</span>
     </div>
   );
 }
@@ -316,6 +327,7 @@ const TrackRowItem = memo(function TrackRowItem({
   const playing = usePlaybackStore(
     (state) => state.status?.track?.trackId === row.id && state.status.state === "playing",
   );
+  const openAt = useContextMenuStore((state) => state.openAt);
 
   return (
     <div
@@ -325,6 +337,11 @@ const TrackRowItem = memo(function TrackRowItem({
       }}
       onDoubleClick={() => {
         onActivateIndex(index);
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        onSelectIndex(index);
+        openAt(event.clientX, event.clientY, { kind: "track", track: row });
       }}
       className={cn(
         "group grid h-[52px] grid-cols-[44px_minmax(0,3fr)_minmax(0,2fr)_88px_92px] items-center gap-3 px-4 transition-colors duration-100",
