@@ -1,5 +1,5 @@
 import type { JSX } from "react";
-import { Pause, Play, SkipBack, SkipForward, Square } from "lucide-react";
+import { Pause, Play, Shuffle, SkipBack, SkipForward, Square } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { PlaybackState } from "@/types/ipc";
@@ -8,6 +8,8 @@ interface TransportControlsProps {
   state: PlaybackState;
   canSkip: boolean;
   busy: boolean;
+  shuffled: boolean;
+  onToggleShuffle: () => void;
   onToggle: () => void;
   onNext: () => void;
   onPrevious: () => void;
@@ -25,6 +27,8 @@ export function TransportControls({
   state,
   canSkip,
   busy,
+  shuffled,
+  onToggleShuffle,
   onToggle,
   onNext,
   onPrevious,
@@ -36,6 +40,25 @@ export function TransportControls({
 
   return (
     <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={onToggleShuffle}
+        disabled={idle}
+        aria-label={shuffled ? "Disable shuffle" : "Shuffle queue"}
+        aria-pressed={shuffled}
+        title={shuffled ? "Restore the original queue order" : "Shuffle the upcoming queue"}
+        className={cn(
+          "mr-1 grid h-9 w-9 place-items-center rounded-full transition-colors",
+          "focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
+          "disabled:opacity-30 disabled:hover:bg-transparent",
+          shuffled
+            ? "bg-accent/[0.14] text-accent hover:bg-accent/[0.22]"
+            : "text-white/45 hover:bg-white/[0.07] hover:text-white",
+        )}
+      >
+        <Shuffle className="h-[17px] w-[17px]" aria-hidden="true" />
+      </button>
+
       <button
         type="button"
         onClick={onPrevious}

@@ -114,8 +114,16 @@ impl AlbumSort {
         match self {
             Self::Added => "added_at DESC, sort_title COLLATE NOCASE ASC",
             Self::AddedAsc => "added_at ASC, sort_title COLLATE NOCASE ASC",
-            Self::Year => "year DESC NULLS LAST, sort_title COLLATE NOCASE ASC",
-            Self::YearAsc => "year ASC NULLS LAST, sort_title COLLATE NOCASE ASC",
+            Self::Year => {
+                "COALESCE(release_date, CASE WHEN year IS NULL THEN NULL \
+                 ELSE printf('%04d', year) END) DESC NULLS LAST, \
+                 year DESC NULLS LAST, sort_title COLLATE NOCASE ASC"
+            }
+            Self::YearAsc => {
+                "COALESCE(release_date, CASE WHEN year IS NULL THEN NULL \
+                 ELSE printf('%04d', year) END) ASC NULLS LAST, \
+                 year ASC NULLS LAST, sort_title COLLATE NOCASE ASC"
+            }
             Self::Artist => {
                 "album_artist_name COLLATE NOCASE ASC, year ASC NULLS LAST, \
                  sort_title COLLATE NOCASE ASC"
@@ -265,6 +273,8 @@ pub struct AlbumRow {
     pub title: String,
     pub sort_title: String,
     pub year: Option<i64>,
+    pub release_date: Option<String>,
+    pub genre: Option<String>,
     pub album_artist: String,
     /// Identifier of the album artist, so every name can be a link.
     pub artist_id: Option<String>,
@@ -275,6 +285,7 @@ pub struct AlbumRow {
     pub release_type: Option<String>,
     pub cover_id: Option<String>,
     pub cover_path: Option<String>,
+    pub cover_thumbnail_path: Option<String>,
     pub cover_url: Option<String>,
     pub available_tracks: i64,
     pub max_sample_rate: Option<i64>,
@@ -733,9 +744,10 @@ fn push_album_filters(
 
 /// Columns every album read model selects. One definition, so a rail can never
 /// drift from the grid and suddenly render a placeholder where a cover belongs.
-const ALBUM_COLUMNS: &str = "id, title, sort_title, year, album_artist_name, is_compilation, \
-     disc_count, track_count, duration_ms, release_type, cover_id, cover_remote_url, \
-     cover_local_path, available_tracks, max_sample_rate, max_bit_depth, format, artist_id";
+const ALBUM_COLUMNS: &str = "id, title, sort_title, year, release_date, genre, \
+     album_artist_name, is_compilation, disc_count, track_count, duration_ms, release_type, \
+     cover_id, cover_remote_url, cover_local_path, cover_thumbnail_path, available_tracks, \
+     max_sample_rate, max_bit_depth, format, artist_id";
 
 /// Map one `v_album_summary` row (or any query selecting [`ALBUM_COLUMNS`]).
 fn album_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<AlbumRow, PrismError> {
@@ -747,6 +759,8 @@ fn album_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<AlbumRow, PrismError>
         title: row.try_get("title")?,
         sort_title: row.try_get("sort_title")?,
         year: row.try_get("year")?,
+        release_date: row.try_get("release_date")?,
+        genre: row.try_get("genre")?,
         album_artist: row.try_get("album_artist_name")?,
         artist_id: row.try_get("artist_id")?,
         is_compilation: row.try_get::<i64, _>("is_compilation")? != 0,
@@ -756,6 +770,7 @@ fn album_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<AlbumRow, PrismError>
         release_type: row.try_get("release_type")?,
         cover_id: row.try_get("cover_id")?,
         cover_path: row.try_get("cover_local_path")?,
+        cover_thumbnail_path: row.try_get("cover_thumbnail_path")?,
         cover_url: row.try_get("cover_remote_url")?,
         available_tracks: row.try_get("available_tracks")?,
         quality: quality_label(

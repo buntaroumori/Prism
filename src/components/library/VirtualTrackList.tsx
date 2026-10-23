@@ -261,13 +261,13 @@ function ListHeader(): JSX.Element {
   return (
     <div
       role="row"
-      className="grid shrink-0 grid-cols-[44px_minmax(0,3fr)_minmax(0,2fr)_88px_92px] items-center gap-3 border-b border-white/[0.06] px-4 pb-2 text-[9.5px] font-semibold tracking-[0.16em] text-white/25 uppercase"
+      className="grid shrink-0 grid-cols-[36px_36px_minmax(0,3fr)_minmax(0,2fr)_88px] items-center gap-3 border-b border-white/[0.06] px-4 pb-2 text-[9.5px] font-semibold tracking-[0.16em] text-white/25 uppercase"
     >
       <span aria-hidden="true">#</span>
+      <span aria-hidden="true" />
       <span>Title</span>
       <span>Album</span>
       <span className="text-right">Length</span>
-      <span className="text-right">Quality</span>
     </div>
   );
 }
@@ -287,13 +287,13 @@ function SkeletonRow(): JSX.Element {
   return (
     <div
       aria-hidden="true"
-      className="grid h-[52px] grid-cols-[44px_minmax(0,3fr)_minmax(0,2fr)_88px_92px] items-center gap-3 px-4"
+      className="grid h-[52px] grid-cols-[36px_36px_minmax(0,3fr)_minmax(0,2fr)_88px] items-center gap-3 px-4"
     >
       <span className="h-2.5 w-4 animate-pulse rounded bg-white/[0.06]" />
+      <span className="h-2.5 w-4 animate-pulse rounded-full bg-white/[0.06]" />
       <span className="h-2.5 w-40 animate-pulse rounded bg-white/[0.06]" />
       <span className="h-2.5 w-28 animate-pulse rounded bg-white/[0.04]" />
       <span className="h-2.5 w-8 animate-pulse justify-self-end rounded bg-white/[0.04]" />
-      <span className="h-2.5 w-12 animate-pulse justify-self-end rounded bg-white/[0.04]" />
     </div>
   );
 }
@@ -344,38 +344,37 @@ const TrackRowItem = memo(function TrackRowItem({
         openAt(event.clientX, event.clientY, { kind: "track", track: row });
       }}
       className={cn(
-        "group grid h-[52px] grid-cols-[44px_minmax(0,3fr)_minmax(0,2fr)_88px_92px] items-center gap-3 px-4 transition-colors duration-100",
+        "group grid h-[52px] grid-cols-[36px_36px_minmax(0,3fr)_minmax(0,2fr)_88px] items-center gap-3 px-4 transition-colors duration-100",
         selected ? "bg-white/[0.055]" : "hover:bg-white/[0.03]",
         current && "bg-accent/[0.06]",
         row.missing && "opacity-45",
       )}
     >
-      <div className="tabular flex items-center text-[11px] text-white/25">
+      <span className="tabular grid h-7 w-7 place-items-center text-[11px] text-white/25">
         {current ? (
-          <span className="flex items-center gap-1.5 text-accent">
-            <AudioLines
-              className={cn("h-3.5 w-3.5", playing && "animate-pulse")}
-              aria-hidden="true"
-            />
-          </span>
+          <AudioLines
+            className={cn("h-3.5 w-3.5 text-accent", playing && "animate-pulse")}
+            aria-hidden="true"
+          />
         ) : (
-          <span className="group-hover:hidden">{String(index + 1).padStart(2, "0")}</span>
+          String(index + 1).padStart(2, "0")
         )}
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onPlayFromIndex(index);
-          }}
-          aria-label={`Play from ${row.title}`}
-          className={cn(
-            "grid h-5 w-5 place-items-center rounded-full text-white/70 hover:text-white",
-            current ? "hidden" : "hidden group-hover:grid",
-          )}
-        >
-          <Play className="h-3 w-3 fill-current" aria-hidden="true" />
-        </button>
-      </div>
+      </span>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          if (event.detail === 1) onPlayFromIndex(index);
+        }}
+        onDoubleClick={(event) => {
+          event.stopPropagation();
+        }}
+        aria-label={`Play ${row.title}`}
+        title={`Play ${row.title}`}
+        className="grid h-7 w-7 place-items-center rounded-full text-white/25 transition-colors hover:bg-accent/10 hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+      >
+        <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+      </button>
 
       <div className="min-w-0">
         <p
@@ -404,18 +403,6 @@ const TrackRowItem = memo(function TrackRowItem({
 
       <span className="tabular justify-self-end text-[11.5px] text-white/35">
         {row.durationMs > 0 ? formatDuration(row.durationMs) : "—"}
-      </span>
-
-      <span
-        className={cn(
-          "justify-self-end rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-[0.08em] uppercase",
-          row.lossless
-            ? "border-positive/25 bg-positive/[0.08] text-positive/85"
-            : "border-white/10 bg-white/[0.04] text-white/35",
-        )}
-        title={`${row.format} · ${row.quality}`}
-      >
-        {row.quality}
       </span>
     </div>
   );

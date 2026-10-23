@@ -6,7 +6,7 @@ import { formatCount } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
 import { useBrowseStore, type AlbumSortField } from "@/stores/browseStore";
 import { useLibraryStore } from "@/stores/libraryStore";
-import { usePlaybackStore } from "@/stores/playbackStore";
+import { usePlaybackStore, type LibraryContinuation } from "@/stores/playbackStore";
 import { COVER_SIZE_MAX, COVER_SIZE_MIN, useUiStore } from "@/stores/uiStore";
 import type { AlbumCollection, AlbumRow, AlbumSort, Facets } from "@/types/ipc";
 
@@ -158,6 +158,13 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
     };
   }, [albums.length, loading, total]);
 
+  const libraryContinuation = {
+    ...(query.length > 0 ? { text: query } : {}),
+    ...(activeGenre !== null ? { genre: activeGenre } : {}),
+    ...(collection !== null ? { collection } : {}),
+    ...(sort !== null ? { sort } : {}),
+  } satisfies Omit<LibraryContinuation, "currentAlbumId">;
+
   const playAlbum = async (album: AlbumRow): Promise<void> => {
     setBusyAlbum(album.id);
     try {
@@ -165,7 +172,10 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
       if (page.items.length === 0) {
         return;
       }
-      await playTracks(page.items, 0);
+      await playTracks(page.items, 0, {
+        album,
+        continuation: { currentAlbumId: album.id, ...libraryContinuation },
+      });
     } finally {
       setBusyAlbum(null);
     }
@@ -331,6 +341,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
               onPlay={(target) => {
                 void playAlbum(target);
               }}
+              continuation={libraryContinuation}
             />
           ))}
         </div>

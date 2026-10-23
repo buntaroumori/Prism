@@ -16,30 +16,43 @@ designed for local music libraries, precise format handling and a configurable l
 ### Playback
 
 - Gapless playback with prefetching and sample-aware track boundaries.
+- A reorderable queue with album groups, Play next, removal, double-click jumping and queue-aware
+  Skip. Album playback stops at its boundary by default; optional continuation follows the
+  originating Library filters and ordering.
+- Shuffle with exact prior-order restoration and immediate volume changes while dragging.
 - Native output through WASAPI, optional ASIO, PipeWire and ALSA, with a shared-output fallback.
 - Source-rate and fixed-rate output policies, with format negotiation and resampling when required.
 - FLAC, ALAC, WAV, AIFF, Ogg Vorbis and MP3 decoding, plus DSF/DFF input and DSD over PCM.
 - CUE sheets, including individual tracks within a single audio image.
 - ReplayGain, parametric EQ, crossfeed, volume ramping and optional in-memory playback.
-- Live source and output format information. The bit-perfect indicator is shown only when the
-  negotiated output and processing path satisfy its requirements.
+- Source labels that distinguish CD, Hi-Res and other formats. Output details remain available in
+  Settings, and bit-perfect status is shown only when the complete path satisfies its requirements.
 
 ### Library
 
 - Incremental scanning with per-file error isolation and cooperative cancellation.
-- Album, artist, genre and multi-disc browsing with persistent sorting and filters.
+- Album, artist, genre and multi-disc browsing with persistent sorting and filters, including
+  complete-release-date Year ordering.
 - Full-text search with diacritic folding and grouped track, album and artist results.
-- User playlists with explicit ordering and duplicate protection.
-- Embedded and folder artwork, with optional online artwork providers and a local cache.
+- Album pages with full release dates, genres, disc-aware tracklists and adjacent Play actions.
+- User playlists with explicit ordering, duplicate protection and custom covers chosen through a
+  native file picker.
+- Embedded and folder artwork, with optional online artwork providers and deduplicated master and
+  thumbnail caches.
 - Home collections for recent additions, listening history, releases, genres and rediscovery.
 
 ### Interface and integration
 
 - Home, Library, Playlists, album, artist and Now Playing views.
-- A modular Now Playing deck with artwork, lyrics, spectrum and queue panels.
-- Persistent appearance, layout and browsing preferences.
-- Application context menus, borderless fullscreen and desktop-oriented track interactions.
-- Optional Discord Rich Presence with configurable paused activity.
+- One Now Playing layout with artwork and lyrics; Spectrum takes the lyrics panel's place when no
+  lyrics are available.
+- A reorderable Dock for pinned albums and playlists in expanded and collapsed sidebars.
+- Persistent appearance, playback, browsing, Dock and window preferences.
+- A unified Settings view, including System information, opened from the top bar. Borderless
+  windows provide integrated fullscreen and minimize, maximize and close controls.
+- Application context menus and desktop-oriented track interactions.
+- Optional Discord Rich Presence with configurable paused activity. A local album/artist artwork
+  mapping accepts public HTTPS URLs without uploading local or embedded images.
 - Optional Lua and WebAssembly plugin runtimes with declared capabilities and resource limits.
 
 ## Screenshots

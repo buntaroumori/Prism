@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import { playlistApi } from "@/lib/ipc";
+import { useDockStore } from "@/stores/dockStore";
 import type { PlaylistRow } from "@/types/ipc";
 
 interface PlaylistStore {
@@ -12,6 +13,7 @@ interface PlaylistStore {
   create: (name: string) => Promise<PlaylistRow | null>;
   addTracks: (playlistId: string, trackIds: string[]) => Promise<boolean>;
   removeTrack: (playlistId: string, trackId: string) => Promise<boolean>;
+  setCustomCover: (playlistId: string, path: string) => Promise<PlaylistRow | null>;
   deletePlaylist: (id: string) => Promise<boolean>;
   clearNotice: () => void;
 }
@@ -34,6 +36,9 @@ export const usePlaylistStore = create<PlaylistStore>()((set) => ({
     set({ loading: true });
     try {
       const playlists = await playlistApi.list();
+      playlists.forEach((playlist) => {
+        useDockStore.getState().updatePlaylist(playlist);
+      });
       set({ playlists, loading: false, error: null });
     } catch (cause) {
       set({ loading: false, error: message(cause, "Playlists could not be loaded") });
@@ -57,6 +62,7 @@ export const usePlaylistStore = create<PlaylistStore>()((set) => ({
   addTracks: async (playlistId, trackIds) => {
     try {
       const updated = await playlistApi.addTracks(playlistId, trackIds);
+      useDockStore.getState().updatePlaylist(updated);
       set((state) => ({
         playlists: ordered(
           state.playlists.map((playlist) => (playlist.id === updated.id ? updated : playlist)),
@@ -74,6 +80,7 @@ export const usePlaylistStore = create<PlaylistStore>()((set) => ({
   removeTrack: async (playlistId, trackId) => {
     try {
       const updated = await playlistApi.removeTrack(playlistId, trackId);
+      useDockStore.getState().updatePlaylist(updated);
       set((state) => ({
         playlists: state.playlists.map((playlist) =>
           playlist.id === updated.id ? updated : playlist,
@@ -87,10 +94,28 @@ export const usePlaylistStore = create<PlaylistStore>()((set) => ({
     }
   },
 
+  setCustomCover: async (playlistId, path) => {
+    try {
+      const updated = await playlistApi.setCustomCover(playlistId, path);
+      useDockStore.getState().updatePlaylist(updated);
+      set((state) => ({
+        playlists: state.playlists.map((playlist) =>
+          playlist.id === updated.id ? updated : playlist,
+        ),
+        error: null,
+      }));
+      return updated;
+    } catch (cause) {
+      set({ error: message(cause, "The playlist cover could not be changed") });
+      return null;
+    }
+  },
+
   deletePlaylist: async (id) => {
     try {
       const removed = await playlistApi.delete(id);
       if (removed) {
+        useDockStore.getState().unpinPlaylist(id);
         set((state) => ({
           playlists: state.playlists.filter((playlist) => playlist.id !== id),
           error: null,

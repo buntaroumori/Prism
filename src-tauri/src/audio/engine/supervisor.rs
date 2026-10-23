@@ -202,6 +202,12 @@ enum Command {
         tracks: Vec<TrackRequest>,
         index: usize,
     },
+    /// Replace the queue around the currently playing track without reopening
+    /// its decoder or output stream.
+    UpdateQueue {
+        tracks: Vec<TrackRequest>,
+        index: usize,
+    },
     Pause,
     Resume,
     Stop,
@@ -400,6 +406,21 @@ impl Engine {
         self.send(Command::Play { tracks, index })
     }
 
+    /// Replace upcoming entries while preserving the current track and its
+    /// exact playhead. The supervisor validates the current-track identity
+    /// before touching the prefetch plan.
+    pub fn update_queue(&self, tracks: Vec<TrackRequest>, index: usize) -> Result<(), AudioError> {
+        if tracks.is_empty() {
+            return Err(AudioError::EmptyQueue);
+        }
+        if index >= tracks.len() {
+            return Err(AudioError::InvalidParameters(
+                "queue index is outside the queue".into(),
+            ));
+        }
+        self.send(Command::UpdateQueue { tracks, index })
+    }
+
     pub fn pause(&self) -> Result<(), AudioError> {
         self.send(Command::Pause)
     }
@@ -560,12 +581,20 @@ impl Supervisor {
                         break;
                     }
                     Ok(command) => {
+                        // A stale queue edit is recoverable: the loaded track
+                        // and its output remain valid even when the proposed
+                        // plan no longer contains that track. Device/decoder
+                        // failures from every other command keep the existing
+                        // teardown and recovery policy.
+                        let preserve_playback = matches!(&command, Command::UpdateQueue { .. });
                         if let Err(error) = self.handle(command) {
                             tracing::error!(%error, "audio command failed");
                             self.emit(EngineEvent::OutputError {
                                 message: error.to_string(),
                             });
-                            self.fail();
+                            if !preserve_playback {
+                                self.fail();
+                            }
                         }
                     }
                     Err(TryRecvError::Empty) => break,
@@ -606,6 +635,29 @@ impl Supervisor {
                 self.queue = tracks;
                 self.index = index.min(self.queue.len().saturating_sub(1));
                 self.start_queue(self.index, true)
+            }
+            Command::UpdateQueue { tracks, index } => {
+                if index >= tracks.len() {
+                    return Err(AudioError::InvalidParameters(
+                        "queue index is outside the queue".into(),
+                    ));
+                }
+                let Some(player) = self.player.as_mut() else {
+                    return Err(AudioError::NotRunning);
+                };
+                let matches_current = player.current_request().is_some_and(|current| {
+                    current.track_id == tracks[index].track_id && current.path == tracks[index].path
+                });
+                if !matches_current {
+                    return Err(AudioError::InvalidParameters(
+                        "the queue update does not contain the current track at its index".into(),
+                    ));
+                }
+                player.replace_upcoming(tracks[index + 1..].to_vec())?;
+                self.queue = tracks;
+                self.index = index;
+                self.publish(true);
+                Ok(())
             }
             Command::Pause => {
                 if self.state == PlaybackState::Playing {
@@ -940,7 +992,10 @@ impl Supervisor {
             let boundary = self.carry_boundary.take();
             let finished = self.carry_finished;
             let before = self.pushed;
-            let (accepted, rest) = self.push_block(&mut block, channels, free);
+            // `carry` has already been through the volume ramp and spectrum
+            // tap. Processing it a second time would attenuate it again and
+            // create a discontinuity whenever the target gain is below unity.
+            let (accepted, rest) = self.push_block(&mut block, channels, free, false);
             if let Some(offset) = boundary {
                 if offset <= accepted {
                     self.schedule_boundary(before + offset);
@@ -974,7 +1029,7 @@ impl Supervisor {
             if let Some(offset) = boundary {
                 samples.truncate(offset as usize * channels);
             }
-            let (_, rest) = self.push_block(&mut samples, channels, free);
+            let (_, rest) = self.push_block(&mut samples, channels, free, true);
             debug_assert!(rest.is_empty(), "renegotiation keeps at most one period");
             self.carry.clear();
             self.carry_boundary = None;
@@ -985,7 +1040,7 @@ impl Supervisor {
         }
 
         let before = self.pushed;
-        let (accepted, rest) = self.push_block(&mut samples, channels, free);
+        let (accepted, rest) = self.push_block(&mut samples, channels, free, true);
         if let Some(offset) = boundary {
             if offset <= accepted {
                 // Clamp to what was really written so an overrun cannot move
@@ -1016,20 +1071,25 @@ impl Supervisor {
         samples: &mut [f32],
         channels: usize,
         capacity_frames: usize,
+        process_fresh: bool,
     ) -> (u64, Vec<f32>) {
         if channels == 0 || samples.is_empty() {
             return (0, Vec::new());
         }
-        let target = self.target_gain();
-        apply_gain(samples, channels, &mut self.gain, target);
+        if process_fresh {
+            let target = self.target_gain();
+            apply_gain(samples, channels, &mut self.gain, target);
 
-        // Spectrum tap: post-DSP, post-gain, pre-ring. A no-op unless the
-        // visualiser panel has asked for frames.
-        if self.analyzer.is_enabled()
-            && let Some(output) = self.output.as_ref()
-        {
-            self.analyzer
-                .push(samples, channels, output.negotiation.format.sample_rate);
+            // Spectrum tap: post-DSP, post-gain, pre-ring. A no-op unless the
+            // visualiser panel has asked for frames. Like gain, it is applied
+            // only once: carried samples were already measured before their
+            // first partial write.
+            if self.analyzer.is_enabled()
+                && let Some(output) = self.output.as_ref()
+            {
+                self.analyzer
+                    .push(samples, channels, output.negotiation.format.sample_rate);
+            }
         }
 
         let Some(output) = self.output.as_mut() else {

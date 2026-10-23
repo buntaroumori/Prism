@@ -2,10 +2,10 @@
 
 ## Supported versions
 
-| Version          | Status      |
-| :--------------- | :---------- |
-| 0.1.x            | Supported   |
-| Earlier versions | Unsupported |
+| Version           | Status      |
+| :---------------- | :---------- |
+| 1.0.x             | Supported   |
+| 0.1.x and earlier | Unsupported |
 
 Security fixes are applied to the current development line and included in a subsequent release.
 

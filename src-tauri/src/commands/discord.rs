@@ -4,7 +4,8 @@
 //! needs to read the connection state and change the configuration.
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::discord::{DiscordConfig, DiscordState, DiscordStatus};
 use crate::error::PrismError;
@@ -73,4 +74,26 @@ pub async fn discord_configure(
 pub async fn discord_clear(state: State<'_, AppState>) -> Result<bool, PrismError> {
     state.discord().publish(None).await;
     Ok(true)
+}
+
+/// Absolute path of the local, user-editable album artwork mapping.
+#[tauri::command]
+pub fn discord_artwork_overrides_path(state: State<'_, AppState>) -> String {
+    state
+        .paths()
+        .discord_artwork_overrides()
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Reveal the configuration folder without creating or modifying the file.
+#[tauri::command]
+pub fn discord_open_artwork_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), PrismError> {
+    let directory = state.paths().config_dir.clone();
+    app.opener()
+        .open_path(directory.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|error| PrismError::Internal(format!("could not open artwork folder: {error}")))
 }

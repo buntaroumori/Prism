@@ -6,13 +6,14 @@ These assets support the project documentation.
 
 | File              | View                                           |
 | :---------------- | :--------------------------------------------- |
-| `home.png`        | Home with genre-based album shelves            |
+| `home.png`        | Home listening history and recent additions    |
 | `library.png`     | Library album grid, sorting and genre filter   |
 | `now-playing.png` | Now Playing with artwork and spectrum analysis |
-| `appearance.png`  | Appearance settings                            |
+| `appearance.png`  | Appearance within the unified Settings view    |
 
 The screenshots are referenced by the [repository README](../../README.md#screenshots). Keep their
-filenames stable when replacing them so documentation links remain valid.
+filenames stable when replacing them so documentation links remain valid. The curated screens use a
+local sample catalogue with original cover artwork; no online account or remote artwork is shown.
 
 ## Profiling diagrams
 

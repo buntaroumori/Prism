@@ -2,12 +2,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState, type JSX } from "react";
 
 import { CoverArt } from "@/components/ui/CoverArt";
-import { libraryApi } from "@/lib/ipc";
+import { trackCover } from "@/lib/trackCover";
 import type { CoverAsset } from "@/types/ipc";
 
 interface ArtworkModuleProps {
   trackId: string | null;
   album: string;
+  artist: string;
   title: string;
 }
 
@@ -18,7 +19,7 @@ interface ArtworkModuleProps {
  * of the same record does not flash the same image, and switching records blurs
  * one into the other in 450 ms — the only long transition in the app.
  */
-export function ArtworkModule({ trackId, album, title }: ArtworkModuleProps): JSX.Element {
+export function ArtworkModule({ trackId, album, artist, title }: ArtworkModuleProps): JSX.Element {
   const [asset, setAsset] = useState<CoverAsset | null>(null);
 
   useEffect(() => {
@@ -27,8 +28,7 @@ export function ArtworkModule({ trackId, album, title }: ArtworkModuleProps): JS
       return;
     }
     let active = true;
-    void libraryApi
-      .trackCover(trackId)
+    void trackCover(trackId, artist, album)
       .then((next) => {
         if (active) {
           setAsset(next);
@@ -42,7 +42,7 @@ export function ArtworkModule({ trackId, album, title }: ArtworkModuleProps): JS
     return () => {
       active = false;
     };
-  }, [trackId]);
+  }, [trackId, artist, album]);
 
   return (
     <div className="relative mx-auto w-full max-w-[540px] self-center">

@@ -5,16 +5,20 @@ import { TrackTable } from "@/components/library/TrackTable";
 import { CoverArt } from "@/components/ui/CoverArt";
 import { Button } from "@/components/ui/Button";
 import { formatCount, formatLibraryDuration } from "@/lib/format";
+import { formatReleaseDate, sourceLabel } from "@/lib/sourceLabel";
+import { cn } from "@/lib/utils";
 import { libraryApi } from "@/lib/ipc";
+import { useDockStore } from "@/stores/dockStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore } from "@/stores/uiStore";
-import type { AlbumDetail, TrackRow } from "@/types/ipc";
+import type { AlbumDetail } from "@/types/ipc";
 
 /** One record, ordered by disc and track number with a section per disc. */
 export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
   const back = useUiStore((state) => state.back);
   const openArtist = useUiStore((state) => state.openArtist);
   const playTracks = usePlaybackStore((state) => state.playTracks);
+  const shuffleActive = usePlaybackStore((state) => state.shuffleSnapshot !== null);
   const [detail, setDetail] = useState<AlbumDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,6 +31,7 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
       .then((next) => {
         if (active) {
           setDetail(next);
+          useDockStore.getState().updateAlbum(next.album);
         }
       })
       .catch((cause: unknown) => {
@@ -71,12 +76,16 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
   }
 
   const album = detail.album;
+  const source = sourceLabel({
+    format: album.format,
+    sampleRate: album.maxSampleRate,
+    bitDepth: album.maxBitDepth,
+  });
   const play = (index: number, shuffle = false): void => {
     if (tracks.length === 0) {
       return;
     }
-    const order = shuffle ? shuffled(tracks) : tracks;
-    void playTracks(order, shuffle ? 0 : index);
+    void playTracks(tracks, shuffle ? 0 : index, { album, shuffle });
   };
 
   return (
@@ -107,11 +116,26 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
           </h1>
           <p className="mt-2.5 text-[13px] text-white/50">
             <ArtistLink id={album.artistId} name={album.albumArtist} onOpen={openArtist} />
-            {album.year === null ? null : <span className="text-white/25"> · {album.year}</span>}
+            {album.releaseDate === null && album.year === null ? null : (
+              <span className="text-white/25">
+                {" "}
+                · {formatReleaseDate(album.releaseDate, album.year)}
+              </span>
+            )}
           </p>
+          {album.genre !== null ? (
+            <p className="mt-1 text-[11.5px] text-white/35">{album.genre}</p>
+          ) : null}
           <p className="tabular mt-1 text-[11.5px] text-white/30">
             {formatCount(album.trackCount)} tracks · {formatLibraryDuration(album.durationMs)} ·{" "}
-            {album.quality}
+            <span
+              className={cn(
+                source.tone === "hi-res" && "text-spectrum-violet/80",
+                source.tone === "cd" && "text-positive/80",
+              )}
+            >
+              {source.label}
+            </span>
             {album.discCount > 1 ? ` · ${String(album.discCount)} discs` : ""}
           </p>
 
@@ -129,6 +153,8 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
             <Button
               variant="secondary"
               icon={Shuffle}
+              aria-pressed={shuffleActive}
+              className={shuffleActive ? "border-accent/35 text-accent" : undefined}
               onClick={() => {
                 play(0, true);
               }}
@@ -183,21 +209,4 @@ export function ArtistLink({
       {label}
     </button>
   );
-}
-
-/** Seeded shuffle: the same album shuffles to the same order twice. */
-function shuffled(tracks: TrackRow[]): TrackRow[] {
-  const copy = [...tracks];
-  let seed = copy.length * 2_654_435_761;
-  for (let index = copy.length - 1; index > 0; index -= 1) {
-    seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
-    const swap = seed % (index + 1);
-    const a = copy[index];
-    const b = copy[swap];
-    if (a !== undefined && b !== undefined) {
-      copy[index] = b;
-      copy[swap] = a;
-    }
-  }
-  return copy;
 }

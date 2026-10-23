@@ -1,4 +1,4 @@
-import { ArrowLeft, Play, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ImagePlus, Play, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState, type JSX } from "react";
 
 import { TrackTable } from "@/components/library/TrackTable";
@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { CoverArt } from "@/components/ui/CoverArt";
 import { formatCount, formatLibraryDuration } from "@/lib/format";
 import { playlistApi } from "@/lib/ipc";
+import { pickPlaylistCover } from "@/lib/playlistCover";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { usePlaylistStore } from "@/stores/playlistStore";
 import { useUiStore } from "@/stores/uiStore";
@@ -15,6 +16,9 @@ import type { PlaylistDetail } from "@/types/ipc";
 export function PlaylistView({ playlistId }: { playlistId: string }): JSX.Element {
   const back = useUiStore((state) => state.back);
   const playTracks = usePlaybackStore((state) => state.playTracks);
+  const setCustomCover = usePlaylistStore((state) => state.setCustomCover);
+  const [coverBusy, setCoverBusy] = useState(false);
+  const [coverError, setCoverError] = useState<string | null>(null);
   const updatedAt = usePlaylistStore(
     (state) => state.playlists.find((playlist) => playlist.id === playlistId)?.updatedAt,
   );
@@ -53,6 +57,24 @@ export function PlaylistView({ playlistId }: { playlistId: string }): JSX.Elemen
 
   const { playlist } = detail;
   const tracks = detail.tracks.items;
+  const chooseCover = async (): Promise<void> => {
+    setCoverBusy(true);
+    setCoverError(null);
+    try {
+      const path = await pickPlaylistCover();
+      if (path === null) return;
+      const updated = await setCustomCover(playlist.id, path);
+      if (updated !== null) {
+        setDetail((current) => (current === null ? null : { ...current, playlist: updated }));
+      } else {
+        setCoverError(usePlaylistStore.getState().error ?? "The cover could not be changed.");
+      }
+    } catch (cause) {
+      setCoverError(cause instanceof Error ? cause.message : "The cover could not be changed.");
+    } finally {
+      setCoverBusy(false);
+    }
+  };
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-8 pt-6 pb-12">
@@ -83,17 +105,33 @@ export function PlaylistView({ playlistId }: { playlistId: string }): JSX.Elemen
           <p className="tabular mt-2 text-[11.5px] text-white/35">
             {formatCount(playlist.trackCount)} songs · {formatLibraryDuration(playlist.durationMs)}
           </p>
-          <Button
-            variant="primary"
-            icon={Play}
-            className="mt-5"
-            disabled={tracks.length === 0}
-            onClick={() => {
-              void playTracks(tracks, 0);
-            }}
-          >
-            Play
-          </Button>
+          <div className="mt-5 flex flex-wrap items-center gap-2.5">
+            <Button
+              variant="primary"
+              icon={Play}
+              disabled={tracks.length === 0}
+              onClick={() => {
+                void playTracks(tracks, 0);
+              }}
+            >
+              Play
+            </Button>
+            <Button
+              variant="secondary"
+              icon={ImagePlus}
+              loading={coverBusy}
+              onClick={() => {
+                void chooseCover();
+              }}
+            >
+              Change cover
+            </Button>
+          </div>
+          {coverError !== null ? (
+            <p role="alert" className="mt-2 text-[11.5px] text-critical">
+              {coverError}
+            </p>
+          ) : null}
         </div>
       </header>
 

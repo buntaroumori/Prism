@@ -15,7 +15,7 @@ import { useSystemSnapshot } from "@/hooks/useSystemSnapshot";
  * plain — no palette tinting on any value that a user might need to read out
  * loud over the phone.
  */
-export function SystemView(): JSX.Element {
+export function SystemView({ embedded = false }: { embedded?: boolean }): JSX.Element {
   const { snapshot, error, isLoading, refreshing, refresh } = useSystemSnapshot();
 
   if (isLoading && snapshot === null) {
@@ -44,10 +44,16 @@ export function SystemView(): JSX.Element {
   }
 
   return (
-    <div className="mx-auto w-full max-w-[980px] space-y-12 px-8 pt-8 pb-14">
+    <div
+      className={
+        embedded
+          ? "space-y-8 border-t border-white/[0.06] pt-8"
+          : "mx-auto w-full max-w-[980px] space-y-12 px-8 pt-8 pb-14"
+      }
+    >
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-[27px] font-semibold tracking-[-0.03em] text-white">System</h1>
+          <h2 className="text-[20px] font-semibold tracking-[-0.02em] text-white">System</h2>
           <p className="mt-1 text-[13px] text-white/40">
             {snapshot.appInfo.name} {snapshot.appInfo.version} · {snapshot.appInfo.targetOs}
           </p>

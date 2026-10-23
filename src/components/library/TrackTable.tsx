@@ -1,4 +1,4 @@
-import { AudioLines } from "lucide-react";
+import { AudioLines, Play } from "lucide-react";
 import { useEffect, useMemo, useState, type JSX } from "react";
 
 import { formatDuration } from "@/lib/format";
@@ -111,6 +111,23 @@ export function TrackTable({
                     )}
                   </span>
 
+                  <button
+                    type="button"
+                    aria-label={`Play ${track.title}`}
+                    title={`Play ${track.title}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (event.detail === 1) onPlay(index);
+                    }}
+                    onDoubleClick={(event) => {
+                      // The first click starts playback; the second is consumed.
+                      event.stopPropagation();
+                    }}
+                    className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-white/25 transition-colors hover:bg-accent/10 hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+                  >
+                    <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                  </button>
+
                   <div className="min-w-0 flex-1">
                     <p
                       className={cn(
@@ -125,26 +142,8 @@ export function TrackTable({
                     ) : null}
                   </div>
 
-                  {track.genre !== "" ? (
-                    <span className="hidden max-w-[140px] truncate text-[10.5px] text-white/25 lg:inline">
-                      {track.genre}
-                    </span>
-                  ) : null}
-
                   <span className="tabular shrink-0 text-[11.5px] text-white/30">
                     {track.durationMs > 0 ? formatDuration(track.durationMs) : "—"}
-                  </span>
-
-                  <span
-                    className={cn(
-                      "hidden shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-[0.08em] uppercase sm:inline",
-                      track.lossless
-                        ? "border-positive/25 bg-positive/[0.08] text-positive/85"
-                        : "border-white/10 bg-white/[0.04] text-white/35",
-                    )}
-                    title={`${track.format} · ${track.quality}`}
-                  >
-                    {track.quality}
                   </span>
                 </li>
               );

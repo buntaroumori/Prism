@@ -17,10 +17,9 @@ const FALLBACK = "—";
 /**
  * Full-window now-playing surface.
  *
- * The header states what is playing and how it is being delivered; everything
- * below it is the modular deck, whose composition the listener owns (see
- * `useLayoutStore`). The view itself holds no layout opinion beyond the title
- * block, so adding a module never means editing this file.
+ * The header states what is playing and how it is being delivered. Below it,
+ * one fixed deck keeps artwork, lyrics and spectrum together; an empty lyric
+ * result gives its space to the spectrum rather than showing a vacant panel.
  */
 export function NowPlayingView(): JSX.Element {
   const status = usePlaybackStore((state) => state.status);
@@ -60,13 +59,14 @@ export function NowPlayingView(): JSX.Element {
   const duration = resolveDuration(status, tick);
   const queuePosition =
     queue.length > 0 ? `${String(index + 1)} / ${String(queue.length)}` : FALLBACK;
+  const entry = queue.find((item) => item.trackId === trackId) ?? queue[index] ?? null;
 
   return (
     <div className="mx-auto w-full max-w-[1420px] px-8 pt-10 pb-12">
       <header className="flex flex-wrap items-end justify-between gap-6">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <QualityBadge status={status ?? EMPTY_STATUS} />
+            <QualityBadge status={status ?? EMPTY_STATUS} track={entry?.catalogue ?? null} />
             {status?.dop === true ? (
               <span className="rounded-full border border-spectrum-violet/30 bg-spectrum-violet/[0.10] px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em] text-spectrum-violet uppercase">
                 DSD over PCM
@@ -101,7 +101,13 @@ export function NowPlayingView(): JSX.Element {
       </header>
 
       <div className="mt-8">
-        <NowPlayingDeck status={status} trackId={trackId} album={track.album} title={track.title} />
+        <NowPlayingDeck
+          status={status}
+          trackId={trackId}
+          album={track.album}
+          artist={track.artist}
+          title={track.title}
+        />
       </div>
     </div>
   );

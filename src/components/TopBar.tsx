@@ -1,4 +1,4 @@
-import { ChevronRight, Loader2, Maximize2, Minimize2, Search, X } from "lucide-react";
+import { ChevronRight, Loader2, Maximize2, Minimize2, Search, Settings, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -8,7 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
-import { StatusPill } from "@/components/ui/StatusPill";
+import { WindowControls } from "@/components/WindowControls";
 import { formatCount } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -27,7 +27,6 @@ const ROUTE_LABELS: Record<ShellRoute, string> = {
   playlist: "Playlist",
   "now-playing": "Now Playing",
   settings: "Settings",
-  system: "System",
   album: "Album",
   artist: "Artist",
 };
@@ -47,6 +46,7 @@ const ROUTE_LABELS: Record<ShellRoute, string> = {
 export function TopBar(): JSX.Element {
   const route = useUiStore((state) => state.route);
   const navigate = useUiStore((state) => state.navigate);
+  const setRoute = useUiStore((state) => state.setRoute);
   const openAlbum = useUiStore((state) => state.openAlbum);
   const openArtist = useUiStore((state) => state.openArtist);
   const setQuery = useLibraryStore((state) => state.setQuery);
@@ -266,7 +266,18 @@ export function TopBar(): JSX.Element {
         ) : null}
       </div>
 
-      <div className="no-drag flex w-[250px] shrink-0 items-center justify-end gap-2.5">
+      <div className="no-drag flex w-[360px] shrink-0 items-center justify-end gap-1.5">
+        {running ? (
+          <div
+            className="mr-1 flex items-center gap-1.5 text-white/45"
+            title="Library scan in progress"
+          >
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            <span className="text-[10.5px] whitespace-nowrap">
+              {progress === null ? "Scanning" : formatCount(progress.filesIndexed)}
+            </span>
+          </div>
+        ) : null}
         <button
           type="button"
           aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"}
@@ -282,25 +293,23 @@ export function TopBar(): JSX.Element {
             <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
           )}
         </button>
-        {running ? (
-          <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.05] py-1 pr-3 pl-2.5">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-white/50" aria-hidden="true" />
-            <span className="text-[11px] whitespace-nowrap text-white/60">
-              {progress === null ? "Scanning" : `${formatCount(progress.filesIndexed)} indexed`}
-            </span>
-          </div>
-        ) : (
-          <StatusPill
-            tone={scan?.lastRun?.status === "failed" ? "warning" : "neutral"}
-            pulse={false}
-          >
-            {scan?.lastRun === null || scan?.lastRun === undefined
-              ? "Never scanned"
-              : scan.lastRun.status === "failed"
-                ? "Last scan failed"
-                : "Library indexed"}
-          </StatusPill>
-        )}
+        <button
+          type="button"
+          aria-label="Settings"
+          title="Settings"
+          aria-current={route === "settings" ? "page" : undefined}
+          onClick={() => {
+            setRoute("settings");
+          }}
+          className={
+            route === "settings"
+              ? "grid h-8 w-8 place-items-center rounded-full bg-accent/[0.12] text-accent"
+              : "grid h-8 w-8 place-items-center rounded-full text-white/35 transition-colors hover:bg-white/[0.06] hover:text-white"
+          }
+        >
+          <Settings className="h-4 w-4" aria-hidden="true" />
+        </button>
+        <WindowControls />
       </div>
     </header>
   );

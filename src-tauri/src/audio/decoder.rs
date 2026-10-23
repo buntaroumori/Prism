@@ -976,6 +976,54 @@ impl GaplessPlayer {
         self.current.as_ref().is_some_and(|track| track.is_dop)
     }
 
+    /// Replace every entry after the loaded track without touching its source,
+    /// DSP state or playhead. The old prefetched successor is discarded and a
+    /// fresh worker primes the new first upcoming request.
+    pub fn replace_upcoming(&mut self, requests: Vec<TrackRequest>) -> Result<(), AudioError> {
+        let current_request = self
+            .current
+            .as_ref()
+            .map(|track| track.request.clone())
+            .ok_or(AudioError::NotRunning)?;
+
+        // Do not join the old prefetch worker on the audio thread: it may be
+        // decoding a large file. Disconnect its request channel and detach the
+        // handle; replacing `result_rx` below makes its final send fail, after
+        // which the worker exits. The loaded source is never shared with it.
+        let (retired_tx, _retired_rx) = bounded::<TrackRequest>(1);
+        let _ = std::mem::replace(&mut self.request_tx, retired_tx);
+        self.worker.take();
+        self.ready = None;
+        self.planned = std::iter::once(current_request)
+            .chain(requests)
+            .collect::<VecDeque<_>>();
+        self.scheduled = 1;
+        self.delivered = 1;
+        self.skipped.clear();
+
+        let (request_tx, request_rx) = bounded::<TrackRequest>(4);
+        let (result_tx, result_rx) =
+            unbounded::<(TrackRequest, Result<PreparedTrack, AudioError>)>();
+        let worker_config = self.config.clone();
+        let worker = std::thread::Builder::new()
+            .name("prism-prefetch".into())
+            .spawn(move || {
+                while let Ok(request) = request_rx.recv() {
+                    let prepared = prepare_track(&request, &worker_config);
+                    if result_tx.send((request, prepared)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|error| {
+                AudioError::Device(format!("cannot spawn prefetch thread: {error}"))
+            })?;
+        self.request_tx = request_tx;
+        self.result_rx = result_rx;
+        self.worker = Some(worker);
+        self.schedule_next()
+    }
+
     /// Recompile the DSP chain of the loaded tracks without interrupting
     /// playback.
     ///
@@ -1453,6 +1501,46 @@ mod tests {
             produced.abs_diff(96_000) < 3_000,
             "produced {produced} output frames"
         );
+    }
+
+    #[test]
+    fn replacing_upcoming_tracks_preserves_the_current_track() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let first = dir.path().join("a.wav");
+        let old_next = dir.path().join("b.wav");
+        let new_next = dir.path().join("c.wav");
+        write_wav(&first, 44_100, 2, 4_410, 440.0);
+        write_wav(&old_next, 44_100, 2, 4_410, 550.0);
+        write_wav(&new_next, 44_100, 2, 4_410, 660.0);
+
+        let mut player = GaplessPlayer::new(
+            vec![
+                TrackRequest::file(&first, "a"),
+                TrackRequest::file(&old_next, "b"),
+            ],
+            config(44_100),
+        )
+        .expect("player");
+        let first_chunk = player.next_chunk(128).expect("first track");
+        assert_eq!(first_chunk.started.as_deref(), Some("a"));
+        player
+            .replace_upcoming(vec![TrackRequest::file(&new_next, "c")])
+            .expect("replace upcoming");
+
+        let mut started = Vec::new();
+        let mut total = first_chunk.samples.len() / 2;
+        loop {
+            let chunk = player.next_chunk(512).expect("chunk");
+            if let Some(started_id) = chunk.started {
+                started.push(started_id);
+            }
+            total += chunk.samples.len() / 2;
+            if chunk.samples.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(started, vec!["c".to_string()]);
+        assert_eq!(total, 8_820, "only A and C may be decoded");
     }
 
     #[test]

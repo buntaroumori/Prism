@@ -15,7 +15,6 @@ import { PlaylistView } from "@/components/views/PlaylistView";
 import { AlbumView } from "@/components/views/AlbumView";
 import { ArtistView } from "@/components/views/ArtistView";
 import { SettingsView } from "@/components/views/SettingsView";
-import { SystemView } from "@/components/views/SystemView";
 import { useAlbumCoverKey } from "@/hooks/useAlbumCoverKey";
 import { useArtworkPalette } from "@/hooks/useArtworkPalette";
 import { useFrameBudget } from "@/hooks/useFrameBudget";
@@ -84,7 +83,8 @@ export function AppShell(): JSX.Element {
   // one record does not re-tint the window on every skip.
   const trackId = usePlaybackStore((state) => state.status?.track?.trackId ?? null);
   const album = usePlaybackStore((state) => state.status?.track?.album ?? null);
-  const coverKey = useAlbumCoverKey(album, trackId);
+  const artist = usePlaybackStore((state) => state.status?.track?.artist ?? null);
+  const coverKey = useAlbumCoverKey(album, trackId, artist);
   const palette = useArtworkPalette(accentSource === "artwork" ? coverKey : null);
   const tokens = paletteTokens(palette, {
     accentSource,
@@ -232,7 +232,6 @@ function PageTransition({
         ) : null}
         {route === "now-playing" ? <NowPlayingView /> : null}
         {route === "settings" ? <SettingsView /> : null}
-        {route === "system" ? <SystemView /> : null}
       </motion.div>
     </AnimatePresence>
   );

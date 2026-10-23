@@ -1,11 +1,22 @@
 import { create } from "zustand";
 
+import type { LibraryContinuation, QueueEntry } from "@/stores/playbackStore";
 import type { AlbumRow, PlaylistRow, TrackRow } from "@/types/ipc";
 
 export type ContextTarget =
-  | { kind: "album"; album: AlbumRow }
+  | { kind: "album"; album: AlbumRow; continuation?: LibraryContinuation }
   | { kind: "track"; track: TrackRow; playlistId?: string }
-  | { kind: "playlist"; playlist: PlaylistRow };
+  | { kind: "playlist"; playlist: PlaylistRow }
+  | { kind: "queue-track"; entry: QueueEntry }
+  | {
+      kind: "queue-album";
+      groupId: string;
+      firstQueueId: string;
+      title: string;
+      artist: string;
+    }
+  | { kind: "dock-album"; album: AlbumRow }
+  | { kind: "dock-playlist"; playlist: PlaylistRow };
 
 interface ContextMenuState {
   menu: { x: number; y: number; target: ContextTarget } | null;

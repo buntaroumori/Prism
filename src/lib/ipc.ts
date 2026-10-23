@@ -280,6 +280,9 @@ export const discordApi = {
   configure: (config: DiscordConfig): Promise<DiscordStatus> =>
     command("discord_configure", DiscordStatusSchema, { config }),
   clear: (): Promise<boolean> => command("discord_clear", Z_BOOLEAN),
+  artworkOverridesPath: (): Promise<string> =>
+    command("discord_artwork_overrides_path", z.string().min(1)),
+  openArtworkFolder: (): Promise<void> => commandVoid("discord_open_artwork_folder"),
 };
 
 const Z_PLAYLISTS = z.array(PlaylistRowSchema);
@@ -298,6 +301,8 @@ export const playlistApi = {
     command("playlist_add_tracks", PlaylistRowSchema, { playlistId, trackIds }),
   removeTrack: (playlistId: string, trackId: string): Promise<PlaylistRow> =>
     command("playlist_remove_track", PlaylistRowSchema, { playlistId, trackId }),
+  setCustomCover: (playlistId: string, path: string): Promise<PlaylistRow> =>
+    command("playlist_set_custom_cover", PlaylistRowSchema, { playlistId, path }),
   delete: (id: string): Promise<boolean> => command("playlist_delete", Z_BOOLEAN, { id }),
 };
 
@@ -314,6 +319,12 @@ export const playerApi = {
     commandVoidWithArgs("player_play", {
       tracks: tracks.map((track) => TrackRequestSchema.parse(track)),
       index,
+    }),
+  /** Replace upcoming tracks without reloading the current decoder or output. */
+  updateQueue: (tracks: TrackRequest[], currentIndex: number): Promise<void> =>
+    commandVoidWithArgs("player_update_queue", {
+      tracks: tracks.map((track) => TrackRequestSchema.parse(track)),
+      index: currentIndex,
     }),
   pause: (): Promise<void> => commandVoid("player_pause"),
   resume: (): Promise<void> => commandVoid("player_resume"),

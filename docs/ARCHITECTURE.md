@@ -97,7 +97,8 @@ conditions:
 - volume is at unity and the output is not muted;
 - for DSD over PCM, the DoP carrier is preserved.
 
-Otherwise, the UI reports a processed path and exposes the negotiated format.
+Otherwise, bit-perfect status remains off. Source labels describe the file itself, while negotiated
+output details remain available through playback status and Settings.
 
 ### Decoding, gapless playback and RAM Play
 
@@ -109,6 +110,23 @@ RAM Play decodes a track into memory before playback. Tracks above the configure
 the streaming source instead. Unreadable tracks are reported and skipped without discarding the
 rest of the queue.
 
+### Queue and album continuation
+
+Queue edits replace only upcoming entries through `player_update_queue`. The command checks the
+current track identity and playhead before committing the new plan, so a stale edit fails without
+tearing down loaded audio, DSP or the output stream. Explicit track jumps use `player_play` because
+they intentionally load a different position.
+
+Play next inserts material after the current song and any earlier manually inserted entries. Queue
+rows retain album-group and entry identities for block dragging, intra-album ordering, removal and
+shuffle restoration. Disabling shuffle restores the exact saved order while retaining the current
+song.
+
+Album playback stops at the album boundary by default. When continuation is enabled, the frontend
+uses the originating Library text, artist, genre, collection and sort query to append the next
+complete album through the same non-destructive queue update. Year ordering compares complete
+release dates, and undated albums remain last in both directions.
+
 ### Processing chain
 
 ```text
@@ -116,7 +134,9 @@ decode → ReplayGain → resampling → EQ → crossfeed → output ring → vo
 ```
 
 Stages that are not required are omitted when the chain is built. Volume is applied as a per-block
-ramp outside the filter graph so routine volume changes do not rebuild the chain.
+ramp outside the filter graph so routine volume changes do not rebuild the chain. Slider movement
+updates the running gain immediately. Samples carried across a ring refill are distinguished from
+fresh audio so attenuation is never applied to them twice; unity gain remains a bypass.
 
 The processing modules include:
 
@@ -174,7 +194,9 @@ does not mark its entire contents missing.
 
 Static playlists and their entries are stored in SQLite. Entry order is explicit, and a unique
 `(playlist_id, track_id)` index prevents duplicate songs. Playlist reads join the same track read
-model used by the rest of the application.
+model used by the rest of the application. A custom cover is imported through the native file
+picker, normalised to a managed JPEG and referenced by the playlist independently of Discord's
+current-track artwork.
 
 ### Search and read models
 
@@ -186,7 +208,8 @@ into bounded quoted terms before it reaches `MATCH`; sort fragments are selected
 Pagination includes a stable identity tie-breaker.
 
 Home shelves and their corresponding See all pages share collection predicates. This keeps counts,
-shelf membership and full results consistent.
+shelf membership and full results consistent. Album read models preserve the complete release date
+in addition to the display year, allowing deterministic full-date ordering within a year.
 
 ## Artwork and Discord
 
@@ -197,15 +220,22 @@ Artwork resolution follows a cached provider chain:
 3. enabled online providers;
 4. a local fallback when no artwork is available.
 
-Images are decoded, resized within a fixed bound and stored in the application cache. Successful
-and failed provider lookups have different cache lifetimes, and concurrent requests for the same
-album are coalesced. Multi-disc albums use the first available album artwork rather than requiring
-a separate image in every disc folder.
+Images are decoded into bounded JPEG masters and 320-pixel thumbnails in the application cache.
+Legacy cache entries gain thumbnails without replacing their masters. Successful interface lookups
+are shared for the lifetime of the session, misses are retried after a bounded interval, and
+identical in-flight requests share one promise. Multi-disc albums use the first available album
+artwork rather than requiring a separate image in every disc folder.
 
 Discord Rich Presence subscribes to engine events rather than interface state. The transport uses
 Discord IPC over Unix sockets or Windows named pipes, with bounded reconnect backoff. Activity
 updates include track metadata and, when available, an externally accessible artwork URL. A
 persisted preference controls whether paused activity remains visible or is cleared until resume.
+
+When an album has no public artwork URL, Prism records its canonical album/artist identity and
+readable artist, album and track metadata in a local `discord-artwork.json` file with `url: null`.
+Settings exposes the file and its folder. A user-supplied HTTPS URL is validated, reloaded and used
+for that album's subsequent presence updates. Local files and embedded image bytes are never
+uploaded to Discord.
 
 ## Interface and IPC
 
@@ -218,8 +248,8 @@ Command errors use a stable code and message rather than requiring the UI to par
 ### State and rendering
 
 Zustand stores are separated by responsibility and update frequency. High-frequency playhead and
-spectrum updates do not invalidate the entire view tree. Browsing, appearance, layout, output and
-window preferences use versioned persistence where appropriate.
+spectrum updates do not invalidate the entire view tree. Browsing, appearance, playback, output,
+Dock and window preferences use versioned persistence where appropriate.
 
 Long track results are paged and virtualised. Page requests are generation-scoped so a late response
 from a previous query cannot replace current results. Album grids use backend pagination and stable
@@ -227,14 +257,25 @@ ordering.
 
 ### Now Playing
 
-The Now Playing deck contains independent artwork, lyrics, spectrum and queue modules. Layout and
-module visibility are persisted, and at least one module remains available.
+Now Playing uses one fixed deck with artwork and a shared lyric panel. When resolved lyrics are
+empty, that panel is removed and Spectrum takes its place; there is no alternate modular layout.
+The player bar owns the separate queue panel.
 
 The spectrum analyser runs on decoded audio in the Rust producer path. It sends bounded band data to
 the interface, where a canvas interpolates frames without putting every update into React state.
 
 Lyrics are resolved from embedded USLT metadata or a sidecar LRC file. The parser handles common
 timestamp variants, offsets and unsorted input.
+
+### Desktop shell
+
+Settings opens from a top-bar gear and contains output, playback, library, integration, appearance
+and System sections. Native window decorations are disabled, with fullscreen and minimize,
+maximize and close controls integrated into the same top bar.
+
+The Dock stores pinned album and playlist identities in newest-first order. Pins can be reordered,
+opened and removed in both expanded and collapsed sidebars. Album and playlist context menus share
+the same navigation and playback actions as their full views.
 
 ## Plugins
 

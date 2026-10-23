@@ -1,20 +1,21 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState, type JSX } from "react";
-import { AudioLines, Maximize2 } from "lucide-react";
+import { ListMusic, Maximize2 } from "lucide-react";
 
 import { CoverArt } from "@/components/ui/CoverArt";
 import { QualityBadge } from "@/components/player/QualityBadge";
+import { QueuePanel } from "@/components/player/QueuePanel";
 import { Scrubber } from "@/components/player/Scrubber";
 import { TransportControls } from "@/components/player/TransportControls";
 import { VolumeControl } from "@/components/player/VolumeControl";
-import { formatAudioFormat } from "@/lib/audio";
-import { libraryApi } from "@/lib/ipc";
+import { trackCover } from "@/lib/trackCover";
 import {
   durationMs as resolveDuration,
   EMPTY_STATUS,
   playheadMs,
   usePlaybackStore,
 } from "@/stores/playbackStore";
+import { usePlaybackPreferencesStore } from "@/stores/playbackPreferencesStore";
 import { useUiStore } from "@/stores/uiStore";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
 
@@ -35,6 +36,10 @@ export function PlayerBar(): JSX.Element {
   const pendingVolumeDb = usePlaybackStore((state) => state.pendingVolumeDb);
   const committedVolumeDb = usePlaybackStore((state) => state.committedVolumeDb);
   const toggle = usePlaybackStore((state) => state.toggle);
+  const shuffled = usePlaybackStore((state) => state.shuffleSnapshot !== null);
+  const continuation = usePlaybackStore((state) => state.continuation);
+  const albumEnd = usePlaybackPreferencesStore((state) => state.albumEnd);
+  const toggleShuffle = usePlaybackStore((state) => state.toggleShuffle);
   const next = usePlaybackStore((state) => state.next);
   const previous = usePlaybackStore((state) => state.previous);
   const stop = usePlaybackStore((state) => state.stop);
@@ -48,6 +53,8 @@ export function PlayerBar(): JSX.Element {
   const openAt = useContextMenuStore((state) => state.openAt);
 
   const [coverPath, setCoverPath] = useState<string | null>(null);
+  const [coverThumbnailPath, setCoverThumbnailPath] = useState<string | null>(null);
+  const [queueOpen, setQueueOpen] = useState(false);
   const trackId = status?.track?.trackId ?? null;
 
   // Cover lookup is keyed by track id, not by the whole snapshot: a volume
@@ -55,25 +62,27 @@ export function PlayerBar(): JSX.Element {
   useEffect(() => {
     if (trackId === null) {
       setCoverPath(null);
+      setCoverThumbnailPath(null);
       return;
     }
     let active = true;
-    void libraryApi
-      .trackCover(trackId)
+    void trackCover(trackId, status?.track?.artist, status?.track?.album)
       .then((asset) => {
         if (active) {
           setCoverPath(asset.localPath);
+          setCoverThumbnailPath(asset.thumbnailPath);
         }
       })
       .catch(() => {
         if (active) {
           setCoverPath(null);
+          setCoverThumbnailPath(null);
         }
       });
     return () => {
       active = false;
     };
-  }, [trackId]);
+  }, [trackId, status?.track?.artist, status?.track?.album]);
 
   const position = playheadMs(status, tick);
   // The catalogue knows the length of the file the engine opened, even when the
@@ -96,7 +105,9 @@ export function PlayerBar(): JSX.Element {
   const duration = resolveDuration(status, tick, entry?.durationMs ?? null);
   const albumId = entry?.albumId ?? null;
   const artistId = entry?.artistId ?? null;
-  const canSkip = queue.length > 0 && index + 1 < queue.length;
+  const canSkip =
+    queue.length > 0 &&
+    (index + 1 < queue.length || (continuation !== null && albumEnd === "continue-library"));
   const volumeDb = pendingVolumeDb ?? committedVolumeDb ?? status?.volumeDb ?? 0;
 
   return (
@@ -150,6 +161,7 @@ export function PlayerBar(): JSX.Element {
               >
                 <CoverArt
                   path={coverPath}
+                  thumbnailPath={coverThumbnailPath}
                   alt={coverAlt}
                   className="h-[58px] w-[58px] transition-transform duration-300 group-hover:scale-[1.03]"
                   rounded="rounded-xl"
@@ -188,7 +200,9 @@ export function PlayerBar(): JSX.Element {
                   {artist}
                 </button>
                 <div className="mt-1 flex max-w-full items-center gap-1.5 overflow-hidden">
-                  {status !== null ? <QualityBadge status={status} /> : null}
+                  {status !== null ? (
+                    <QualityBadge status={status} track={entry?.catalogue ?? null} />
+                  ) : null}
                   {status?.dop === true ? (
                     <span className="rounded-full border border-spectrum-violet/30 bg-spectrum-violet/[0.10] px-2 py-0.5 text-[9.5px] font-semibold tracking-[0.12em] text-spectrum-violet uppercase">
                       DoP
@@ -204,6 +218,10 @@ export function PlayerBar(): JSX.Element {
                 state={status?.state ?? "stopped"}
                 canSkip={canSkip}
                 busy={busy}
+                shuffled={shuffled}
+                onToggleShuffle={() => {
+                  void toggleShuffle();
+                }}
                 onToggle={() => {
                   void toggle();
                 }}
@@ -228,19 +246,23 @@ export function PlayerBar(): JSX.Element {
             </div>
 
             {/* ----------------------------------------------------- Right -- */}
-            <div className="flex min-w-0 items-center justify-end gap-4">
-              <div className="hidden min-w-0 flex-col items-end xl:flex">
-                <span
-                  className="flex items-center gap-1.5 text-[10px] tracking-[0.1em] whitespace-nowrap text-white/30 uppercase"
-                  title="Current playback format"
-                >
-                  <AudioLines className="h-3 w-3 shrink-0" aria-hidden="true" />
-                  {formatAudioFormat(status?.deviceFormat ?? status?.outputFormat ?? null)}
-                </span>
-                <span className="tabular max-w-[180px] truncate text-[10px] text-white/20">
-                  {status?.deviceName ?? "—"}
-                </span>
-              </div>
+            <div className="flex min-w-0 items-center justify-end gap-3">
+              <button
+                type="button"
+                aria-label="Open queue"
+                aria-expanded={queueOpen}
+                title="Queue"
+                onClick={() => {
+                  setQueueOpen((open) => !open);
+                }}
+                className={
+                  queueOpen
+                    ? "grid h-9 w-9 place-items-center rounded-full bg-accent/[0.14] text-accent"
+                    : "grid h-9 w-9 place-items-center rounded-full text-white/45 transition-colors hover:bg-white/[0.07] hover:text-white"
+                }
+              >
+                <ListMusic className="h-[18px] w-[18px]" aria-hidden="true" />
+              </button>
 
               <VolumeControl
                 volumeDb={volumeDb}
@@ -258,6 +280,15 @@ export function PlayerBar(): JSX.Element {
               />
             </div>
           </div>
+          <AnimatePresence>
+            {queueOpen ? (
+              <QueuePanel
+                onClose={() => {
+                  setQueueOpen(false);
+                }}
+              />
+            ) : null}
+          </AnimatePresence>
         </motion.footer>
       ) : null}
     </AnimatePresence>

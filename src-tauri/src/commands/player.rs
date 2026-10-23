@@ -91,6 +91,26 @@ pub fn player_play(
     Ok(())
 }
 
+/// Replace upcoming queue entries without restarting the loaded track.
+#[tauri::command]
+pub fn player_update_queue(
+    state: State<'_, AppState>,
+    tracks: Vec<TrackRequest>,
+    index: usize,
+) -> Result<(), PrismError> {
+    if tracks.is_empty() {
+        return Err(PrismError::InvalidInput("the queue is empty".into()));
+    }
+    if index >= tracks.len() {
+        return Err(PrismError::InvalidInput(format!(
+            "queue index {index} is outside the {} track queue",
+            tracks.len()
+        )));
+    }
+    state.engine().update_queue(tracks, index)?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn player_pause(state: State<'_, AppState>) -> Result<(), PrismError> {
     state.engine().pause()?;

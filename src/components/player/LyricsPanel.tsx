@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { FileAudio, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
-import { activeLineIndex, useLyrics } from "@/hooks/useLyrics";
+import { activeLineIndex, useLyrics, type LyricsState } from "@/hooks/useLyrics";
 import { cn } from "@/lib/utils";
 import { playheadMs, usePlaybackStore } from "@/stores/playbackStore";
 
@@ -22,12 +22,19 @@ const FOLLOW_RESUME_MS = 4_000;
  * sheet, no cursor), and no lyrics at all (with a refresh affordance and the
  * exact resolution order, since that is what the user needs to know).
  */
-export function LyricsPanel({ className }: { className?: string }): JSX.Element {
+export function LyricsPanel({
+  className,
+  lyrics,
+}: {
+  className?: string;
+  lyrics?: LyricsState;
+}): JSX.Element {
   const status = usePlaybackStore((state) => state.status);
   const tick = usePlaybackStore((state) => state.tick);
   const track = status?.track ?? null;
   const trackId = track?.trackId ?? null;
-  const { document, loading, error, refresh } = useLyrics(trackId);
+  const internalLyrics = useLyrics(lyrics === undefined ? trackId : null);
+  const { document, loading, error, refresh } = lyrics ?? internalLyrics;
   const position = playheadMs(status, tick);
   const [follow, setFollow] = useState(true);
 

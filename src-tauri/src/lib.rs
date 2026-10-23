@@ -184,6 +184,21 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
                 });
             }
 
+            // Manual artwork URLs are user-editable while a track is playing.
+            // Poll only the small local JSON file; no provider or RPC request is
+            // made unless the mapping contains a usable URL for this album.
+            if let Some(state) = app.try_state::<AppState>() {
+                let discord = std::sync::Arc::clone(state.discord());
+                tauri::async_runtime::spawn(async move {
+                    let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    loop {
+                        interval.tick().await;
+                        discord.refresh_artwork_override().await;
+                    }
+                });
+            }
+
             // --- Audio engine event bridge ------------------------------------
             // The supervisor pushes transport events through a tokio
             // broadcast channel; this task forwards them to the webview as
@@ -348,6 +363,7 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::playlists::playlist_add_tracks,
             commands::playlists::playlist_detail,
             commands::playlists::playlist_remove_track,
+            commands::playlists::playlist_set_custom_cover,
             commands::playlists::playlist_delete,
             commands::library::library_index_covers,
             commands::library::library_album_cover,
@@ -356,6 +372,8 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::discord::discord_status,
             commands::discord::discord_configure,
             commands::discord::discord_clear,
+            commands::discord::discord_artwork_overrides_path,
+            commands::discord::discord_open_artwork_folder,
             commands::system::get_app_info,
             commands::system::get_runtime_health,
             commands::system::open_log_folder,
@@ -364,6 +382,7 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::system::window_is_fullscreen,
             commands::player::player_status,
             commands::player::player_play,
+            commands::player::player_update_queue,
             commands::player::player_pause,
             commands::player::player_resume,
             commands::player::player_stop,

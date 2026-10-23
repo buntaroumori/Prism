@@ -1,4 +1,4 @@
-import { Disc3, Info, ListPlus, Play, Plus, Trash2, X } from "lucide-react";
+import { Disc3, ImagePlus, Info, ListPlus, Pin, PinOff, Play, Plus, Trash2, X } from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -13,12 +13,26 @@ import { createPortal } from "react-dom";
 import { CoverArt } from "@/components/ui/CoverArt";
 import { Button } from "@/components/ui/Button";
 import { formatCount, formatLibraryDuration } from "@/lib/format";
+import { formatReleaseDate, sourceLabel } from "@/lib/sourceLabel";
 import { libraryApi } from "@/lib/ipc";
+import { pickPlaylistCover } from "@/lib/playlistCover";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
-import { usePlaybackStore } from "@/stores/playbackStore";
+import { useDockStore } from "@/stores/dockStore";
+import { usePlaybackStore, type LibraryContinuation } from "@/stores/playbackStore";
 import { usePlaylistStore } from "@/stores/playlistStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { AlbumDetail, AlbumRow, PlaylistRow, TrackRow } from "@/types/ipc";
+
+async function readAlbumTracks(albumId: string): Promise<TrackRow[]> {
+  const tracks: TrackRow[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await libraryApi.search({ albumId, sort: "album", limit: 500, offset });
+    tracks.push(...page.items);
+    offset += page.items.length;
+    if (page.items.length === 0 || offset >= page.total) return tracks;
+  }
+}
 
 /** The only context menu and metadata dialogs in the desktop shell. */
 export function ContextMenuHost(): JSX.Element {
@@ -29,10 +43,20 @@ export function ContextMenuHost(): JSX.Element {
   const addTracks = usePlaylistStore((state) => state.addTracks);
   const removeTrack = usePlaylistStore((state) => state.removeTrack);
   const deletePlaylist = usePlaylistStore((state) => state.deletePlaylist);
+  const setCustomCover = usePlaylistStore((state) => state.setCustomCover);
+  const dockItems = useDockStore((state) => state.items);
+  const pinAlbum = useDockStore((state) => state.pinAlbum);
+  const unpinAlbum = useDockStore((state) => state.unpinAlbum);
+  const pinPlaylist = useDockStore((state) => state.pinPlaylist);
+  const unpinPlaylist = useDockStore((state) => state.unpinPlaylist);
   const error = usePlaylistStore((state) => state.error);
   const notice = usePlaylistStore((state) => state.notice);
   const clearNotice = usePlaylistStore((state) => state.clearNotice);
   const playTracks = usePlaybackStore((state) => state.playTracks);
+  const enqueueNext = usePlaybackStore((state) => state.enqueueNext);
+  const removeQueueEntry = usePlaybackStore((state) => state.removeQueueEntry);
+  const removeQueueGroup = usePlaybackStore((state) => state.removeQueueGroup);
+  const jumpTo = usePlaybackStore((state) => state.jumpTo);
   const openAlbum = useUiStore((state) => state.openAlbum);
   const openPlaylist = useUiStore((state) => state.openPlaylist);
   const setRoute = useUiStore((state) => state.setRoute);
@@ -42,6 +66,7 @@ export function ContextMenuHost(): JSX.Element {
   const [details, setDetails] = useState<AlbumDetail | null>(null);
   const [detailsAlbum, setDetailsAlbum] = useState<AlbumRow | null>(null);
   const [detailsError, setDetailsError] = useState<string | null>(null);
+  const [coverError, setCoverError] = useState<string | null>(null);
   const [creatingFor, setCreatingFor] = useState<TrackRow | null>(null);
   const [creatingName, setCreatingName] = useState("");
   const [creatingBusy, setCreatingBusy] = useState(false);
@@ -109,12 +134,35 @@ export function ContextMenuHost(): JSX.Element {
       });
   };
 
-  const playAlbum = (album: AlbumRow): void => {
-    close();
-    void libraryApi.search({ albumId: album.id, sort: "album", limit: 500 }).then((page) => {
-      if (page.items.length > 0) {
-        void playTracks(page.items, 0);
+  const choosePlaylistCover = async (playlistId: string): Promise<void> => {
+    setCoverError(null);
+    try {
+      const path = await pickPlaylistCover();
+      if (path === null) return;
+      const updated = await setCustomCover(playlistId, path);
+      if (updated === null) {
+        setCoverError(
+          usePlaylistStore.getState().error ?? "The playlist cover could not be changed.",
+        );
       }
+    } catch (cause) {
+      setCoverError(
+        cause instanceof Error ? cause.message : "The playlist cover could not be changed.",
+      );
+    }
+  };
+
+  const playAlbum = (album: AlbumRow, continuation: LibraryContinuation | null): void => {
+    close();
+    void readAlbumTracks(album.id).then((tracks) => {
+      if (tracks.length > 0) void playTracks(tracks, 0, { album, continuation });
+    });
+  };
+
+  const playAlbumNext = (album: AlbumRow): void => {
+    close();
+    void readAlbumTracks(album.id).then((tracks) => {
+      if (tracks.length > 0) void enqueueNext(tracks, album);
     });
   };
 
@@ -135,6 +183,15 @@ export function ContextMenuHost(): JSX.Element {
     }
   };
 
+  const detailSource =
+    details === null
+      ? null
+      : sourceLabel({
+          format: details.album.format,
+          sampleRate: details.album.maxSampleRate,
+          bitDepth: details.album.maxBitDepth,
+        });
+
   return createPortal(
     <>
       {menu !== null ? (
@@ -148,7 +205,7 @@ export function ContextMenuHost(): JSX.Element {
           className="glass fixed z-[90] max-h-[min(560px,calc(100vh-16px))] w-[280px] overflow-y-auto rounded-2xl p-1.5 shadow-2xl"
           style={{ left: position.x, top: position.y }}
         >
-          {target?.kind === "album" ? (
+          {target?.kind === "album" || target?.kind === "dock-album" ? (
             <>
               <MenuHeader title={target.album.title} subtitle={target.album.albumArtist} />
               <MenuItem
@@ -163,7 +220,17 @@ export function ContextMenuHost(): JSX.Element {
                 icon={Play}
                 label="Play album"
                 onClick={() => {
-                  playAlbum(target.album);
+                  playAlbum(
+                    target.album,
+                    target.kind === "album" ? (target.continuation ?? null) : null,
+                  );
+                }}
+              />
+              <MenuItem
+                icon={ListPlus}
+                label="Play next"
+                onClick={() => {
+                  playAlbumNext(target.album);
                 }}
               />
               <MenuItem
@@ -171,6 +238,35 @@ export function ContextMenuHost(): JSX.Element {
                 label="Album details"
                 onClick={() => {
                   showDetails(target.album);
+                }}
+              />
+              <MenuItem
+                icon={
+                  target.kind === "dock-album" ||
+                  dockItems.some(
+                    (item) => item.kind === "album" && item.album.id === target.album.id,
+                  )
+                    ? PinOff
+                    : Pin
+                }
+                label={
+                  target.kind === "dock-album" ||
+                  dockItems.some(
+                    (item) => item.kind === "album" && item.album.id === target.album.id,
+                  )
+                    ? "Unpin album"
+                    : "Pin album"
+                }
+                onClick={() => {
+                  const pinned = dockItems.some(
+                    (item) => item.kind === "album" && item.album.id === target.album.id,
+                  );
+                  if (target.kind === "dock-album" || pinned) {
+                    unpinAlbum(target.album.id);
+                  } else {
+                    pinAlbum(target.album);
+                  }
+                  close();
                 }}
               />
             </>
@@ -184,6 +280,14 @@ export function ContextMenuHost(): JSX.Element {
                 label="Play now"
                 onClick={() => {
                   void playTracks([target.track], 0);
+                  close();
+                }}
+              />
+              <MenuItem
+                icon={ListPlus}
+                label="Play next"
+                onClick={() => {
+                  void enqueueNext([target.track]);
                   close();
                 }}
               />
@@ -240,7 +344,58 @@ export function ContextMenuHost(): JSX.Element {
             </>
           ) : null}
 
-          {target?.kind === "playlist" ? (
+          {target?.kind === "queue-track" ? (
+            <>
+              <MenuHeader title={target.entry.title} subtitle={target.entry.artist} />
+              <MenuItem
+                icon={Play}
+                label="Play queued song"
+                onClick={() => {
+                  const position = usePlaybackStore
+                    .getState()
+                    .queue.findIndex((entry) => entry.queueId === target.entry.queueId);
+                  if (position >= 0) void jumpTo(position);
+                  close();
+                }}
+              />
+              <MenuItem
+                icon={X}
+                label="Remove from queue"
+                onClick={() => {
+                  void removeQueueEntry(target.entry.queueId);
+                  close();
+                }}
+              />
+            </>
+          ) : null}
+
+          {target?.kind === "queue-album" ? (
+            <>
+              <MenuHeader title={target.title} subtitle={target.artist} />
+              <MenuItem
+                icon={Play}
+                label="Play queued album"
+                onClick={() => {
+                  const position = usePlaybackStore
+                    .getState()
+                    .queue.findIndex((entry) => entry.queueId === target.firstQueueId);
+                  if (position >= 0) void jumpTo(position);
+                  close();
+                }}
+              />
+              <MenuItem
+                icon={X}
+                label="Remove album from queue"
+                danger
+                onClick={() => {
+                  void removeQueueGroup(target.groupId);
+                  close();
+                }}
+              />
+            </>
+          ) : null}
+
+          {target?.kind === "playlist" || target?.kind === "dock-playlist" ? (
             <>
               <MenuHeader
                 title={target.playlist.name}
@@ -251,6 +406,44 @@ export function ContextMenuHost(): JSX.Element {
                 label="Open playlist"
                 onClick={() => {
                   openPlaylist(target.playlist.id);
+                  close();
+                }}
+              />
+              <MenuItem
+                icon={ImagePlus}
+                label="Change cover"
+                onClick={() => {
+                  const playlistId = target.playlist.id;
+                  close();
+                  void choosePlaylistCover(playlistId);
+                }}
+              />
+              <MenuItem
+                icon={
+                  target.kind === "dock-playlist" ||
+                  dockItems.some(
+                    (item) => item.kind === "playlist" && item.playlist.id === target.playlist.id,
+                  )
+                    ? PinOff
+                    : Pin
+                }
+                label={
+                  target.kind === "dock-playlist" ||
+                  dockItems.some(
+                    (item) => item.kind === "playlist" && item.playlist.id === target.playlist.id,
+                  )
+                    ? "Unpin playlist"
+                    : "Pin playlist"
+                }
+                onClick={() => {
+                  const pinned = dockItems.some(
+                    (item) => item.kind === "playlist" && item.playlist.id === target.playlist.id,
+                  );
+                  if (target.kind === "dock-playlist" || pinned) {
+                    unpinPlaylist(target.playlist.id);
+                  } else {
+                    pinPlaylist(target.playlist);
+                  }
                   close();
                 }}
               />
@@ -316,23 +509,38 @@ export function ContextMenuHost(): JSX.Element {
             <p className="mt-6 text-[12px] text-white/35">Reading details…</p>
           ) : (
             <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
-              <Detail label="Artist" value={details.album.albumArtist || "Unknown artist"} />
-              <Detail label="Year" value={details.album.year?.toString() ?? "Unknown"} />
-              <Detail label="Release" value={details.album.releaseType ?? "Album"} />
+              <Detail label="Artist Name" value={details.album.albumArtist || "Unknown artist"} />
+              <Detail label="Album Title" value={details.album.title} />
+              <Detail
+                label="Date"
+                value={formatReleaseDate(details.album.releaseDate, details.album.year)}
+              />
+              <Detail
+                label="Genre"
+                value={unique(details.tracks.items.map((track) => track.genre)).join(", ") || "—"}
+              />
               <Detail label="Discs" value={formatCount(details.album.discCount)} />
               <Detail label="Songs" value={formatCount(details.album.trackCount)} />
               <Detail label="Length" value={formatLibraryDuration(details.album.durationMs)} />
               <Detail
-                label="Genres"
-                value={unique(details.tracks.items.map((track) => track.genre)).join(", ") || "—"}
-                wide
+                label="Quality"
+                value={detailSource?.label ?? "—"}
+                valueClassName={
+                  detailSource?.tone === "hi-res"
+                    ? "text-spectrum-violet"
+                    : detailSource?.tone === "cd"
+                      ? "text-positive"
+                      : "text-white/45"
+                }
               />
-              <Detail label="Audio" value={details.album.quality} />
               <Detail
-                label="Formats"
-                value={unique(details.tracks.items.map((track) => track.format.toUpperCase())).join(
-                  ", ",
-                )}
+                label="Format"
+                value={
+                  unique(details.tracks.items.map((track) => track.format.toUpperCase())).join(
+                    ", ",
+                  ) ||
+                  (details.album.format?.toUpperCase() ?? "—")
+                }
               />
             </dl>
           )}
@@ -425,6 +633,25 @@ export function ContextMenuHost(): JSX.Element {
         </Dialog>
       ) : null}
 
+      {coverError !== null ? (
+        <div
+          role="alert"
+          className="glass fixed bottom-[104px] left-1/2 z-[110] flex max-w-[min(520px,calc(100vw-32px))] -translate-x-1/2 items-center gap-3 rounded-2xl border border-critical/20 px-4 py-3 text-[12px] text-critical shadow-xl"
+        >
+          <span>{coverError}</span>
+          <button
+            type="button"
+            aria-label="Dismiss cover error"
+            onClick={() => {
+              setCoverError(null);
+            }}
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-full hover:bg-white/[0.07] hover:text-white"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+
       {notice !== null ? (
         <div
           role="status"
@@ -508,13 +735,23 @@ function Dialog({
   );
 }
 
-function Detail({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
+function Detail({
+  label,
+  value,
+  wide = false,
+  valueClassName = "text-white/75",
+}: {
+  label: string;
+  value: string;
+  wide?: boolean;
+  valueClassName?: string;
+}) {
   return (
     <div className={wide ? "col-span-2 sm:col-span-3" : ""}>
       <dt className="text-[9.5px] font-semibold tracking-[0.14em] text-white/25 uppercase">
         {label}
       </dt>
-      <dd className="mt-1 text-[12.5px] break-words text-white/75">{value}</dd>
+      <dd className={`mt-1 text-[12.5px] break-words ${valueClassName}`}>{value}</dd>
     </div>
   );
 }

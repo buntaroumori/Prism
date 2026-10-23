@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils";
 interface CoverArtProps {
   /** Absolute path of the cached JPEG, or `null` when there is no artwork. */
   path: string | null;
+  /** Lightweight derivative preferred for grids, with `path` as its fallback. */
+  thumbnailPath?: string | null;
   /**
    * Remote fallback (the provider URL stored in `cover_cache`). Only used when
    * no local file exists: a library without extracted artwork still shows the
@@ -31,6 +33,7 @@ interface CoverArtProps {
  */
 export function CoverArt({
   path,
+  thumbnailPath = null,
   url = null,
   alt,
   className,
@@ -43,10 +46,11 @@ export function CoverArt({
   // rest of the session. Keyed by source, a retry after the backend attaches
   // artwork also clears itself.
   const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
+  const thumbnail = coverSrc(thumbnailPath);
   const local = coverSrc(path);
   const remote = url?.startsWith("https://") === true ? url : null;
-  const src =
-    [local, remote].find((candidate) => candidate !== null && !failed.has(candidate)) ?? null;
+  const sources = [...new Set([thumbnail, local, remote].filter((value) => value !== null))];
+  const src = sources.find((candidate) => !failed.has(candidate)) ?? null;
 
   return (
     <div

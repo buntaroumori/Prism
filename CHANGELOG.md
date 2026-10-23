@@ -6,6 +6,49 @@ Notable user-visible changes are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-10-23
+
+### Added
+
+- Full queue management with album groups, track and block dragging, context removal, double-click
+  jumping and queue-aware Skip.
+- Play next for albums and tracks, including immediate playback when the queue is idle.
+- Single-click Play actions beside track numbers in album, playlist and queue lists.
+- Album playback stops at the album boundary by default; optional continuation uses the originating
+  Library filters and complete-date ordering.
+- A newest-first, reorderable Dock for pinned albums and playlists in expanded and collapsed
+  sidebars.
+- Custom playlist covers selected through the native file picker and stored as managed artwork.
+- Local Discord artwork overrides for albums without public artwork, with validated HTTPS URLs and
+  no image upload.
+- Integrated minimize, maximize and close controls for the borderless desktop window.
+
+### Changed
+
+- Now Playing uses one layout with artwork and lyrics; Spectrum expands into the lyrics area when
+  no lyrics are available.
+- Source labels distinguish green CD and purple Hi-Res FLAC from neutral non-FLAC formats in the
+  player, album pages and Album Details.
+- Album pages show complete release dates and genres, while tracklists omit redundant per-track
+  genre and quality fields. Album Details follows a consistent metadata order.
+- Settings opens from the top bar and includes System information. Obsolete sidebar status and
+  totals were removed.
+- The player bar places Queue beside volume and no longer duplicates output-device and format text.
+- Album Shuffle generates a fresh order on every press and shares the player shuffle state.
+- Artwork loading reuses master and thumbnail caches and coalesces identical requests across Home,
+  Library and Now Playing.
+
+### Fixed
+
+- Disabling shuffle restores the exact previous queue order while retaining the current song.
+- Volume changes reach the running audio engine while the slider is being dragged.
+- Carried audio no longer receives a repeated gain ramp, avoiding attenuation artifacts without
+  changing unity-gain playback.
+- Same-year albums sort by their complete release dates, and undated albums remain last in both
+  Year directions.
+- Live queue edits preserve the current source, DSP state and playhead; stale edits fail without
+  discarding playback.
+
 ## [0.1.4] — 2026-10-22
 
 ### Added
@@ -105,7 +148,8 @@ Notable user-visible changes are recorded here. The format follows
 - Optional Lua and WebAssembly plugin runtimes with capability checks and resource limits.
 - Windows and Linux packaging configuration, dependency licence inventory and release checksums.
 
-[Unreleased]: https://github.com/buntaroumori/Prism/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.0.0
 [0.1.4]: https://github.com/buntaroumori/Prism/releases/tag/v0.1.4
 [0.1.3]: https://github.com/buntaroumori/Prism/releases/tag/v0.1.3
 [0.1.2]: https://github.com/buntaroumori/Prism/releases/tag/v0.1.2

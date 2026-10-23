@@ -3,6 +3,7 @@ import { useEffect, useState, type JSX, type ReactNode } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  FolderOpen,
   FolderPlus,
   FolderX,
   Loader2,
@@ -12,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { PluginsSection } from "@/components/settings/PluginsSection";
+import { SystemView } from "@/components/views/SystemView";
 import { Button } from "@/components/ui/Button";
 import { Segmented } from "@/components/ui/Segmented";
 import { StatusPill } from "@/components/ui/StatusPill";
@@ -21,8 +23,8 @@ import { discordApi, libraryApi } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
+import { usePlaybackPreferencesStore } from "@/stores/playbackPreferencesStore";
 import { useOutputStore, BUFFER_CHOICES } from "@/stores/outputStore";
-import { useLayoutStore } from "@/stores/layoutStore";
 import { COVER_SIZE_MAX, COVER_SIZE_MIN, useUiStore } from "@/stores/uiStore";
 import type { DiscordStatus, LibraryRoot } from "@/types/ipc";
 
@@ -45,11 +47,13 @@ export function SettingsView(): JSX.Element {
       </header>
 
       <OutputSection />
+      <PlaybackSection />
       <LibrarySection />
       <ScanSection />
       <PresenceSection />
       <PluginsSection />
       <AppearanceSection />
+      <SystemView embedded />
     </div>
   );
 }
@@ -186,6 +190,39 @@ function bufferHint(frames: number, latencyMs: number | null): string {
         ? "Balanced latency and resilience."
         : "Maximum resilience, higher latency.";
   return ms === null ? shape : `${shape} One period is ${ms} at the device rate.`;
+}
+
+// ---------------------------------------------------------------------------
+// Playback behaviour
+// ---------------------------------------------------------------------------
+
+function PlaybackSection(): JSX.Element {
+  const albumEnd = usePlaybackPreferencesStore((state) => state.albumEnd);
+  const setAlbumEnd = usePlaybackPreferencesStore((state) => state.setAlbumEnd);
+  return (
+    <Section
+      title="Playback"
+      description="Choose what happens when an album started from Library reaches its final song."
+    >
+      <Row
+        label="At album end"
+        hint="Continue uses the originating Library filters and sort order, including full release dates."
+      >
+        <Segmented
+          label="Behaviour at album end"
+          layoutId="settings-album-end"
+          value={albumEnd}
+          onChange={(next) => {
+            setAlbumEnd(next === "continue-library" ? "continue-library" : "stop");
+          }}
+          options={[
+            { value: "stop", label: "Stop at album end" },
+            { value: "continue-library", label: "Continue in library order" },
+          ]}
+        />
+      </Row>
+    </Section>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +561,7 @@ function ScanSection(): JSX.Element {
 function PresenceSection(): JSX.Element {
   const [status, setStatus] = useState<DiscordStatus | null>(null);
   const [clientId, setClientId] = useState("");
+  const [artworkPath, setArtworkPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -536,6 +574,12 @@ function PresenceSection(): JSX.Element {
       })
       .catch(() => {
         setStatus(null);
+      });
+    void discordApi
+      .artworkOverridesPath()
+      .then(setArtworkPath)
+      .catch(() => {
+        setArtworkPath(null);
       });
   }, []);
 
@@ -626,6 +670,35 @@ function PresenceSection(): JSX.Element {
         />
       </Row>
 
+      <Row
+        label="Manual artwork URLs"
+        hint="Albums without a public image are added with url: null. Paste an HTTPS URL and save the JSON file; Prism reloads it automatically."
+      >
+        <div className="flex max-w-[420px] flex-col items-end gap-1.5">
+          <Button
+            variant="ghost"
+            icon={FolderOpen}
+            onClick={() => {
+              void discordApi.openArtworkFolder().catch((cause: unknown) => {
+                setError(
+                  cause instanceof Error ? cause.message : "The folder could not be opened.",
+                );
+              });
+            }}
+          >
+            Open artwork folder
+          </Button>
+          {artworkPath !== null ? (
+            <span
+              className="max-w-full truncate font-mono text-[10px] text-white/25"
+              title={artworkPath}
+            >
+              {artworkPath}
+            </span>
+          ) : null}
+        </div>
+      </Row>
+
       <div className="flex items-center gap-2">
         <Button
           variant="secondary"
@@ -673,8 +746,6 @@ function AppearanceSection(): JSX.Element {
   const showRailArrows = useUiStore((state) => state.showRailArrows);
   const showHomeStats = useUiStore((state) => state.showHomeStats);
   const showSpectrum = useUiStore((state) => state.showSpectrum);
-  const spectrumModuleVisible = useLayoutStore((state) => state.modules.includes("spectrum"));
-  const toggleModule = useLayoutStore((state) => state.toggleModule);
   const setAppearance = useUiStore((state) => state.setAppearance);
   const effects = useUiStore((state) => state.effects);
   const measured = useUiStore((state) => state.measuredEffects);
@@ -853,9 +924,6 @@ function AppearanceSection(): JSX.Element {
           checked={showSpectrum}
           onChange={(checked) => {
             setAppearance({ showSpectrum: checked });
-            if (checked !== spectrumModuleVisible) {
-              toggleModule("spectrum");
-            }
           }}
         />
       </Row>

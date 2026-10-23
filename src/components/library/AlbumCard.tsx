@@ -3,9 +3,11 @@ import { Play } from "lucide-react";
 
 import { CoverArt } from "@/components/ui/CoverArt";
 import { formatCount } from "@/lib/format";
+import { sourceLabel } from "@/lib/sourceLabel";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/uiStore";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
+import type { LibraryContinuation } from "@/stores/playbackStore";
 import type { AlbumRow } from "@/types/ipc";
 
 interface AlbumCardProps {
@@ -15,6 +17,8 @@ interface AlbumCardProps {
   busy?: boolean;
   /** Edge length in pixels. Omitted means "size to the parent" (mosaic). */
   size?: number;
+  /** Library query shared with Play and the album context menu. */
+  continuation?: Omit<LibraryContinuation, "currentAlbumId">;
 }
 
 /**
@@ -25,20 +29,34 @@ interface AlbumCardProps {
  * hover button queues the record. The cover keeps a square ratio and the text
  * block reserves its height, so a rail never reflows as artwork streams in.
  */
-export function AlbumCard({ album, onPlay, busy = false, size }: AlbumCardProps): JSX.Element {
+export function AlbumCard({
+  album,
+  onPlay,
+  busy = false,
+  size,
+  continuation,
+}: AlbumCardProps): JSX.Element {
   const openAlbum = useUiStore((state) => state.openAlbum);
   const openArtist = useUiStore((state) => state.openArtist);
   const openAt = useContextMenuStore((state) => state.openAt);
-  const meta = [album.year === null ? null : String(album.year), album.quality]
-    .filter((value): value is string => value !== null && value.length > 0)
-    .join(" · ");
+  const source = sourceLabel({
+    format: album.format,
+    sampleRate: album.maxSampleRate,
+    bitDepth: album.maxBitDepth,
+  });
 
   return (
     <div
       data-interactive
       onContextMenu={(event) => {
         event.preventDefault();
-        openAt(event.clientX, event.clientY, { kind: "album", album });
+        openAt(event.clientX, event.clientY, {
+          kind: "album",
+          album,
+          ...(continuation === undefined
+            ? {}
+            : { continuation: { currentAlbumId: album.id, ...continuation } }),
+        });
       }}
       className={cn("group relative shrink-0", size === undefined && "w-[172px]")}
       style={size === undefined ? undefined : { width: `${String(size)}px` }}
@@ -54,6 +72,7 @@ export function AlbumCard({ album, onPlay, busy = false, size }: AlbumCardProps)
         >
           <CoverArt
             path={album.coverPath}
+            thumbnailPath={album.coverThumbnailPath}
             url={album.coverUrl}
             alt={album.title}
             className="aspect-square w-full shadow-[0_18px_40px_-24px_rgb(0_0_0/0.9)] transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:-translate-y-0.5 group-hover:scale-[1.015]"
@@ -109,7 +128,15 @@ export function AlbumCard({ album, onPlay, busy = false, size }: AlbumCardProps)
           className="truncate text-[10px] text-white/25"
           title={`${String(album.trackCount)} tracks`}
         >
-          {meta}
+          {album.year !== null ? `${String(album.year)} · ` : ""}
+          <span
+            className={cn(
+              source.tone === "hi-res" && "text-spectrum-violet/75",
+              source.tone === "cd" && "text-positive/75",
+            )}
+          >
+            {source.label}
+          </span>
           {album.trackCount > 0 ? ` · ${formatCount(album.trackCount)} tracks` : ""}
         </p>
       </div>

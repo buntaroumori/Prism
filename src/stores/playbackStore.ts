@@ -1,11 +1,29 @@
 import { create } from "zustand";
 
 import { toUiError, type UiError } from "@/lib/errors";
-import { playerApi } from "@/lib/ipc";
-import type { EngineEvent, PlayerStatus, PlayerTick, TrackRequest, TrackRow } from "@/types/ipc";
+import { libraryApi, playerApi } from "@/lib/ipc";
+import type {
+  AlbumCollection,
+  AlbumRow,
+  AlbumSort,
+  EngineEvent,
+  PlayerStatus,
+  PlayerTick,
+  TrackRequest,
+  TrackRow,
+} from "@/types/ipc";
+import { usePlaybackPreferencesStore } from "./playbackPreferencesStore";
 
 /** One entry of the playback queue. */
 export interface QueueEntry {
+  /** Stable identity of this occurrence, including repeated tracks. */
+  queueId: string;
+  /** Album occurrences share a group; individual tracks have their own group. */
+  groupId: string;
+  groupKind: "album" | "track";
+  groupTitle: string;
+  /** Explicit Play-next material is kept ahead of the remaining context. */
+  manual: boolean;
   trackId: string;
   title: string;
   artist: string;
@@ -26,6 +44,21 @@ export interface QueueEntry {
   endMs?: number | null;
   /** Full catalogue row retained for artwork and context-menu actions. */
   catalogue: TrackRow;
+}
+
+export interface PlayOptions {
+  shuffle?: boolean;
+  album?: AlbumRow | null;
+  continuation?: LibraryContinuation | null;
+}
+
+export interface LibraryContinuation {
+  currentAlbumId: string;
+  text?: string;
+  artistId?: string;
+  genre?: string;
+  collection?: AlbumCollection;
+  sort?: AlbumSort;
 }
 
 /**
@@ -83,14 +116,28 @@ interface PlaybackStore {
   notice: { title: string; message: string } | null;
   /** True while a transport command is in flight (guards double clicks). */
   busy: boolean;
+  /** Unshuffled order; its presence is also the shared shuffle-active state. */
+  shuffleSnapshot: QueueEntry[] | null;
+  /** The library query that originated an album, used only when opted in. */
+  continuation: LibraryContinuation | null;
+  continuing: boolean;
 
   hydrate: () => Promise<void>;
   /** Re-read the engine snapshot; the only way `status` becomes current. */
   refresh: () => Promise<void>;
   applyEvent: (event: EngineEvent) => void;
   applyTick: (tick: PlayerTick) => void;
-  play: (entries: QueueEntry[], index: number) => Promise<void>;
-  playTracks: (tracks: TrackRow[], index: number) => Promise<void>;
+  play: (entries: QueueEntry[], index: number, options?: PlayOptions) => Promise<void>;
+  playTracks: (tracks: TrackRow[], index: number, options?: PlayOptions) => Promise<void>;
+  enqueueNext: (tracks: TrackRow[], album?: AlbumRow | null) => Promise<void>;
+  updateQueue: (queue: QueueEntry[]) => Promise<boolean>;
+  jumpTo: (index: number) => Promise<void>;
+  removeQueueEntry: (queueId: string) => Promise<void>;
+  removeQueueGroup: (groupId: string) => Promise<void>;
+  moveQueueEntry: (queueId: string, beforeQueueId: string | null) => Promise<void>;
+  moveQueueGroup: (groupId: string, beforeQueueId: string | null) => Promise<void>;
+  toggleShuffle: () => Promise<void>;
+  extendContinuation: (force?: boolean) => Promise<boolean>;
   toggle: () => Promise<void>;
   next: () => Promise<void>;
   previous: () => Promise<void>;
@@ -163,9 +210,23 @@ function toRequest(entry: QueueEntry): TrackRequest {
   };
 }
 
+let queueSequence = 0;
+function nextQueueId(): string {
+  queueSequence += 1;
+  return `q-${Date.now().toString(36)}-${queueSequence.toString(36)}`;
+}
+
 /** Convert a library row to a queue entry (CUE spans preserved). */
-function fromRow(row: TrackRow): QueueEntry {
+function fromRow(
+  row: TrackRow,
+  group: { id: string; kind: "album" | "track"; title: string; manual: boolean },
+): QueueEntry {
   return {
+    queueId: nextQueueId(),
+    groupId: group.id,
+    groupKind: group.kind,
+    groupTitle: group.title,
+    manual: group.manual,
     trackId: row.id,
     title: row.title,
     artist: row.artist,
@@ -178,6 +239,76 @@ function fromRow(row: TrackRow): QueueEntry {
     endMs: row.cueEndMs,
     catalogue: row,
   };
+}
+
+function fromRows(
+  rows: TrackRow[],
+  album: AlbumRow | null | undefined,
+  manual: boolean,
+): QueueEntry[] {
+  const groupId = `${album === null || album === undefined ? "tracks" : "album"}:${nextQueueId()}`;
+  return rows.map((row) =>
+    fromRow(row, {
+      id: album === null || album === undefined ? `track:${nextQueueId()}` : groupId,
+      kind: album === null || album === undefined ? "track" : "album",
+      title: album?.title ?? row.album,
+      manual,
+    }),
+  );
+}
+
+function randomUnit(): number {
+  const value = new Uint32Array(1);
+  crypto.getRandomValues(value);
+  return (value[0] ?? 0) / 0x1_0000_0000;
+}
+
+/** Fisher–Yates with fresh entropy for every user action. */
+function shuffled<T>(items: T[], avoidFirst?: string): T[] {
+  const result = [...items];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(randomUnit() * (index + 1));
+    [result[index], result[target]] = [result[target] as T, result[index] as T];
+  }
+  if (
+    avoidFirst !== undefined &&
+    result.length > 1 &&
+    (result[0] as T & { queueId?: string }).queueId === avoidFirst
+  ) {
+    const target = 1 + Math.floor(randomUnit() * (result.length - 1));
+    [result[0], result[target]] = [result[target] as T, result[0] as T];
+  }
+  return result;
+}
+
+function insertManualEntries(
+  queue: QueueEntry[],
+  currentIndex: number,
+  entries: QueueEntry[],
+): QueueEntry[] {
+  const rest = queue.slice(currentIndex + 1);
+  let lastManual = -1;
+  rest.forEach((entry, index) => {
+    if (entry.manual) lastManual = index;
+  });
+  const position = currentIndex + lastManual + 2;
+  return [...queue.slice(0, position), ...entries, ...queue.slice(position)];
+}
+
+async function albumTracks(album: AlbumRow): Promise<TrackRow[]> {
+  const tracks: TrackRow[] = [];
+  let offset = 0;
+  for (;;) {
+    const page = await libraryApi.search({
+      albumId: album.id,
+      sort: "album",
+      limit: 500,
+      offset,
+    });
+    tracks.push(...page.items);
+    offset += page.items.length;
+    if (page.items.length === 0 || offset >= page.total) return tracks;
+  }
 }
 
 /**
@@ -198,6 +329,9 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
   error: null,
   notice: null,
   busy: false,
+  shuffleSnapshot: null,
+  continuation: null,
+  continuing: false,
 
   hydrate: async () => {
     try {
@@ -247,6 +381,9 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
             status: { ...EMPTY_STATUS, volumeDb: base.volumeDb, muted: base.muted },
             tick: null,
             index: 0,
+            queue: [],
+            shuffleSnapshot: null,
+            continuation: null,
           });
           break;
         }
@@ -267,6 +404,7 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
         // The event carries the identity of the new track, not the snapshot:
         // its length and source rate arrive with the next `player_status`.
         void get().refresh();
+        void get().extendContinuation();
         break;
       }
       case "deviceChanged": {
@@ -310,25 +448,264 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
     set({ tick });
   },
 
-  play: async (entries, index) => {
-    if (entries.length === 0) {
-      return;
-    }
+  play: async (entries, index, options = {}) => {
+    if (entries.length === 0) return;
+    const previous = get();
     const safeIndex = Math.min(Math.max(index, 0), entries.length - 1);
-    set({ busy: true, queue: entries, index: safeIndex, tick: null });
+    const currentPath = previous.status?.track?.path;
+    const avoidFirst =
+      currentPath === undefined
+        ? undefined
+        : entries.slice(safeIndex).find((entry) => entry.path === currentPath)?.queueId;
+    const snapshot = options.shuffle === true ? [...entries] : null;
+    const queue =
+      options.shuffle === true
+        ? [...entries.slice(0, safeIndex), ...shuffled(entries.slice(safeIndex), avoidFirst)]
+        : entries;
+    set({
+      busy: true,
+      queue,
+      index: safeIndex,
+      tick: null,
+      shuffleSnapshot: snapshot,
+      continuation: options.continuation ?? null,
+    });
     try {
-      await playerApi.play(entries.map(toRequest), safeIndex);
+      await playerApi.play(queue.map(toRequest), safeIndex);
       set({ error: null });
     } catch (cause) {
-      set({ error: toUiError(cause), busy: false });
+      set({
+        queue: previous.queue,
+        index: previous.index,
+        tick: previous.tick,
+        shuffleSnapshot: previous.shuffleSnapshot,
+        continuation: previous.continuation,
+        error: toUiError(cause),
+        busy: false,
+      });
       return;
     }
     set({ busy: false });
     void get().refresh();
+    void get().extendContinuation();
   },
 
-  playTracks: async (tracks, index) => {
-    await get().play(tracks.map(fromRow), index);
+  playTracks: async (tracks, index, options = {}) => {
+    await get().play(fromRows(tracks, options.album, false), index, options);
+  },
+
+  enqueueNext: async (tracks, album = null) => {
+    const entries = fromRows(tracks, album, true);
+    if (entries.length === 0) return;
+    const state = get();
+    if (
+      state.status?.track === null ||
+      state.status?.track === undefined ||
+      state.queue.length === 0
+    ) {
+      await get().play(entries, 0);
+      return;
+    }
+    const queue = insertManualEntries(state.queue, state.index, entries);
+    const previousSnapshot = state.shuffleSnapshot;
+    if (previousSnapshot !== null) {
+      const currentId = state.queue[state.index]?.queueId;
+      const snapshotIndex = previousSnapshot.findIndex((entry) => entry.queueId === currentId);
+      if (snapshotIndex >= 0) {
+        set({
+          shuffleSnapshot: insertManualEntries(previousSnapshot, snapshotIndex, entries),
+        });
+      }
+    }
+    if (!(await get().updateQueue(queue))) {
+      set({ shuffleSnapshot: previousSnapshot });
+    }
+  },
+
+  updateQueue: async (queue) => {
+    const state = get();
+    const currentId = state.queue[state.index]?.queueId;
+    const index = queue.findIndex((entry) => entry.queueId === currentId);
+    if (index < 0) {
+      set({ error: { code: "queue", message: "The current song is no longer in the queue." } });
+      return false;
+    }
+    set({ queue, index });
+    try {
+      await playerApi.updateQueue(queue.map(toRequest), index);
+      set({ error: null });
+      return true;
+    } catch (cause) {
+      set({ queue: state.queue, index: state.index, error: toUiError(cause) });
+      return false;
+    }
+  },
+
+  jumpTo: async (index) => {
+    const state = get();
+    if (state.queue[index] === undefined) return;
+    set({ busy: true });
+    try {
+      await playerApi.play(state.queue.map(toRequest), index);
+      set({ index, tick: null, error: null });
+      void get().refresh();
+    } catch (cause) {
+      set({ error: toUiError(cause) });
+    } finally {
+      set({ busy: false });
+    }
+  },
+
+  removeQueueEntry: async (queueId) => {
+    const state = get();
+    if (state.queue[state.index]?.queueId === queueId) return;
+    const previousSnapshot = state.shuffleSnapshot;
+    set({
+      shuffleSnapshot: previousSnapshot?.filter((entry) => entry.queueId !== queueId) ?? null,
+    });
+    const queue = state.queue.filter((entry) => entry.queueId !== queueId);
+    if (!(await get().updateQueue(queue))) set({ shuffleSnapshot: previousSnapshot });
+  },
+
+  removeQueueGroup: async (groupId) => {
+    const state = get();
+    const currentId = state.queue[state.index]?.queueId;
+    const previousSnapshot = state.shuffleSnapshot;
+    set({
+      shuffleSnapshot:
+        previousSnapshot?.filter(
+          (entry) => entry.groupId !== groupId || entry.queueId === currentId,
+        ) ?? null,
+    });
+    // Removing the current album clears its remaining tracks but keeps the
+    // loaded song alive until the listener explicitly skips or stops it.
+    const queue = state.queue.filter(
+      (entry) => entry.groupId !== groupId || entry.queueId === currentId,
+    );
+    if (!(await get().updateQueue(queue))) set({ shuffleSnapshot: previousSnapshot });
+  },
+
+  moveQueueEntry: async (queueId, beforeQueueId) => {
+    const state = get();
+    const sourceIndex = state.queue.findIndex((entry) => entry.queueId === queueId);
+    if (sourceIndex <= state.index) return;
+    const source = state.queue[sourceIndex];
+    if (source === undefined) return;
+    const remaining = state.queue.filter((entry) => entry.queueId !== queueId);
+    const targetIndex =
+      beforeQueueId === null
+        ? remaining.length
+        : remaining.findIndex((entry) => entry.queueId === beforeQueueId);
+    if (beforeQueueId !== null && targetIndex <= state.index) return;
+    const queue = [...remaining];
+    queue.splice(targetIndex < 0 ? queue.length : targetIndex, 0, source);
+    await get().updateQueue(queue);
+  },
+
+  moveQueueGroup: async (groupId, beforeQueueId) => {
+    const state = get();
+    if (state.queue[state.index]?.groupId === groupId) return;
+    const moving = state.queue.filter(
+      (entry, index) => entry.groupId === groupId && index > state.index,
+    );
+    if (moving.length === 0) return;
+    const ids = new Set(moving.map((entry) => entry.queueId));
+    const remaining = state.queue.filter((entry) => !ids.has(entry.queueId));
+    const targetIndex =
+      beforeQueueId === null
+        ? remaining.length
+        : remaining.findIndex((entry) => entry.queueId === beforeQueueId);
+    if (beforeQueueId !== null && targetIndex <= state.index) return;
+    const queue = [...remaining];
+    queue.splice(targetIndex < 0 ? queue.length : targetIndex, 0, ...moving);
+    await get().updateQueue(queue);
+  },
+
+  toggleShuffle: async () => {
+    const state = get();
+    if (state.queue.length === 0) return;
+    if (state.shuffleSnapshot !== null) {
+      const snapshot = state.shuffleSnapshot;
+      set({ shuffleSnapshot: null });
+      if (!(await get().updateQueue(snapshot))) set({ shuffleSnapshot: snapshot });
+      return;
+    }
+    const snapshot = [...state.queue];
+    const queue = [
+      ...state.queue.slice(0, state.index + 1),
+      ...shuffled(state.queue.slice(state.index + 1)),
+    ];
+    set({ shuffleSnapshot: snapshot });
+    if (!(await get().updateQueue(queue))) set({ shuffleSnapshot: null });
+  },
+
+  extendContinuation: async (force = false) => {
+    const state = get();
+    const continuation = state.continuation;
+    if (
+      continuation === null ||
+      state.continuing ||
+      state.index !== state.queue.length - 1 ||
+      (!force && usePlaybackPreferencesStore.getState().albumEnd !== "continue-library")
+    ) {
+      return false;
+    }
+    set({ continuing: true });
+    try {
+      const query = {
+        ...(continuation.text !== undefined ? { text: continuation.text } : {}),
+        ...(continuation.artistId !== undefined ? { artistId: continuation.artistId } : {}),
+        ...(continuation.genre !== undefined ? { genre: continuation.genre } : {}),
+        ...(continuation.collection !== undefined ? { collection: continuation.collection } : {}),
+        sort: continuation.sort ?? ("artist" as const),
+      };
+      let offset = 0;
+      let nextAlbum: AlbumRow | undefined;
+      for (;;) {
+        const page = await libraryApi.albums({
+          ...query,
+          limit: 500,
+          offset,
+        });
+        const current = page.items.findIndex((album) => album.id === continuation.currentAlbumId);
+        if (current >= 0) {
+          nextAlbum = page.items[current + 1];
+          if (nextAlbum === undefined && offset + page.items.length < page.total) {
+            const following = await libraryApi.albums({
+              ...query,
+              limit: 1,
+              offset: offset + page.items.length,
+            });
+            nextAlbum = following.items[0];
+          }
+          break;
+        }
+        offset += page.items.length;
+        if (page.items.length === 0 || offset >= page.total) break;
+      }
+      if (nextAlbum === undefined) return false;
+      const entries = fromRows(await albumTracks(nextAlbum), nextAlbum, false);
+      if (entries.length === 0) return false;
+      const latest = get();
+      if (latest.continuation?.currentAlbumId !== continuation.currentAlbumId) {
+        return false;
+      }
+      const queue = [...latest.queue, ...entries];
+      await playerApi.updateQueue(queue.map(toRequest), latest.index);
+      set((current) => ({
+        queue,
+        continuation: { ...continuation, currentAlbumId: nextAlbum.id },
+        shuffleSnapshot:
+          current.shuffleSnapshot === null ? null : [...current.shuffleSnapshot, ...entries],
+        error: null,
+      }));
+      return true;
+    } catch (cause) {
+      set({ error: toUiError(cause) });
+      return false;
+    } finally {
+      set({ continuing: false });
+    }
   },
 
   toggle: async () => {
@@ -353,25 +730,16 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
   },
 
   next: async () => {
-    const { queue, index } = get();
-    if (index + 1 >= queue.length) {
-      return;
-    }
-    const nextIndex = index + 1;
-    set({ busy: true });
-    try {
-      await playerApi.play(queue.map(toRequest), nextIndex);
-      set({ index: nextIndex, tick: null, error: null });
-      void get().refresh();
-    } catch (cause) {
-      set({ error: toUiError(cause) });
-    } finally {
-      set({ busy: false });
+    const { index } = get();
+    if (index + 1 < get().queue.length) {
+      await get().jumpTo(index + 1);
+    } else if (await get().extendContinuation()) {
+      await get().jumpTo(get().index + 1);
     }
   },
 
   previous: async () => {
-    const { queue, index, status } = get();
+    const { index, status } = get();
     // Standard transport behaviour: restart the track unless we are near the
     // start, in which case step back in the queue.
     const position = playheadMs(status, get().tick);
@@ -380,16 +748,7 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
       await get().seekMs(0);
       return;
     }
-    set({ busy: true });
-    try {
-      await playerApi.play(queue.map(toRequest), target);
-      set({ index: target, tick: null, error: null });
-      void get().refresh();
-    } catch (cause) {
-      set({ error: toUiError(cause) });
-    } finally {
-      set({ busy: false });
-    }
+    await get().jumpTo(target);
   },
 
   stop: async () => {
@@ -401,6 +760,9 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
       set({
         tick: null,
         index: 0,
+        queue: [],
+        shuffleSnapshot: null,
+        continuation: null,
         status:
           get().status === null
             ? null
@@ -451,6 +813,11 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
 
   previewVolumeDb: (db) => {
     set({ pendingVolumeDb: db });
+    // The engine owns the gain ramp, so every pointer update is audible while
+    // the gesture is still in progress rather than only on pointer release.
+    void playerApi.setVolumeDb(db).catch((cause: unknown) => {
+      set({ error: toUiError(cause) });
+    });
   },
 
   setMuted: async (muted) => {

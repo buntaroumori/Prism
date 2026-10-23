@@ -1,53 +1,49 @@
 import { useEffect, useState } from "react";
 
-import { libraryApi } from "@/lib/ipc";
-
-/** Album identity → cache key, so returning to an album never re-asks Rust. */
-const KEY_BY_ALBUM = new Map<string, string | null>();
+import { cachedTrackCover, trackCover } from "@/lib/trackCover";
 
 /**
- * Cover-cache key for the album currently loaded in the engine.
- *
- * Keyed by album name rather than track id on purpose: a queue of tracks from
- * one record resolves the cover once, and skipping within the album does not
- * invalidate the ambient palette. Albums with no resolvable artwork remember the
- * miss so the same lookup is not repeated on every skip.
+ * Cover-cache key for the album loaded in the engine. Artist and album identity
+ * prevents equal titles from different artists sharing a palette, while the
+ * shared cover cache avoids another lookup for each song on the same record.
  */
-export function useAlbumCoverKey(album: string | null, trackId: string | null): string | null {
+export function useAlbumCoverKey(
+  album: string | null,
+  trackId: string | null,
+  artist: string | null,
+): string | null {
+  const cached =
+    album !== null && trackId !== null
+      ? cachedTrackCover(trackId, artist ?? undefined, album)
+      : null;
   const [key, setKey] = useState<string | null>(() =>
-    album === null ? null : (KEY_BY_ALBUM.get(album) ?? null),
+    cached === null || cached.provider === "unknown" ? null : cached.key,
   );
 
   useEffect(() => {
     if (album === null || trackId === null) {
+      setKey(null);
       return;
     }
-    const cached = KEY_BY_ALBUM.get(album);
-    if (cached !== undefined) {
-      setKey(cached);
+    const cachedAsset = cachedTrackCover(trackId, artist ?? undefined, album);
+    if (cachedAsset !== null) {
+      setKey(cachedAsset.provider === "unknown" ? null : cachedAsset.key);
       return;
     }
 
     let active = true;
-    void libraryApi
-      .trackCover(trackId)
+    setKey(null);
+    void trackCover(trackId, artist ?? undefined, album)
       .then((asset) => {
-        const resolved = asset.provider === "unknown" ? null : asset.key;
-        KEY_BY_ALBUM.set(album, resolved);
-        if (active) {
-          setKey(resolved);
-        }
+        if (active) setKey(asset.provider === "unknown" ? null : asset.key);
       })
       .catch(() => {
-        if (active) {
-          setKey(null);
-        }
+        if (active) setKey(null);
       });
-
     return () => {
       active = false;
     };
-  }, [album, trackId]);
+  }, [album, trackId, artist]);
 
   return key;
 }

@@ -1,55 +1,35 @@
+import { Reorder } from "framer-motion";
 import type { JSX } from "react";
-import {
-  Compass,
-  Disc3,
-  LibraryBig,
-  ListMusic,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Settings2,
-  SlidersHorizontal,
-} from "lucide-react";
+import { Compass, Disc3, LibraryBig, ListMusic, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 import { AppLogo } from "@/components/AppLogo";
-import { formatCount, formatLibraryDuration } from "@/lib/format";
+import { CoverArt } from "@/components/ui/CoverArt";
 import { cn } from "@/lib/utils";
-import { useLibraryStore } from "@/stores/libraryStore";
-import { usePlaybackStore } from "@/stores/playbackStore";
+import { useContextMenuStore } from "@/stores/contextMenuStore";
+import { useDockStore, type DockItem } from "@/stores/dockStore";
 import { useUiStore, type ShellRoute } from "@/stores/uiStore";
 
 interface NavItem {
   id: ShellRoute;
   label: string;
   icon: typeof Compass;
-  section: "primary" | "secondary";
 }
 
 const NAV_ITEMS: readonly NavItem[] = [
-  { id: "home", label: "Home", icon: Compass, section: "primary" },
-  { id: "library", label: "Library", icon: LibraryBig, section: "primary" },
-  { id: "playlists", label: "Playlists", icon: ListMusic, section: "primary" },
-  { id: "now-playing", label: "Now Playing", icon: Disc3, section: "primary" },
-  { id: "settings", label: "Settings", icon: Settings2, section: "secondary" },
-  { id: "system", label: "System", icon: SlidersHorizontal, section: "secondary" },
+  { id: "home", label: "Home", icon: Compass },
+  { id: "library", label: "Library", icon: LibraryBig },
+  { id: "playlists", label: "Playlists", icon: ListMusic },
+  { id: "now-playing", label: "Now Playing", icon: Disc3 },
 ];
 
-/**
- * Navigation rail.
- *
- * The counters under the logo are read from the library store, not from the
- * playback store, so a track change never re-renders the sidebar. Collapsed
- * mode keeps the icon hit-targets at 40 px and moves the accessible name into
- * `title` + `aria-label`, so nothing becomes unreachable by keyboard.
- */
+/** Navigation rail and the user's ordered, persistent Dock. */
 export function Sidebar(): JSX.Element {
   const collapsed = useUiStore((state) => state.sidebarCollapsed);
   const route = useUiStore((state) => state.route);
   const toggleSidebar = useUiStore((state) => state.toggleSidebar);
   const setRoute = useUiStore((state) => state.setRoute);
-  const stats = useLibraryStore((state) => state.stats);
-
-  const primary = NAV_ITEMS.filter((item) => item.section === "primary");
-  const secondary = NAV_ITEMS.filter((item) => item.section === "secondary");
+  const dock = useDockStore((state) => state.items);
+  const reorderDock = useDockStore((state) => state.reorder);
 
   const renderItem = (item: NavItem): JSX.Element => {
     const isActive =
@@ -112,52 +92,39 @@ export function Sidebar(): JSX.Element {
         ) : null}
       </div>
 
-      <nav aria-label="Primary" className="flex flex-col gap-1 px-3">
-        {primary.map(renderItem)}
+      <nav aria-label="Primary" className="flex shrink-0 flex-col gap-1 px-3">
+        {NAV_ITEMS.map(renderItem)}
       </nav>
 
-      <div className="mx-3 my-4 h-px bg-white/[0.06]" />
+      <div className="mx-3 my-4 h-px shrink-0 bg-white/[0.06]" />
 
-      <nav aria-label="Configuration" className="flex flex-col gap-1 px-3">
-        {secondary.map(renderItem)}
-      </nav>
-
-      <div className={cn("mt-auto space-y-3 px-4 pb-5", collapsed && "px-2")}>
+      <section aria-label="Dock" className="flex min-h-0 flex-1 flex-col">
         {!collapsed ? (
-          <div className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-3">
-            <p className="text-[9.5px] font-semibold tracking-[0.18em] text-white/25 uppercase">
-              Library
+          <h2 className="mb-2 px-5 text-[9.5px] font-semibold tracking-[0.18em] text-white/25 uppercase">
+            Dock
+          </h2>
+        ) : null}
+        {dock.length === 0 ? (
+          !collapsed ? (
+            <p className="px-5 text-[10.5px] leading-relaxed text-white/25">
+              Pin albums and playlists from their context menus.
             </p>
-            <div className="mt-2 space-y-1">
-              <div className="flex items-baseline justify-between">
-                <span className="text-[11px] text-white/40">Tracks</span>
-                <span className="tabular text-[11.5px] text-white/75">
-                  {stats === null ? "—" : formatCount(stats.trackCount)}
-                </span>
-              </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-[11px] text-white/40">Albums</span>
-                <span className="tabular text-[11.5px] text-white/75">
-                  {stats === null ? "—" : formatCount(stats.albumCount)}
-                </span>
-              </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-[11px] text-white/40">Playtime</span>
-                <span className="tabular text-[11.5px] text-white/75">
-                  {stats === null ? "—" : formatLibraryDuration(stats.totalDurationMs)}
-                </span>
-              </div>
-            </div>
-            {stats !== null && stats.missingCount > 0 ? (
-              <p className="mt-2 border-t border-white/[0.06] pt-2 text-[10px] text-warning/80">
-                {formatCount(stats.missingCount)} missing
-              </p>
-            ) : null}
-          </div>
+          ) : null
         ) : (
-          <SidebarPulse />
+          <Reorder.Group
+            axis="y"
+            values={dock}
+            onReorder={reorderDock}
+            className="min-h-0 flex-1 space-y-1 overflow-y-auto px-3 pb-2"
+          >
+            {dock.map((item) => (
+              <DockRow key={dockKey(item)} item={item} collapsed={collapsed} />
+            ))}
+          </Reorder.Group>
         )}
+      </section>
 
+      <div className={cn("shrink-0 px-4 pt-2 pb-5", collapsed && "px-2")}>
         <button
           type="button"
           onClick={toggleSidebar}
@@ -183,22 +150,76 @@ export function Sidebar(): JSX.Element {
   );
 }
 
-/** Collapsed-state library indicator: a single dot that reflects the transport. */
-function SidebarPulse(): JSX.Element {
-  const playing = usePlaybackStore(
-    (state) => state.status?.state === "playing" || state.status?.state === "buffering",
-  );
+function dockKey(item: DockItem): string {
+  return item.kind === "album" ? `album:${item.album.id}` : `playlist:${item.playlist.id}`;
+}
+
+function DockRow({ item, collapsed }: { item: DockItem; collapsed: boolean }): JSX.Element {
+  const openAlbum = useUiStore((state) => state.openAlbum);
+  const openPlaylist = useUiStore((state) => state.openPlaylist);
+  const openAt = useContextMenuStore((state) => state.openAt);
+  const route = useUiStore((state) => state.route);
+  const params = useUiStore((state) => state.params);
+  const album = item.kind === "album" ? item.album : null;
+  const playlist = item.kind === "playlist" ? item.playlist : null;
+  const title = album?.title ?? playlist?.name ?? "";
+  const secondary = album?.albumArtist ?? "Playlist";
+  const path = album?.coverPath ?? playlist?.coverPath ?? null;
+  const thumbnailPath = album?.coverThumbnailPath ?? null;
+  const url = album?.coverUrl ?? playlist?.coverUrl ?? null;
+  const active =
+    (album !== null && route === "album" && params.albumId === album.id) ||
+    (playlist !== null && route === "playlist" && params.playlistId === playlist.id);
 
   return (
-    <div className="flex justify-center" title={playing ? "Playing" : "Idle"}>
-      <span
+    <Reorder.Item value={item} className="relative list-none rounded-xl bg-oled-900/95">
+      <button
+        type="button"
+        aria-label={title}
+        title={title}
+        aria-current={active ? "page" : undefined}
+        onClick={() => {
+          if (album !== null) openAlbum(album.id);
+          if (playlist !== null) openPlaylist(playlist.id);
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          if (album !== null) {
+            openAt(event.clientX, event.clientY, { kind: "dock-album", album });
+          } else if (playlist !== null) {
+            openAt(event.clientX, event.clientY, { kind: "dock-playlist", playlist });
+          }
+        }}
         className={cn(
-          "h-1.5 w-1.5 rounded-full",
-          playing ? "accent-bg animate-pulse" : "bg-white/25",
+          "flex w-full items-center gap-3 rounded-xl p-1.5 text-left transition-colors",
+          "focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
+          collapsed && "justify-center p-1",
+          active ? "bg-accent/[0.10]" : "hover:bg-white/[0.045]",
         )}
-        aria-hidden="true"
-      />
-      <span className="sr-only">{playing ? "Playing" : "Idle"}</span>
-    </div>
+      >
+        <CoverArt
+          path={path}
+          thumbnailPath={thumbnailPath}
+          url={url}
+          alt=""
+          className={cn("shrink-0", collapsed ? "h-10 w-10" : "h-9 w-9")}
+          rounded="rounded-lg"
+          fallbackClassName="h-4 w-4"
+        />
+        {!collapsed ? (
+          <span className="min-w-0 flex-1">
+            <span
+              className={cn(
+                "block truncate text-[11.5px]",
+                active ? "text-accent" : "text-white/75",
+              )}
+            >
+              {title}
+            </span>
+            <span className="block truncate text-[10px] text-white/30">{secondary}</span>
+          </span>
+        ) : null}
+      </button>
+    </Reorder.Item>
   );
 }

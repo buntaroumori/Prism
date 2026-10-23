@@ -1269,3 +1269,48 @@ async fn multi_disc_albums_stay_ordered_and_artwork_hints_use_disc_one() {
         "a CD2 track must not make the album miss its CD1 artwork"
     );
 }
+
+#[tokio::test]
+async fn album_year_sorting_uses_the_complete_release_date() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("library");
+    build_library(&root);
+    let pool = pool_for(temp.path()).await;
+    scan(&pool, &root, ScanConfig::default()).await;
+
+    // Isolate two records from the same year. Alphabetically Kid A would come
+    // first, so Lemonade leading the descending result can only come from the
+    // full release date rather than the year or the title tie-breaker.
+    sqlx::query("UPDATE albums SET year = NULL, release_date = NULL")
+        .execute(&pool)
+        .await
+        .expect("clear dates");
+    sqlx::query("UPDATE albums SET year = 2000, release_date = ?2 WHERE title = ?1")
+        .bind("Kid A")
+        .bind("2000-02-03")
+        .execute(&pool)
+        .await
+        .expect("Kid A date");
+    sqlx::query("UPDATE albums SET year = 2000, release_date = ?2 WHERE title = ?1")
+        .bind("Lemonade")
+        .bind("2000-10-02")
+        .execute(&pool)
+        .await
+        .expect("Lemonade date");
+
+    let newest = search::albums(&pool, None, None, AlbumSort::Year, 10, 0)
+        .await
+        .expect("newest first");
+    let oldest = search::albums(&pool, None, None, AlbumSort::YearAsc, 10, 0)
+        .await
+        .expect("oldest first");
+    assert!(newest.items.len() >= 2 && oldest.items.len() >= 2);
+    assert_eq!(newest.items[0].title, "Lemonade");
+    assert_eq!(newest.items[1].title, "Kid A");
+    assert_eq!(newest.items[0].release_date.as_deref(), Some("2000-10-02"));
+    assert_eq!(oldest.items[0].title, "Kid A");
+    assert_eq!(oldest.items[1].title, "Lemonade");
+    assert_eq!(oldest.items[0].release_date.as_deref(), Some("2000-02-03"));
+
+    pool.close().await;
+}

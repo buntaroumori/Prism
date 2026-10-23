@@ -25,6 +25,7 @@ use crate::plugins::PluginManager;
 #[derive(Debug, Clone)]
 pub struct AppPaths {
     pub data_dir: PathBuf,
+    pub config_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub log_dir: PathBuf,
     pub database: PathBuf,
@@ -36,10 +37,11 @@ impl AppPaths {
         resolver: &PathResolver<R>,
     ) -> Result<Self, PrismError> {
         let data_dir = resolver.app_data_dir()?;
+        let config_dir = resolver.app_config_dir()?;
         let cache_dir = resolver.app_cache_dir()?;
         let log_dir = resolver.app_log_dir()?;
 
-        for dir in [&data_dir, &cache_dir, &log_dir] {
+        for dir in [&data_dir, &config_dir, &cache_dir, &log_dir] {
             tokio::fs::create_dir_all(dir)
                 .await
                 .map_err(|err| PrismError::io(dir, err))?;
@@ -48,6 +50,7 @@ impl AppPaths {
         Ok(Self {
             database: data_dir.join(DATABASE_FILENAME),
             data_dir,
+            config_dir,
             cache_dir,
             log_dir,
         })
@@ -63,6 +66,12 @@ impl AppPaths {
     #[must_use]
     pub fn analysis_dir(&self) -> PathBuf {
         self.cache_dir.join("analysis")
+    }
+
+    /// Local album-to-HTTPS mapping edited by the user for Discord artwork.
+    #[must_use]
+    pub fn discord_artwork_overrides(&self) -> PathBuf {
+        self.config_dir.join("discord-artwork.json")
     }
 }
 
@@ -102,7 +111,10 @@ impl AppState {
         // --- Library services --------------------------------------------
         let scanner = Scanner::new(pool.clone());
         let artwork = std::sync::Arc::new(ArtworkService::new(pool.clone(), paths.artwork_dir())?);
-        let discord = std::sync::Arc::new(DiscordService::new(std::sync::Arc::clone(&artwork)));
+        let discord = std::sync::Arc::new(
+            DiscordService::new(std::sync::Arc::clone(&artwork))
+                .with_artwork_overrides(paths.discord_artwork_overrides()),
+        );
         // Palettes are derived from the same files the artwork service writes,
         // so both share the directory and neither owns the other.
         let palette = std::sync::Arc::new(PaletteService::new(paths.artwork_dir()));

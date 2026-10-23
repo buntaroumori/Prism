@@ -18,7 +18,6 @@ export type ShellRoute =
   | "playlist"
   | "now-playing"
   | "settings"
-  | "system"
   | "album"
   | "artist";
 

@@ -4,6 +4,8 @@
 //! rescan, a restart and a moved webview profile, and a deleted audio file is
 //! removed through the existing foreign-key cascade.
 
+use std::path::PathBuf;
+
 use serde::Serialize;
 use sqlx::Row;
 use tauri::State;
@@ -207,6 +209,87 @@ pub async fn playlist_remove_track(
     .bind(&playlist_id)
     .execute(state.pool())
     .await?;
+    one(state.pool(), &playlist_id).await
+}
+
+/// Copy and normalise a user-selected image without touching album artwork or
+/// the cover-cache identity consumed by Discord.
+#[tauri::command]
+pub async fn playlist_set_custom_cover(
+    state: State<'_, AppState>,
+    playlist_id: String,
+    path: String,
+) -> Result<PlaylistRow, PrismError> {
+    let editable: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM playlists WHERE id = ?1 AND kind = 'static')",
+    )
+    .bind(&playlist_id)
+    .fetch_one(state.pool())
+    .await?;
+    if editable == 0 {
+        return Err(PrismError::invalid("unknown or read-only playlist"));
+    }
+
+    let source = PathBuf::from(path);
+    let metadata = tokio::fs::metadata(&source)
+        .await
+        .map_err(|error| PrismError::io(&source, error))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 20 * 1024 * 1024 {
+        return Err(PrismError::invalid(
+            "choose a JPEG, PNG or WebP image smaller than 20 MiB",
+        ));
+    }
+    let directory = state.paths().data_dir.join("playlist-covers");
+    tokio::fs::create_dir_all(&directory)
+        .await
+        .map_err(|error| PrismError::io(&directory, error))?;
+    let destination = directory.join(format!("{playlist_id}.jpg"));
+    let bytes = tokio::fs::read(&source)
+        .await
+        .map_err(|error| PrismError::io(&source, error))?;
+    let write_destination = destination.clone();
+    tokio::task::spawn_blocking(move || -> Result<(), PrismError> {
+        let decoded = image::load_from_memory(&bytes).map_err(|error| {
+            PrismError::invalid(format!("cannot decode playlist cover: {error}"))
+        })?;
+        let decoded = if decoded.width() > 1_000 || decoded.height() > 1_000 {
+            decoded.thumbnail(1_000, 1_000)
+        } else {
+            decoded
+        };
+        let mut encoded = Vec::with_capacity(64 * 1024);
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 88);
+        encoder
+            .encode_image(&decoded.to_rgb8())
+            .map_err(|error| PrismError::Internal(format!("encode playlist cover: {error}")))?;
+        let parent = write_destination.parent().ok_or_else(|| {
+            PrismError::invalid("the playlist cover destination has no parent directory")
+        })?;
+        let temporary = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|error| PrismError::io(parent, error))?;
+        std::fs::write(temporary.path(), encoded)
+            .map_err(|error| PrismError::io(temporary.path(), error))?;
+        temporary
+            .persist(&write_destination)
+            .map_err(|error| PrismError::io(&write_destination, error.error))?;
+        Ok(())
+    })
+    .await
+    .map_err(|error| PrismError::Internal(format!("playlist cover task failed: {error}")))??;
+
+    let affected = sqlx::query(
+        "UPDATE playlists SET custom_cover_path = ?2, \
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') \
+         WHERE id = ?1 AND kind = 'static'",
+    )
+    .bind(&playlist_id)
+    .bind(destination.to_string_lossy().into_owned())
+    .execute(state.pool())
+    .await?
+    .rows_affected();
+    if affected == 0 {
+        return Err(PrismError::invalid("unknown or read-only playlist"));
+    }
     one(state.pool(), &playlist_id).await
 }
 
