@@ -1,5 +1,14 @@
 import type { JSX } from "react";
-import { Pause, Play, Shuffle, SkipBack, SkipForward, Square } from "lucide-react";
+import {
+  PanelLeftClose,
+  PanelLeftOpen,
+  Pause,
+  Play,
+  Shuffle,
+  SkipBack,
+  SkipForward,
+  Square,
+} from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { PlaybackState } from "@/types/ipc";
@@ -9,6 +18,8 @@ interface TransportControlsProps {
   canSkip: boolean;
   busy: boolean;
   shuffled: boolean;
+  sidebarHidden: boolean;
+  onToggleSidebar: () => void;
   onToggleShuffle: () => void;
   onToggle: () => void;
   onNext: () => void;
@@ -28,6 +39,8 @@ export function TransportControls({
   canSkip,
   busy,
   shuffled,
+  sidebarHidden,
+  onToggleSidebar,
   onToggleShuffle,
   onToggle,
   onNext,
@@ -40,6 +53,21 @@ export function TransportControls({
 
   return (
     <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={onToggleSidebar}
+        aria-label={sidebarHidden ? "Show sidebar" : "Hide sidebar"}
+        aria-pressed={sidebarHidden}
+        title={sidebarHidden ? "Show sidebar" : "Hide sidebar"}
+        className="grid h-9 w-9 place-items-center rounded-full text-white/40 transition-colors hover:bg-white/[0.07] hover:text-white focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none"
+      >
+        {sidebarHidden ? (
+          <PanelLeftOpen className="h-[17px] w-[17px]" aria-hidden="true" />
+        ) : (
+          <PanelLeftClose className="h-[17px] w-[17px]" aria-hidden="true" />
+        )}
+      </button>
+
       <button
         type="button"
         onClick={onToggleShuffle}

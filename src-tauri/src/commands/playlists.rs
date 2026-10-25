@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 use tauri::State;
 
@@ -15,7 +16,7 @@ use crate::db::search::{self, Page, TrackRow};
 use crate::error::PrismError;
 use crate::state::AppState;
 
-const PLAYLIST_COLUMNS: &str = "id, name, description, kind, created_at, updated_at, \
+const PLAYLIST_COLUMNS: &str = "id, name, description, genre, kind, created_at, updated_at, \
      track_count, duration_ms, cover_id, cover_remote_url, cover_local_path";
 
 #[derive(Debug, Clone, Serialize)]
@@ -24,6 +25,7 @@ pub struct PlaylistRow {
     pub id: String,
     pub name: String,
     pub description: Option<String>,
+    pub genre: Option<String>,
     pub kind: String,
     pub created_at: String,
     pub updated_at: String,
@@ -46,6 +48,7 @@ fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<PlaylistRow, sqlx::Error> {
         id: row.try_get("id")?,
         name: row.try_get("name")?,
         description: row.try_get("description")?,
+        genre: row.try_get("genre")?,
         kind: row.try_get("kind")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
@@ -115,6 +118,80 @@ pub async fn create_in(pool: &sqlx::SqlitePool, name: String) -> Result<Playlist
         .execute(pool)
         .await?;
     one(pool, &id).await
+}
+
+/// Replace the editable metadata of one static playlist.
+///
+/// All three values are supplied by the caller so the same command supports a
+/// title-only rename (which passes the existing optional fields through) and
+/// the full in-playlist editor. Empty optional fields clear their value.
+#[tauri::command]
+pub async fn playlist_update(
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    description: Option<String>,
+    genre: Option<String>,
+) -> Result<PlaylistRow, PrismError> {
+    let name = name.trim().to_string();
+    if name.is_empty() || name.chars().count() > 128 {
+        return Err(PrismError::invalid(
+            "playlist names must contain between 1 and 128 characters",
+        ));
+    }
+    let description = optional_metadata(description, 2_000, "description")?;
+    let genre = optional_metadata(genre, 128, "genre")?;
+
+    let mut transaction = state.pool().begin().await?;
+    let editable: Option<i64> = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM playlists WHERE id = ?1 AND kind = 'static')",
+    )
+    .bind(&id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if editable != Some(1) {
+        return Err(PrismError::invalid("unknown or read-only playlist"));
+    }
+    let duplicate: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM playlists WHERE name = ?1 COLLATE NOCASE AND id <> ?2 LIMIT 1",
+    )
+    .bind(&name)
+    .bind(&id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if duplicate.is_some() {
+        return Err(PrismError::invalid(
+            "a playlist with that name already exists",
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE playlists SET name = ?2, description = ?3, genre = ?4, \
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') \
+         WHERE id = ?1 AND kind = 'static'",
+    )
+    .bind(&id)
+    .bind(&name)
+    .bind(&description)
+    .bind(&genre)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    one(state.pool(), &id).await
+}
+
+fn optional_metadata(
+    value: Option<String>,
+    maximum: usize,
+    label: &str,
+) -> Result<Option<String>, PrismError> {
+    let trimmed = value.as_deref().map(str::trim).unwrap_or_default();
+    if trimmed.chars().count() > maximum {
+        return Err(PrismError::invalid(format!(
+            "playlist {label} must contain at most {maximum} characters"
+        )));
+    }
+    Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
 }
 
 /// Add tracks in the order supplied. Existing entries are left in place.
@@ -212,6 +289,18 @@ pub async fn playlist_remove_track(
     one(state.pool(), &playlist_id).await
 }
 
+/// Stable, Windows-safe filename for a playlist cover.
+///
+/// Catalogue ids deliberately contain a namespace separator (`pl:…`), which is
+/// not legal in a Windows filename. Hashing the complete id keeps the name
+/// deterministic and unique without leaking that separator into the path.
+fn playlist_cover_filename(playlist_id: &str) -> String {
+    format!(
+        "{}.jpg",
+        hex::encode(Sha256::digest(playlist_id.as_bytes()))
+    )
+}
+
 /// Copy and normalise a user-selected image without touching album artwork or
 /// the cover-cache identity consumed by Discord.
 #[tauri::command]
@@ -243,7 +332,7 @@ pub async fn playlist_set_custom_cover(
     tokio::fs::create_dir_all(&directory)
         .await
         .map_err(|error| PrismError::io(&directory, error))?;
-    let destination = directory.join(format!("{playlist_id}.jpg"));
+    let destination = directory.join(playlist_cover_filename(&playlist_id));
     let bytes = tokio::fs::read(&source)
         .await
         .map_err(|error| PrismError::io(&source, error))?;
@@ -300,4 +389,32 @@ pub async fn playlist_delete(state: State<'_, AppState>, id: String) -> Result<b
         .execute(state.pool())
         .await?;
     Ok(result.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playlist_cover_names_are_deterministic_and_windows_safe() {
+        let first = playlist_cover_filename("pl:0123456789abcdef");
+        assert_eq!(first, playlist_cover_filename("pl:0123456789abcdef"));
+        assert_ne!(first, playlist_cover_filename("pl:fedcba9876543210"));
+        assert!(first.ends_with(".jpg"));
+        assert_eq!(first.len(), 68);
+        assert!(!first.contains([':', '<', '>', '"', '/', '\\', '|', '?', '*']));
+    }
+
+    #[test]
+    fn optional_playlist_metadata_is_trimmed_and_bounded() {
+        assert_eq!(
+            optional_metadata(Some("  ".into()), 10, "genre").ok(),
+            Some(None)
+        );
+        assert_eq!(
+            optional_metadata(Some("  Ambient  ".into()), 10, "genre").ok(),
+            Some(Some("Ambient".into()))
+        );
+        assert!(optional_metadata(Some("too long".into()), 3, "genre").is_err());
+    }
 }

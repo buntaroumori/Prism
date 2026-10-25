@@ -625,7 +625,9 @@ impl CatalogWriter {
                       WHERE t.album_id = al.id AND t.missing = 0 AND t.source = 'file' \
                       ORDER BY t.disc_no ASC, t.track_no ASC LIMIT 1) AS track_path \
              FROM albums al \
-             WHERE al.cover_id IS NULL AND (?1 IS NULL OR al.id > ?1) \
+             LEFT JOIN cover_cache cc ON cc.id = al.cover_id \
+             WHERE (al.cover_id IS NULL OR (cc.local_path IS NOT NULL AND cc.thumbnail_path IS NULL)) \
+               AND (?1 IS NULL OR al.id > ?1) \
              ORDER BY al.id ASC LIMIT ?2",
         )
         .bind(after)

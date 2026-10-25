@@ -31,6 +31,8 @@ The main source areas are:
 | `src-tauri/src/db/`       | Connections, migrations, catalogue writes and read models         |
 | `src-tauri/src/artwork/`  | Artwork resolution, normalisation and caching                     |
 | `src-tauri/src/discord/`  | Discord IPC transport and presence policy                         |
+| `src-tauri/src/media/`    | Native operating-system media metadata and transport integration  |
+| `src-tauri/src/lyrics/`   | Local and LRCLIB lyric resolution, parsing and cache persistence  |
 | `src-tauri/src/plugins/`  | Plugin discovery, manifests, configuration and sandboxes          |
 | `src-tauri/src/commands/` | Tauri command surface                                             |
 | `src/`                    | React views, stores, IPC contracts and interface components       |
@@ -48,6 +50,7 @@ Prism runs as one native process. Work is separated according to its timing requ
 | Prefetch worker           | Preparation of the next track for gapless transitions     |
 | Device callback or writer | Transfer of buffered audio to the selected endpoint       |
 | Discord task              | Presence updates and reconnect handling                   |
+| Windows media mirror      | SMTC metadata, timeline and native command forwarding     |
 | Plugin runtimes           | Isolated plugin execution with per-call budgets           |
 
 The playback producer and device consumer share a preallocated single-producer/single-consumer
@@ -194,9 +197,12 @@ does not mark its entire contents missing.
 
 Static playlists and their entries are stored in SQLite. Entry order is explicit, and a unique
 `(playlist_id, track_id)` index prevents duplicate songs. Playlist reads join the same track read
-model used by the rest of the application. A custom cover is imported through the native file
+model used by the rest of the application, while display numbers are derived from playlist position
+rather than track metadata. Titles, optional descriptions and optional genres are editable without
+adding playlists to the Library album catalogue. A custom cover is imported through the native file
 picker, normalised to a managed JPEG and referenced by the playlist independently of Discord's
-current-track artwork.
+current-track artwork. Managed cover filenames use a platform-safe encoding rather than raw
+playlist ids, whose `pl:` prefix is not valid in Windows paths.
 
 ### Search and read models
 
@@ -209,7 +215,10 @@ Pagination includes a stable identity tie-breaker.
 
 Home shelves and their corresponding See all pages share collection predicates. This keeps counts,
 shelf membership and full results consistent. Album read models preserve the complete release date
-in addition to the display year, allowing deterministic full-date ordering within a year.
+in addition to the display year, allowing deterministic full-date ordering within a year. Decade and
+year facets are derived from albums that actually exist in the current catalogue; genre and decade
+counts report albums rather than tracks. Selecting a decade exposes its ordered year choices and
+clears a previously selected year when it falls outside the new range.
 
 ## Artwork and Discord
 
@@ -257,25 +266,50 @@ ordering.
 
 ### Now Playing
 
-Now Playing uses one fixed deck with artwork and a shared lyric panel. When resolved lyrics are
-empty, that panel is removed and Spectrum takes its place; there is no alternate modular layout.
-The player bar owns the separate queue panel.
+Now Playing uses one bounded, non-scrolling deck. The left column places metadata above aligned,
+unframed artwork and complete transport, seek, volume and queue controls below it. The right column
+has the same available width and height. The global Player Bar is unmounted only on this route and
+returns immediately elsewhere; its microphone control opens a centered synchronized-lyrics sheet
+with a short slide transition.
 
-The spectrum analyser runs on decoded audio in the Rust producer path. It sends bounded band data to
-the interface, where a canvas interpolates frames without putting every update into React state.
+Lyrics and Spectrum can share the right column. Spectrum defaults off when lyrics exist and becomes
+the sole right-hand panel when no lyrics are available. The analyser runs on decoded audio in the
+Rust producer path and sends bounded band data to the interface, where a canvas interpolates frames
+without putting every update into React state.
 
-Lyrics are resolved from embedded USLT metadata or a sidecar LRC file. The parser handles common
-timestamp variants, offsets and unsorted input.
+Lyric resolution checks embedded USLT metadata and sidecar LRC files before querying LRCLIB. Exact
+metadata and duration matching precedes bounded search fallback, and successful responses are
+cached in SQLite. Network failure leaves local or plain lyrics usable. The parser handles common
+timestamp variants, offsets and unsorted input; synchronized highlighting follows the shared
+playhead. LRCLIB supplies line timing here; Prism does not infer word timing that the source does
+not provide.
 
 ### Desktop shell
 
 Settings opens from a top-bar gear and contains output, playback, library, integration, appearance
-and System sections. Native window decorations are disabled, with fullscreen and minimize,
-maximize and close controls integrated into the same top bar.
+and System sections. Device enumeration is asynchronous so entering Settings does not wait for an
+output backend. Native window decorations are disabled, with fullscreen and minimize, maximize and
+close controls integrated into the same top bar. Non-interactive bar space starts native window
+dragging; buttons, menus and the search field are excluded.
+
+Navigation retains actual route history and per-route scroll offsets. Detail Back controls and a
+second Settings press restore the previous route and position rather than substituting a fixed
+destination. Global text selection is disabled outside album names, artist names and editable
+content, while editable Ctrl+A remains available.
 
 The Dock stores pinned album and playlist identities in newest-first order. Pins can be reordered,
 opened and removed in both expanded and collapsed sidebars. Album and playlist context menus share
 the same navigation and playback actions as their full views.
+
+### Windows media controls
+
+On Windows, Prism binds System Media Transport Controls to the top-level window through the Win32
+interop factory. A native mirror publishes engine state, track metadata, cached artwork and a
+bounded playback timeline. Play, pause and stop call the engine directly; next and previous use a
+strictly validated renderer event so they retain queue and restart semantics. Seek requests are
+converted from Windows hundred-nanosecond ticks to milliseconds. Event registrations are removed
+when the managed controls are dropped, and initialization or update failures are logged without
+preventing local playback.
 
 ## Plugins
 

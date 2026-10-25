@@ -1,7 +1,8 @@
-import { ArrowLeft, ImagePlus, Play, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ImagePlus, Pencil, Play, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState, type JSX } from "react";
 
 import { TrackTable } from "@/components/library/TrackTable";
+import { PlaylistEditorDialog } from "@/components/playlists/PlaylistEditorDialog";
 import { Button } from "@/components/ui/Button";
 import { CoverArt } from "@/components/ui/CoverArt";
 import { formatCount, formatLibraryDuration } from "@/lib/format";
@@ -19,6 +20,7 @@ export function PlaylistView({ playlistId }: { playlistId: string }): JSX.Elemen
   const setCustomCover = usePlaylistStore((state) => state.setCustomCover);
   const [coverBusy, setCoverBusy] = useState(false);
   const [coverError, setCoverError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
   const updatedAt = usePlaylistStore(
     (state) => state.playlists.find((playlist) => playlist.id === playlistId)?.updatedAt,
   );
@@ -84,7 +86,7 @@ export function PlaylistView({ playlistId }: { playlistId: string }): JSX.Elemen
         className="mb-5 flex items-center gap-1.5 text-[11.5px] text-white/40 hover:text-white"
       >
         <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-        Playlists
+        Back
       </button>
 
       <header className="flex flex-col gap-5 sm:flex-row sm:items-end">
@@ -99,9 +101,32 @@ export function PlaylistView({ playlistId }: { playlistId: string }): JSX.Elemen
           <p className="text-[10px] font-semibold tracking-[0.2em] text-white/30 uppercase">
             Playlist
           </p>
-          <h1 className="mt-2 text-[32px] leading-tight font-semibold tracking-[-0.035em] text-white">
-            {playlist.name}
-          </h1>
+          <div className="mt-2 flex items-center gap-2.5">
+            <h1 className="min-w-0 text-[32px] leading-tight font-semibold tracking-[-0.035em] text-white">
+              {playlist.name}
+            </h1>
+            <button
+              type="button"
+              aria-label="Edit playlist"
+              title="Edit playlist"
+              onClick={() => {
+                setEditing(true);
+              }}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/35 transition-colors hover:bg-white/[0.07] hover:text-white"
+            >
+              <Pencil className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+          {playlist.description !== null ? (
+            <p className="mt-2 max-w-2xl text-[12.5px] leading-relaxed whitespace-pre-wrap text-white/45">
+              {playlist.description}
+            </p>
+          ) : null}
+          {playlist.genre !== null ? (
+            <p className="mt-1.5 text-[10px] font-medium tracking-[0.14em] text-white/30 uppercase">
+              {playlist.genre}
+            </p>
+          ) : null}
           <p className="tabular mt-2 text-[11.5px] text-white/35">
             {formatCount(playlist.trackCount)} songs · {formatLibraryDuration(playlist.durationMs)}
           </p>
@@ -149,6 +174,18 @@ export function PlaylistView({ playlistId }: { playlistId: string }): JSX.Elemen
         <p className="mt-8 text-[12.5px] text-white/35">
           This playlist is empty. Right-click a song anywhere in Prism to add it.
         </p>
+      ) : null}
+
+      {editing ? (
+        <PlaylistEditorDialog
+          playlist={playlist}
+          onClose={() => {
+            setEditing(false);
+          }}
+          onSaved={(updated) => {
+            setDetail((current) => (current === null ? null : { ...current, playlist: updated }));
+          }}
+        />
       ) : null}
     </div>
   );

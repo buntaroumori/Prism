@@ -104,6 +104,7 @@ function backendFixture() {
   // the container declares no length, so `durationFrames` is null all the way
   // through the snapshot and the tick. The catalogue still knows the length.
   const noDuration = window.location.search.includes("noduration");
+  const synchronizedLyrics = window.location.search.includes("lyrics");
   const albums = [
     {
       id: "al-one",
@@ -252,6 +253,7 @@ function backendFixture() {
   const playlistItems = new Map();
   const playlistRow = (playlist) => ({
     ...playlist,
+    genre: playlist.genre ?? null,
     trackCount: (playlistItems.get(playlist.id) ?? []).length,
     durationMs: (playlistItems.get(playlist.id) ?? []).length * 240000,
   });
@@ -269,7 +271,7 @@ function backendFixture() {
   return {
     get_app_info: {
       name: "Prism",
-      version: "1.0.0",
+      version: "1.1.0",
       tauriVersion: "2.11.6",
       targetOs: "linux",
       targetArch: "x86_64",
@@ -341,12 +343,18 @@ function backendFixture() {
       tookMs: 1,
     },
     library_facets: {
-      genres: [{ value: "Electronic", count: 4 }],
+      genres: [{ value: "Electronic", count: 2 }],
       formats: [],
-      decades: [],
+      decades: [
+        { value: "2000s", count: 1 },
+        { value: "2010s", count: 1 },
+      ],
       sampleRates: [],
       bitDepths: [],
-      years: [],
+      years: [
+        { value: "2000", count: 1 },
+        { value: "2016", count: 1 },
+      ],
     },
     library_track_cover: {
       key: "a".repeat(64),
@@ -397,6 +405,15 @@ function backendFixture() {
       playlistItems.set(playlist.id, []);
       return playlistRow(playlist);
     },
+    playlist_update: (args) => {
+      const playlist = playlists.find((candidate) => candidate.id === args.id);
+      if (!playlist) throw new Error("unknown playlist");
+      playlist.name = String(args.name).trim();
+      playlist.description = args.description ?? null;
+      playlist.genre = args.genre ?? null;
+      playlist.updatedAt = "2026-10-22T10:00:30.000Z";
+      return playlistRow(playlist);
+    },
     playlist_add_tracks: (args) => {
       const playlist = playlists.find((candidate) => candidate.id === args.playlistId);
       const items = playlistItems.get(args.playlistId) ?? [];
@@ -436,6 +453,7 @@ function backendFixture() {
       playlistItems.delete(args.id);
       return index >= 0;
     },
+    "plugin:window|start_dragging": () => null,
     window_set_fullscreen: (args) => {
       live.fullscreen = Boolean(args.fullscreen);
       return null;
@@ -514,14 +532,22 @@ function backendFixture() {
     player_set_ram_play: null,
     lyrics_get: (args) => ({
       trackId: args.trackId,
-      provider: "none",
-      synced: false,
-      language: null,
+      provider: synchronizedLyrics ? "lrclib" : "none",
+      synced: synchronizedLyrics,
+      language: synchronizedLyrics ? "en" : null,
       offsetMs: 0,
-      lines: [],
-      plainText: "",
-      sourcePath: null,
-      fetchedAt: null,
+      lines: synchronizedLyrics
+        ? [
+            { timeMs: 0, text: "First synchronized line" },
+            { timeMs: 5000, text: "Second synchronized line" },
+            { timeMs: 10000, text: "Third synchronized line" },
+          ]
+        : [],
+      plainText: synchronizedLyrics
+        ? "First synchronized line\nSecond synchronized line\nThird synchronized line"
+        : "",
+      sourcePath: synchronizedLyrics ? "https://lrclib.net/api/get/42" : null,
+      fetchedAt: synchronizedLyrics ? "2026-10-25T10:00:00.000Z" : null,
     }),
     discord_artwork_overrides_path: "/tmp/prism/discord-artwork.json",
     discord_status: () => ({
@@ -828,11 +854,44 @@ async function main() {
   const volume = footer.locator("[role='slider'][aria-label='Volume']").first();
   const queueButton = footer.getByRole("button", { name: "Open queue", exact: true });
   const queueBox = await queueButton.boundingBox();
+  const microphoneButton = footer.getByRole("button", {
+    name: "Show synchronized lyrics",
+    exact: true,
+  });
+  const microphoneBox = await microphoneButton.boundingBox();
   const volumeBox = await volume.boundingBox();
   check(
-    "Queue sits immediately before the volume controls",
-    queueBox !== null && volumeBox !== null && queueBox.x < volumeBox.x,
+    "Queue, microphone and volume keep their requested order",
+    queueBox !== null &&
+      microphoneBox !== null &&
+      volumeBox !== null &&
+      queueBox.x < microphoneBox.x &&
+      microphoneBox.x < volumeBox.x,
   );
+  const sidebarToggle = footer.getByRole("button", { name: "Hide sidebar", exact: true });
+  const shuffleButton = footer.getByRole("button", { name: "Shuffle queue", exact: true });
+  const sidebarToggleBox = await sidebarToggle.boundingBox();
+  const shuffleBox = await shuffleButton.boundingBox();
+  check(
+    "the sidebar control sits immediately left of Shuffle",
+    sidebarToggleBox !== null &&
+      shuffleBox !== null &&
+      sidebarToggleBox.x < shuffleBox.x &&
+      Math.abs(sidebarToggleBox.y - shuffleBox.y) <= 1,
+  );
+  await sidebarToggle.click();
+  check(
+    "the transport control hides the full sidebar",
+    (await page.locator("aside").count()) === 0,
+  );
+  await page.mouse.move(2, 420);
+  await page.locator("aside").waitFor({ timeout: 2_000 });
+  await page.mouse.move(90, 420);
+  check(
+    "the left edge reveals the hidden sidebar on hover",
+    await page.locator("aside").isVisible(),
+  );
+  await footer.getByRole("button", { name: "Show sidebar", exact: true }).click();
   check("the volume rail exists", (await volume.count()) > 0);
   if ((await volume.count()) > 0) {
     const readVolume = () =>
@@ -1001,6 +1060,15 @@ async function main() {
     "the playlist contains the song that was added",
     (await page.locator("[data-track-row]").count()) === 1,
   );
+  check(
+    "playlist numbering starts at one without changing track metadata",
+    (await page.locator("[data-track-row] > span").first().textContent())?.trim() === "01" &&
+      (
+        await page.evaluate(() =>
+          window.__prismCalls.filter((call) => call.command === "playlist_add_tracks").at(-1),
+        )
+      )?.args?.trackIds?.[0] === "al-one-t2",
+  );
   await page.getByRole("button", { name: "Change cover", exact: true }).click();
   await page.waitForTimeout(250);
   const pickerCall = await page.evaluate(() =>
@@ -1024,6 +1092,26 @@ async function main() {
   check(
     "a song can be removed from the playlist",
     (await page.locator("[data-track-row]").count()) === 0,
+  );
+  await page.getByRole("button", { name: "Edit playlist", exact: true }).click();
+  const fullPlaylistEditor = page.getByRole("dialog", { name: "Edit playlist", exact: true });
+  await fullPlaylistEditor
+    .getByRole("textbox", { name: "Playlist description" })
+    .fill("Late night listening");
+  await fullPlaylistEditor.getByRole("textbox", { name: "Playlist genre" }).fill("Ambient");
+  await fullPlaylistEditor.getByRole("button", { name: "Save", exact: true }).click();
+  await page.waitForTimeout(250);
+  const fullPlaylistUpdate = await page.evaluate(() =>
+    window.__prismCalls.filter((call) => call.command === "playlist_update").at(-1),
+  );
+  check(
+    "the in-page pencil saves optional description and genre",
+    fullPlaylistUpdate?.args?.name === "Evening" &&
+      fullPlaylistUpdate?.args?.description === "Late night listening" &&
+      fullPlaylistUpdate?.args?.genre === "Ambient" &&
+      (await page.getByText("Late night listening", { exact: true }).count()) === 1 &&
+      (await page.getByText("Ambient", { exact: true }).count()) === 1,
+    JSON.stringify(fullPlaylistUpdate?.args ?? {}),
   );
   await page.locator("aside nav[aria-label='Primary'] button[aria-label='Playlists']").click();
   await page.waitForTimeout(250);
@@ -1049,6 +1137,32 @@ async function main() {
   await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
   await dockPlaylist.click({ button: "right" });
   await page.getByRole("menuitem", { name: "Unpin playlist", exact: true }).click();
+
+  await page.locator("aside nav[aria-label='Primary'] button[aria-label='Playlists']").click();
+  await page
+    .locator("main")
+    .getByRole("button", { name: /Evening/ })
+    .click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Rename playlist", exact: true }).click();
+  const renameDialog = page.getByRole("dialog", { name: "Rename playlist", exact: true });
+  check(
+    "context-menu rename deliberately omits description and genre fields",
+    (await renameDialog.getByRole("textbox", { name: "Playlist description" }).count()) === 0 &&
+      (await renameDialog.getByRole("textbox", { name: "Playlist genre" }).count()) === 0,
+  );
+  await renameDialog.getByRole("textbox", { name: "Playlist title" }).fill("Evening renamed");
+  await renameDialog.getByRole("button", { name: "Save", exact: true }).click();
+  await page.waitForTimeout(250);
+  const renameUpdate = await page.evaluate(() =>
+    window.__prismCalls.filter((call) => call.command === "playlist_update").at(-1),
+  );
+  check(
+    "title-only rename preserves the other playlist metadata",
+    renameUpdate?.args?.name === "Evening renamed" &&
+      renameUpdate?.args?.description === "Late night listening" &&
+      renameUpdate?.args?.genre === "Ambient",
+    JSON.stringify(renameUpdate?.args ?? {}),
+  );
 
   // ---- Album context details ------------------------------------------------
   await page.locator("aside nav[aria-label='Primary'] button[aria-label='Library']").click();
@@ -1164,7 +1278,9 @@ async function main() {
   await page.waitForTimeout(300);
   const sortBar = page.locator("main div[aria-label='Sort albums']");
   await sortBar.getByRole("button", { name: /^Artist/ }).click();
-  await page.getByRole("combobox", { name: "Filter by genre" }).selectOption("Electronic");
+  const genreFilter = page.getByRole("button", { name: "Filter by genre", exact: true });
+  await genreFilter.click();
+  await page.getByRole("option", { name: "Electronic (2 albums)", exact: true }).click();
   await page.waitForTimeout(250);
   await page.locator("aside nav[aria-label='Primary'] button[aria-label='Home']").click();
   await page.locator("aside nav[aria-label='Primary'] button[aria-label='Library']").click();
@@ -1172,8 +1288,47 @@ async function main() {
   check(
     "sort direction and genre survive leaving Library",
     (await sortBar.getByRole("button", { name: /^Artist/ }).getAttribute("aria-pressed")) ===
-      "true" &&
-      (await page.getByRole("combobox", { name: "Filter by genre" }).inputValue()) === "Electronic",
+      "true" && (await genreFilter.textContent())?.includes("Electronic"),
+  );
+  check(
+    "the year row is hidden until a decade is active",
+    (await page.locator("[aria-label='Filter by year']").count()) === 0,
+  );
+  const decadeFilter = page.getByRole("button", { name: "Filter by decade", exact: true });
+  await decadeFilter.click();
+  await page.getByRole("option", { name: "2000s (1 album)", exact: true }).click();
+  await page.waitForTimeout(250);
+  const decadeCall = await page.evaluate(() =>
+    window.__prismCalls.filter((call) => call.command === "library_albums").at(-1),
+  );
+  const yearRow = page.locator("[aria-label='Filter by year']");
+  check(
+    "a decade requests its real range and reveals only available ordered years",
+    decadeCall?.args?.yearFrom === 2000 &&
+      decadeCall?.args?.yearTo === 2009 &&
+      (await yearRow.getByRole("button", { name: "2000", exact: true }).count()) === 1 &&
+      (await yearRow.getByRole("button", { name: "2016", exact: true }).count()) === 0 &&
+      (await yearRow.getByRole("button", { name: "Previous decade", exact: true }).isDisabled()),
+    JSON.stringify(decadeCall?.args ?? {}),
+  );
+  await yearRow.getByRole("button", { name: "Next decade", exact: true }).click();
+  await yearRow.getByRole("button", { name: "2016", exact: true }).click();
+  await page.waitForTimeout(250);
+  const yearCall = await page.evaluate(() =>
+    window.__prismCalls.filter((call) => call.command === "library_albums").at(-1),
+  );
+  check(
+    "decade arrows and year buttons produce an exact year query",
+    yearCall?.args?.yearFrom === 2016 && yearCall?.args?.yearTo === 2016,
+    JSON.stringify(yearCall?.args ?? {}),
+  );
+  await yearRow.getByRole("button", { name: "Previous decade", exact: true }).click();
+  check(
+    "changing decade clears a year that no longer belongs to it",
+    (await yearRow
+      .getByRole("button", { name: "All years", exact: true })
+      .getAttribute("aria-pressed")) === "true" &&
+      (await yearRow.getByRole("button", { name: "2016", exact: true }).count()) === 0,
   );
 
   // ---- Appearance controls have visible effects -----------------------------
@@ -1277,6 +1432,49 @@ async function main() {
     blocked.find && blocked.print && blocked.select && blocked.tab,
     JSON.stringify(blocked),
   );
+  const globalSearch = page.getByRole("textbox", { name: "Search the library", exact: true });
+  await globalSearch.fill("Radiohead");
+  await globalSearch.press("Control+A");
+  const editableSelection = await globalSearch.evaluate((node) => ({
+    start: node.selectionStart,
+    end: node.selectionEnd,
+    length: node.value.length,
+  }));
+  check(
+    "Ctrl+A selects editable text while global selection stays disabled",
+    editableSelection.start === 0 &&
+      editableSelection.end === editableSelection.length &&
+      (await page
+        .locator("main h1")
+        .first()
+        .evaluate((node) => getComputedStyle(node).userSelect)) === "none",
+    JSON.stringify(editableSelection),
+  );
+  await globalSearch.fill("");
+  const dragsBeforeInteractiveInput = await page.evaluate(
+    () =>
+      window.__prismCalls.filter((call) => call.command === "plugin:window|start_dragging").length,
+  );
+  await globalSearch.click();
+  check(
+    "Top Bar controls and search never initiate window dragging",
+    dragsBeforeInteractiveInput === 0 &&
+      (await page.evaluate(
+        () =>
+          window.__prismCalls.filter((call) => call.command === "plugin:window|start_dragging")
+            .length,
+      )) === 0,
+  );
+  await page.getByRole("banner").getByText("Prism", { exact: true }).click();
+  await page.waitForTimeout(100);
+  check(
+    "non-interactive Top Bar space starts native window dragging",
+    (await page.evaluate(
+      () =>
+        window.__prismCalls.filter((call) => call.command === "plugin:window|start_dragging")
+          .length,
+    )) === 1,
+  );
   const pointer = await page
     .getByRole("button", { name: "Enter fullscreen", exact: true })
     .evaluate((node) => getComputedStyle(node).cursor);
@@ -1305,18 +1503,253 @@ async function main() {
   await page.waitForTimeout(300);
   check(
     "library choices and cover size survive a reload",
-    (await page.getByRole("combobox", { name: "Filter by genre" }).inputValue()) === "Electronic" &&
+    (
+      await page.getByRole("button", { name: "Filter by genre", exact: true }).textContent()
+    )?.includes("Electronic") &&
       (await page.locator("[data-cover-size]").getAttribute("data-cover-size")) === "260" &&
       (await page.locator("[data-density]").getAttribute("data-density")) === "compact",
   );
   await page.locator("aside nav[aria-label='Primary'] button[aria-label='Now Playing']").click();
-  await page.waitForTimeout(300);
+  try {
+    await page.getByRole("region", { name: "Spectrum", exact: true }).waitFor({ timeout: 5_000 });
+  } catch (error) {
+    console.error("Now Playing reload diagnostics", {
+      main: await page.locator("main").innerText(),
+      footers: await page.locator("footer").count(),
+      pageErrors,
+      preferences: await page.evaluate(() => localStorage.getItem("prism.shell.preferences")),
+    });
+    throw error;
+  }
   check(
     "the fixed layout survives reload and Spectrum replaces absent lyrics",
     (await page.getByRole("region", { name: "Spectrum", exact: true }).count()) === 1 &&
       (await page.getByRole("region", { name: "Lyrics", exact: true }).count()) === 0 &&
       (await page.getByRole("button", { name: "Configure modules", exact: true }).count()) === 0,
   );
+
+  // ---- Fixed Now Playing, synchronized lyrics and real history ---------------
+  console.log("Now Playing, synchronized lyrics and navigation");
+  const synchronized = await browser.newPage({
+    viewport: { width: window_.width ?? 1440, height: window_.height ?? 900 },
+  });
+  synchronized.on("pageerror", (error) => pageErrors.push(error.message));
+  await synchronized.addInitScript(shellInitScript(CONFIG));
+  await synchronized.goto(`http://127.0.0.1:${port}/?lyrics=1`, {
+    waitUntil: "networkidle",
+  });
+  await synchronized.waitForSelector("main", { timeout: 15_000 });
+  await synchronized
+    .locator("aside nav[aria-label='Primary'] button[aria-label='Library']")
+    .click();
+  await synchronized.locator("main button[aria-label^='Open ']").first().click();
+  await synchronized
+    .locator("main")
+    .getByRole("button", { name: "Play", exact: true })
+    .first()
+    .click();
+  const synchronizedFooter = synchronized.locator("footer");
+  await synchronizedFooter.waitFor({ timeout: 5_000 });
+  await synchronizedFooter
+    .getByRole("button", { name: "Show synchronized lyrics", exact: true })
+    .click();
+  const lyricSheet = synchronized.getByRole("region", {
+    name: "Synchronized lyrics",
+    exact: true,
+  });
+  await lyricSheet.waitFor({ timeout: 3_000 });
+  const sheetGeometry = await lyricSheet.evaluate((node) => {
+    const bounds = node.getBoundingClientRect();
+    return {
+      x: bounds.x,
+      width: bounds.width,
+      viewport: window.innerWidth,
+    };
+  });
+  check(
+    "the microphone opens a centred 60–70% lyrics sheet",
+    sheetGeometry.width / sheetGeometry.viewport >= 0.6 &&
+      sheetGeometry.width / sheetGeometry.viewport <= 0.7 &&
+      Math.abs(sheetGeometry.x + sheetGeometry.width / 2 - sheetGeometry.viewport / 2) <= 1,
+    JSON.stringify(sheetGeometry),
+  );
+  await synchronized.evaluate(() => {
+    window.__prismEmit("player://tick", {
+      positionMs: 6_000,
+      durationMs: 240_000,
+      playing: true,
+    });
+  });
+  await synchronized.waitForFunction(() =>
+    document
+      .querySelector("[aria-label='Synchronized lyrics'] [aria-current='true']")
+      ?.textContent?.includes("Second synchronized line"),
+  );
+  check(
+    "the shared playhead moves synchronized highlighting in real time",
+    (await lyricSheet.locator("[aria-current='true']").textContent()) ===
+      "Second synchronized line",
+  );
+  await synchronizedFooter
+    .getByRole("button", { name: "Hide synchronized lyrics", exact: true })
+    .click();
+  await lyricSheet.waitFor({ state: "hidden", timeout: 3_000 });
+
+  await synchronized
+    .locator("aside nav[aria-label='Primary'] button[aria-label='Now Playing']")
+    .click();
+  const primary = synchronized.locator("[data-now-playing-primary]");
+  const secondary = synchronized.locator("[data-now-playing-secondary]");
+  await primary.waitFor({ timeout: 3_000 });
+  await synchronized.getByRole("region", { name: "Lyrics", exact: true }).waitFor();
+  await synchronized.waitForTimeout(250);
+  check(
+    "Now Playing hides only the global Player Bar",
+    !(await synchronizedFooter.isVisible()) &&
+      (await synchronized.locator("[data-route]").getAttribute("data-route")) === "now-playing",
+  );
+  const fixedGeometry = await synchronized.evaluate(() => {
+    const main = document.querySelector("main");
+    const primaryNode = document.querySelector("[data-now-playing-primary]");
+    const secondaryNode = document.querySelector("[data-now-playing-secondary]");
+    const artwork = document.querySelector("[data-now-playing-artwork]");
+    if (!main || !primaryNode || !secondaryNode || !artwork) return null;
+    const left = primaryNode.getBoundingClientRect();
+    const right = secondaryNode.getBoundingClientRect();
+    const art = artwork.getBoundingClientRect();
+    return {
+      overflow: main.scrollHeight - main.clientHeight,
+      widthDifference: Math.abs(left.width - right.width),
+      heightDifference: Math.abs(left.height - right.height),
+      artworkWidth: art.width,
+      artworkHeight: art.height,
+    };
+  });
+  check(
+    "fixed columns and artwork stay bounded without route scrolling",
+    fixedGeometry !== null &&
+      fixedGeometry.overflow <= 1 &&
+      fixedGeometry.widthDifference <= 1 &&
+      fixedGeometry.heightDifference <= 1 &&
+      fixedGeometry.artworkWidth >= 100 &&
+      fixedGeometry.artworkHeight >= 100 &&
+      Math.abs(fixedGeometry.artworkWidth - fixedGeometry.artworkHeight) <= 1,
+    JSON.stringify(fixedGeometry),
+  );
+  check(
+    "the embedded Now Playing transport is complete",
+    (await primary.getByRole("button", { name: "Pause", exact: true }).count()) === 1 &&
+      (await primary.getByRole("button", { name: "Previous track", exact: true }).count()) === 1 &&
+      (await primary.getByRole("button", { name: "Next track", exact: true }).count()) === 1 &&
+      (await primary.getByRole("button", { name: "Stop", exact: true }).count()) === 1 &&
+      (await primary.getByRole("button", { name: "Open queue", exact: true }).count()) === 1 &&
+      (await primary.getByRole("slider", { name: "Seek", exact: true }).count()) === 1 &&
+      (await primary.getByRole("slider", { name: "Volume", exact: true }).count()) === 1,
+  );
+  check(
+    "lyrics exist without enabling Spectrum by default",
+    (await synchronized.getByRole("region", { name: "Lyrics", exact: true }).count()) === 1 &&
+      (await synchronized.getByRole("region", { name: "Spectrum", exact: true }).count()) === 0,
+  );
+  await primary.getByRole("button", { name: "Open queue", exact: true }).click();
+  const embeddedQueue = synchronized.getByRole("dialog", { name: "Playback queue", exact: true });
+  await embeddedQueue.waitFor();
+  await embeddedQueue.getByRole("button", { name: "Close queue", exact: true }).click();
+  await synchronized
+    .locator("[data-now-playing-secondary]")
+    .getByRole("button", { name: "Spectrum", exact: true })
+    .click();
+  await synchronized.getByRole("region", { name: "Spectrum", exact: true }).waitFor();
+  const panelWidths = await synchronized.evaluate(() => {
+    const secondaryNode = document.querySelector("[data-now-playing-secondary]");
+    const lyrics = document.querySelector("[aria-label='Lyrics']");
+    const spectrum = document.querySelector("[aria-label='Spectrum']");
+    if (!secondaryNode || !lyrics || !spectrum) return null;
+    return {
+      container: secondaryNode.getBoundingClientRect().width,
+      lyrics: lyrics.getBoundingClientRect().width,
+      spectrum: spectrum.getBoundingClientRect().width,
+    };
+  });
+  check(
+    "Spectrum can coexist with lyrics at the same bounded width",
+    panelWidths !== null &&
+      Math.abs(panelWidths.container - panelWidths.lyrics) <= 1 &&
+      Math.abs(panelWidths.container - panelWidths.spectrum) <= 1,
+    JSON.stringify(panelWidths),
+  );
+  await synchronized.locator("aside nav[aria-label='Primary'] button[aria-label='Home']").click();
+  check(
+    "the global Player Bar returns immediately outside Now Playing",
+    await synchronizedFooter.isVisible(),
+  );
+
+  await synchronized
+    .locator("aside nav[aria-label='Primary'] button[aria-label='Library']")
+    .click();
+  await synchronized.locator("main button[aria-label^='Open ']").first().click();
+  await synchronized
+    .getByRole("button", { name: "Show Electronic albums in Library", exact: true })
+    .click();
+  await synchronized.waitForTimeout(250);
+  const albumGenreCall = await synchronized.evaluate(() =>
+    window.__prismCalls.filter((call) => call.command === "library_albums").at(-1),
+  );
+  check(
+    "album genre enters Library with that genre selected",
+    albumGenreCall?.args?.genre === "Electronic" &&
+      (
+        await synchronized
+          .getByRole("button", { name: "Filter by genre", exact: true })
+          .textContent()
+      )?.includes("Electronic"),
+    JSON.stringify(albumGenreCall?.args ?? {}),
+  );
+  await synchronized.locator("main button[aria-label^='Open ']").first().click();
+  const albumArtistLink = synchronized
+    .locator("main header")
+    .getByRole("button", { name: "Radiohead", exact: true });
+  await albumArtistLink.waitFor({ timeout: 5_000 });
+  await synchronized.waitForTimeout(250);
+  await albumArtistLink.click();
+  await synchronized.waitForFunction(
+    () => document.querySelector("[data-route]")?.getAttribute("data-route") === "artist",
+  );
+  await synchronized.locator("main").getByRole("button", { name: "Back", exact: true }).click();
+  await synchronized.waitForFunction(
+    () => document.querySelector("[data-route]")?.getAttribute("data-route") === "album",
+  );
+  check(
+    "a detail Back arrow returns to the actual previous route",
+    (await synchronized.locator("[data-route]").getAttribute("data-route")) === "album",
+  );
+  await synchronized.setViewportSize({
+    width: window_.width ?? 1440,
+    height: 360,
+  });
+  const albumScroll = await synchronized.locator("main").evaluate((node) => {
+    node.scrollTop = 160;
+    return node.scrollTop;
+  });
+  check("the originating Album can be scrolled for restoration", albumScroll > 0);
+  await synchronized.locator("header button[aria-label='Settings']").click();
+  await synchronized.waitForFunction(
+    () => document.querySelector("[data-route]")?.getAttribute("data-route") === "settings",
+  );
+  await synchronized.locator("header button[aria-label='Settings']").click();
+  await synchronized.waitForFunction(
+    (expected) =>
+      document.querySelector("[data-route]")?.getAttribute("data-route") === "album" &&
+      Math.abs((document.querySelector("main")?.scrollTop ?? 0) - expected) <= 1,
+    albumScroll,
+    { timeout: 5_000 },
+  );
+  check(
+    "clicking Settings again restores the prior route and exact scroll position",
+    (await synchronized.locator("main").evaluate((node) => node.scrollTop)) === albumScroll,
+    `expected=${String(albumScroll)}`,
+  );
+  await synchronized.close();
 
   // ---- Album end and originating Library order ------------------------------
   console.log("Album continuation");

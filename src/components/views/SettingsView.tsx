@@ -15,6 +15,7 @@ import {
 import { PluginsSection } from "@/components/settings/PluginsSection";
 import { SystemView } from "@/components/views/SystemView";
 import { Button } from "@/components/ui/Button";
+import { PopoverSelect } from "@/components/ui/PopoverSelect";
 import { Segmented } from "@/components/ui/Segmented";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { formatAudioFormat } from "@/lib/audio";
@@ -91,21 +92,19 @@ function OutputSection(): JSX.Element {
         hint="Speakers, headphones and other playback devices available on this computer."
       >
         <div className="flex min-w-0 items-center gap-2">
-          <select
-            aria-label="Output device"
+          <PopoverSelect
+            ariaLabel="Output device"
             value={deviceId ?? ""}
-            onChange={(event) => {
-              void setDevice(event.target.value.length === 0 ? null : event.target.value);
+            onChange={(value) => {
+              void setDevice(value.length === 0 ? null : value);
             }}
-            className="h-8 max-w-[320px] min-w-0 truncate rounded-lg border border-white/10 bg-oled-850 px-2 text-[12px] text-white/80"
-          >
-            <option value="">System default</option>
-            {devices.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.name}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: "", label: "System default" },
+              ...devices.map((device) => ({ value: device.id, label: device.name })),
+            ]}
+            buttonClassName="w-[280px] max-w-[320px]"
+            menuClassName="w-[340px] max-w-[80vw] whitespace-normal"
+          />
           <Button
             variant="ghost"
             icon={RefreshCw}

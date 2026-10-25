@@ -8,7 +8,10 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 
+import { getCurrentWindow } from "@tauri-apps/api/window";
+
 import { WindowControls } from "@/components/WindowControls";
+import { hasBackend } from "@/lib/cover";
 import { formatCount } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -46,7 +49,7 @@ const ROUTE_LABELS: Record<ShellRoute, string> = {
 export function TopBar(): JSX.Element {
   const route = useUiStore((state) => state.route);
   const navigate = useUiStore((state) => state.navigate);
-  const setRoute = useUiStore((state) => state.setRoute);
+  const toggleSettings = useUiStore((state) => state.toggleSettings);
   const openAlbum = useUiStore((state) => state.openAlbum);
   const openArtist = useUiStore((state) => state.openArtist);
   const setQuery = useLibraryStore((state) => state.setQuery);
@@ -134,8 +137,25 @@ export function TopBar(): JSX.Element {
 
   return (
     <header
-      data-tauri-drag-region
-      className="drag-region relative z-20 flex h-[62px] shrink-0 items-center gap-4 border-b border-white/[0.05] px-7"
+      onMouseDown={(event) => {
+        const target = event.target as Element | null;
+        if (
+          event.button !== 0 ||
+          !hasBackend() ||
+          target?.closest(
+            "button, input, textarea, select, [role='button'], [role='listbox'], [data-interactive], .no-drag",
+          ) !== null
+        ) {
+          return;
+        }
+        event.preventDefault();
+        void getCurrentWindow()
+          .startDragging()
+          .catch((cause: unknown) => {
+            console.warn("Window dragging could not start", cause);
+          });
+      }}
+      className="relative z-20 flex h-[62px] shrink-0 items-center gap-4 border-b border-white/[0.05] px-7"
     >
       <div className="flex w-[210px] min-w-0 shrink-0 items-center gap-2 text-[12.5px]">
         <span className="text-white/30">Prism</span>
@@ -266,7 +286,7 @@ export function TopBar(): JSX.Element {
         ) : null}
       </div>
 
-      <div className="no-drag flex w-[360px] shrink-0 items-center justify-end gap-1.5">
+      <div className="flex w-[360px] shrink-0 items-center justify-end gap-1.5">
         {running ? (
           <div
             className="mr-1 flex items-center gap-1.5 text-white/45"
@@ -298,9 +318,7 @@ export function TopBar(): JSX.Element {
           aria-label="Settings"
           title="Settings"
           aria-current={route === "settings" ? "page" : undefined}
-          onClick={() => {
-            setRoute("settings");
-          }}
+          onClick={toggleSettings}
           className={
             route === "settings"
               ? "grid h-8 w-8 place-items-center rounded-full bg-accent/[0.12] text-accent"

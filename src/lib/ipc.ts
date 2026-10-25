@@ -14,6 +14,7 @@ import {
   OutputDeviceSchema,
   PlayerStatusSchema,
   PlayerTickSchema,
+  SystemMediaCommandSchema,
   PlaylistDetailSchema,
   PlaylistRowSchema,
   PluginMessageSchema,
@@ -57,6 +58,7 @@ import {
   type OutputMode,
   type PlayerStatus,
   type PlayerTick,
+  type SystemMediaCommand,
   type PlaylistDetail,
   type PlaylistRow,
   type RatePolicy,
@@ -222,6 +224,8 @@ export const libraryApi = {
     text?: string;
     artistId?: string;
     genre?: string;
+    yearFrom?: number;
+    yearTo?: number;
     collection?: AlbumCollection;
     sort?: AlbumSort;
     limit?: number;
@@ -231,6 +235,8 @@ export const libraryApi = {
       text: options?.text ?? null,
       artistId: options?.artistId ?? null,
       genre: options?.genre ?? null,
+      yearFrom: options?.yearFrom ?? null,
+      yearTo: options?.yearTo ?? null,
       collection: options?.collection ?? null,
       sort: options?.sort ?? null,
       limit: options?.limit ?? null,
@@ -291,6 +297,10 @@ export const playlistApi = {
   list: (): Promise<PlaylistRow[]> => command("playlist_list", Z_PLAYLISTS),
   create: (name: string): Promise<PlaylistRow> =>
     command("playlist_create", PlaylistRowSchema, { name }),
+  update: (
+    id: string,
+    metadata: { name: string; description: string | null; genre: string | null },
+  ): Promise<PlaylistRow> => command("playlist_update", PlaylistRowSchema, { id, ...metadata }),
   detail: (id: string, limit?: number, offset?: number): Promise<PlaylistDetail> =>
     command("playlist_detail", PlaylistDetailSchema, {
       id,
@@ -389,6 +399,7 @@ export const EVENT_CHANNELS = {
   scanComplete: "library://scan-complete",
   playerEvent: "player://event",
   playerTick: "player://tick",
+  mediaCommand: "media://command",
   visualiserFrame: "visualiser://frame",
   pluginMessage: "plugin://message",
 } as const;
@@ -402,6 +413,12 @@ export function parseEngineEvent(payload: unknown): EngineEvent | null {
 /** Parse a playhead tick. */
 export function parsePlayerTick(payload: unknown): PlayerTick | null {
   const parsed = PlayerTickSchema.safeParse(payload);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Parse a native operating-system media command. */
+export function parseSystemMediaCommand(payload: unknown): SystemMediaCommand | null {
+  const parsed = SystemMediaCommandSchema.safeParse(payload);
   return parsed.success ? parsed.data : null;
 }
 

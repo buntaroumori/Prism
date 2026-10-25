@@ -5,6 +5,7 @@ import { hasBackend } from "@/lib/cover";
 import {
   parseEngineEvent,
   parsePlayerTick,
+  parseSystemMediaCommand,
   EVENT_CHANNELS,
   libraryApi,
   playerApi,
@@ -14,12 +15,13 @@ import { usePlaybackStore } from "@/stores/playbackStore";
 /**
  * Wire the engine to the playback store exactly once per window.
  *
- * Three sources, one owner:
+ * Four sources, one owner:
  *   * `player_status` on mount — the shell can be reloaded (HMR, devtools)
  *     while a track is playing, so state is never assumed to be empty;
  *   * `player://event` — rare, meaningful transport changes;
  *   * `player://tick` — the 8 Hz playhead, which writes a two-field object into
- *     its own store slice so it cannot re-render the library.
+ *     its own store slice so it cannot re-render the library;
+ *   * `media://command` — queue-aware Windows next/previous media-key commands.
  *
  * Every payload is zod-parsed: a backend/frontend skew drops the event and logs
  * instead of writing `undefined` into the store.
@@ -65,12 +67,26 @@ export function usePlayerBridge(): void {
         }
       });
 
+      const mediaUnlisten = await listen<unknown>(EVENT_CHANNELS.mediaCommand, (message) => {
+        const command = parseSystemMediaCommand(message.payload);
+        if (command === null) {
+          console.warn("Dropped a malformed system media command", message.payload);
+          return;
+        }
+        if (command === "next") {
+          void usePlaybackStore.getState().next();
+        } else {
+          void usePlaybackStore.getState().previous();
+        }
+      });
+
       if (disposed) {
         eventUnlisten();
         tickUnlisten();
+        mediaUnlisten();
         return;
       }
-      unlisteners.push(eventUnlisten, tickUnlisten);
+      unlisteners.push(eventUnlisten, tickUnlisten, mediaUnlisten);
     };
 
     void attach();

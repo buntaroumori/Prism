@@ -12,7 +12,7 @@ system.
 | Frontend contracts    | Type safety, linting and formatting                          | `pnpm check`                          |
 | Production bundle     | Verify the shipped frontend can be built                     | `pnpm build`                          |
 | Startup smoke         | Mount the production bundle under its desktop CSP            | `node scripts/smoke-ui.mjs`           |
-| Interaction behaviour | Drive queue, playback, library, playlist and settings flows  | `node scripts/ui-behaviour.mjs`       |
+| Interaction behaviour | Drive playback, filters, lyrics, navigation and window flows | `node scripts/ui-behaviour.mjs`       |
 | Database              | Apply migrations and check constraints, triggers and views   | `pnpm schema:validate`                |
 | Rust tests            | Exercise audio, catalogue, Discord and integration behaviour | `cargo test --all-targets`            |
 | Frame audit           | Check virtualisation, layout stability and renderer cost     | `pnpm perf`                           |

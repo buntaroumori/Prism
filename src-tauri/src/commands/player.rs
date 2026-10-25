@@ -218,11 +218,15 @@ pub fn player_set_ram_play(state: State<'_, AppState>, enabled: bool) -> Result<
 
 /// Endpoints reachable through `mode`, best first.
 #[tauri::command]
-pub fn player_devices(
+pub async fn player_devices(
     state: State<'_, AppState>,
     mode: OutputMode,
 ) -> Result<Vec<OutputDevice>, PrismError> {
-    Ok(state.engine().devices(mode)?)
+    let engine = std::sync::Arc::clone(state.engine());
+    tokio::task::spawn_blocking(move || engine.devices(mode))
+        .await
+        .map_err(|error| PrismError::Internal(format!("device enumeration task failed: {error}")))?
+        .map_err(Into::into)
 }
 
 /// The endpoint's live configuration, queried from the driver.
@@ -233,21 +237,26 @@ pub fn player_devices(
 /// endpoints), in which case the negotiated format in `player_status` is the
 /// device truth.
 #[tauri::command]
-pub fn player_device_format(
+pub async fn player_device_format(
     state: State<'_, AppState>,
     mode: OutputMode,
     device: Option<String>,
 ) -> Result<Option<AudioFormat>, PrismError> {
-    let kinds = crate::audio::engine::backend::preferred_kinds(mode);
-    for kind in kinds {
-        if let Some(format) =
-            crate::audio::engine::backend::live_device_format(kind, device.as_deref())
-        {
-            return Ok(Some(format));
+    let engine = std::sync::Arc::clone(state.engine());
+    tokio::task::spawn_blocking(move || {
+        let kinds = crate::audio::engine::backend::preferred_kinds(mode);
+        for kind in kinds {
+            if let Some(format) =
+                crate::audio::engine::backend::live_device_format(kind, device.as_deref())
+            {
+                return Some(format);
+            }
         }
-    }
-    // Exclusive backends: the open stream already reports the device format.
-    Ok(state.engine().status().device_format)
+        // Exclusive backends: the open stream already reports the device format.
+        engine.status().device_format
+    })
+    .await
+    .map_err(|error| PrismError::Internal(format!("device format task failed: {error}")))
 }
 
 /// Name of the event channel the engine pushes to.

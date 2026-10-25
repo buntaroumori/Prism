@@ -30,6 +30,18 @@ export interface RouteParams {
   playlistId: string | null;
 }
 
+/** One return destination, including the scroller position it owned. */
+export interface NavigationEntry {
+  route: ShellRoute;
+  params: RouteParams;
+  scrollTop: number;
+}
+
+export interface ScrollRestoreRequest {
+  nonce: number;
+  top: number;
+}
+
 const NO_PARAMS: RouteParams = {
   albumId: null,
   artistId: null,
@@ -68,6 +80,12 @@ interface UiState {
   ambientIntensity: AmbientIntensity;
   /** Palette key currently driving the shell (`null` = neutral). */
   paletteKey: string | null;
+  /** In-memory return stack; intentionally never persisted. */
+  history: NavigationEntry[];
+  scrollRestore: ScrollRestoreRequest | null;
+  navigationNonce: number;
+  /** Full rail visibility, distinct from the existing narrow/expanded mode. */
+  sidebarHidden: boolean;
 
   /* ------------------------------------------------------------ appearance */
   accentSource: AccentSource;
@@ -89,12 +107,15 @@ interface UiState {
 
   /* ------------------------------------------------------------ navigation */
   toggleSidebar: () => void;
+  toggleSidebarHidden: () => void;
+  setSidebarHidden: (hidden: boolean) => void;
   navigate: (route: ShellRoute, params?: Partial<RouteParams>) => void;
   openAlbum: (albumId: string) => void;
   openArtist: (artistId: string) => void;
   openCollection: (collection: AlbumCollection | null, genre?: string) => void;
   openPlaylist: (playlistId: string) => void;
   setRoute: (route: ShellRoute) => void;
+  toggleSettings: () => void;
   back: () => void;
 
   setMeasuredEffects: (effects: ResolvedEffects) => void;
@@ -134,7 +155,7 @@ const DEFAULT_APPEARANCE: AppearanceState = {
   ambientIntensity: "full",
   showRailArrows: true,
   showHomeStats: true,
-  showSpectrum: true,
+  showSpectrum: false,
   effects: "auto",
 };
 
@@ -155,8 +176,12 @@ export const useUiStore = create<UiState>()(
   persist(
     (set, get) => ({
       sidebarCollapsed: false,
+      sidebarHidden: false,
       route: "home",
       params: { ...NO_PARAMS },
+      history: [],
+      scrollRestore: null,
+      navigationNonce: 0,
       paletteKey: null,
       measuredEffects: null,
       ...DEFAULT_APPEARANCE,
@@ -179,54 +204,84 @@ export const useUiStore = create<UiState>()(
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed }));
       },
 
+      toggleSidebarHidden: () => {
+        set((state) => ({ sidebarHidden: !state.sidebarHidden }));
+      },
+
+      setSidebarHidden: (sidebarHidden) => {
+        set({ sidebarHidden });
+      },
+
       navigate: (route, params) => {
-        set((state) => ({
-          route,
-          params: {
-            albumId: params?.albumId ?? null,
-            artistId: params?.artistId ?? null,
-            collection: params?.collection ?? null,
-            genre: params?.genre ?? null,
-            playlistId: params?.playlistId ?? null,
-          },
-          ...(route === "home" ? { paletteKey: state.paletteKey } : {}),
-        }));
+        set((state) => go(state, route, routeParams(params)));
       },
 
       openAlbum: (albumId) => {
-        set({ route: "album", params: { ...NO_PARAMS, albumId } });
+        set((state) => go(state, "album", { ...NO_PARAMS, albumId }));
       },
 
       openArtist: (artistId) => {
-        set({ route: "artist", params: { ...NO_PARAMS, artistId } });
+        set((state) => go(state, "artist", { ...NO_PARAMS, artistId }));
       },
 
       openCollection: (collection, genre) => {
-        set({
-          route: "collection",
-          params: { ...NO_PARAMS, collection, genre: genre ?? null },
-        });
+        set((state) =>
+          go(state, "collection", {
+            ...NO_PARAMS,
+            collection,
+            genre: genre ?? null,
+          }),
+        );
       },
 
       openPlaylist: (playlistId) => {
-        set({ route: "playlist", params: { ...NO_PARAMS, playlistId } });
+        set((state) => go(state, "playlist", { ...NO_PARAMS, playlistId }));
       },
 
       setRoute: (route) => {
-        set({ route, params: { ...NO_PARAMS } });
+        set((state) => go(state, route, { ...NO_PARAMS }));
+      },
+
+      toggleSettings: () => {
+        if (get().route === "settings") {
+          get().back();
+        } else {
+          get().setRoute("settings");
+        }
       },
 
       back: () => {
-        // One level only: detail pages go back to the browse surface that owns
-        // them. A full history stack would be a router, and this is not one.
-        const route = get().route;
-        if (route === "album" || route === "artist") {
-          set({ route: "library", params: { ...NO_PARAMS } });
-        } else if (route === "collection") {
-          set({ route: "home", params: { ...NO_PARAMS } });
-        } else if (route === "playlist") {
-          set({ route: "playlists", params: { ...NO_PARAMS } });
-        }
+        set((state) => {
+          const previous = state.history[state.history.length - 1];
+          const nonce = state.navigationNonce + 1;
+          if (previous !== undefined) {
+            return {
+              route: previous.route,
+              params: previous.params,
+              history: state.history.slice(0, -1),
+              navigationNonce: nonce,
+              scrollRestore: { nonce, top: previous.scrollTop },
+            };
+          }
+
+          // Directly opened detail routes still have a sensible fallback.
+          const fallback: Partial<Record<ShellRoute, ShellRoute>> = {
+            album: "library",
+            artist: "library",
+            collection: "home",
+            playlist: "playlists",
+            settings: "home",
+            "now-playing": "home",
+          };
+          const route = fallback[state.route];
+          if (route === undefined) return {};
+          return {
+            route,
+            params: { ...NO_PARAMS },
+            navigationNonce: nonce,
+            scrollRestore: { nonce, top: 0 },
+          };
+        });
       },
 
       setAmbientIntensity: (ambientIntensity) => {
@@ -265,8 +320,11 @@ export const useUiStore = create<UiState>()(
       name: "prism.shell.preferences",
       version: 4,
       storage: createJSONStorage(() => localStorage),
-      partialize: (state): AppearanceState & { sidebarCollapsed: boolean } => ({
+      partialize: (
+        state,
+      ): AppearanceState & { sidebarCollapsed: boolean; sidebarHidden: boolean } => ({
         sidebarCollapsed: state.sidebarCollapsed,
+        sidebarHidden: state.sidebarHidden,
         accentSource: state.accentSource,
         accentColor: state.accentColor,
         glassOpacity: state.glassOpacity,
@@ -295,6 +353,42 @@ export const useUiStore = create<UiState>()(
     },
   ),
 );
+
+function routeParams(params?: Partial<RouteParams>): RouteParams {
+  return {
+    albumId: params?.albumId ?? null,
+    artistId: params?.artistId ?? null,
+    collection: params?.collection ?? null,
+    genre: params?.genre ?? null,
+    playlistId: params?.playlistId ?? null,
+  };
+}
+
+function locationKey(route: ShellRoute, params: RouteParams): string {
+  return `${route}:${params.albumId ?? ""}:${params.artistId ?? ""}:${params.collection ?? ""}:${params.genre ?? ""}:${params.playlistId ?? ""}`;
+}
+
+/** Navigate forward while remembering exactly where the current view was. */
+function go(state: UiState, route: ShellRoute, params: RouteParams): Partial<UiState> {
+  if (locationKey(state.route, state.params) === locationKey(route, params)) {
+    return { route, params, scrollRestore: null };
+  }
+  const scroller =
+    typeof document === "undefined"
+      ? null
+      : document.querySelector<HTMLElement>("[data-prism-scroll]");
+  const current: NavigationEntry = {
+    route: state.route,
+    params: state.params,
+    scrollTop: scroller?.scrollTop ?? 0,
+  };
+  return {
+    route,
+    params,
+    history: [...state.history, current].slice(-50),
+    scrollRestore: null,
+  };
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));

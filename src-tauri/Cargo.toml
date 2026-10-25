@@ -89,6 +89,7 @@ wasmtime = { workspace = true, optional = true }
 # --- Platform backends ------------------------------------------------------------------
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true
+url.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa.workspace = true

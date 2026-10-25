@@ -11,6 +11,10 @@ interface PlaylistStore {
   notice: string | null;
   load: () => Promise<void>;
   create: (name: string) => Promise<PlaylistRow | null>;
+  update: (
+    id: string,
+    metadata: { name: string; description: string | null; genre: string | null },
+  ) => Promise<PlaylistRow | null>;
   addTracks: (playlistId: string, trackIds: string[]) => Promise<boolean>;
   removeTrack: (playlistId: string, trackId: string) => Promise<boolean>;
   setCustomCover: (playlistId: string, path: string) => Promise<PlaylistRow | null>;
@@ -55,6 +59,23 @@ export const usePlaylistStore = create<PlaylistStore>()((set) => ({
       return playlist;
     } catch (cause) {
       set({ error: message(cause, "The playlist could not be created") });
+      return null;
+    }
+  },
+
+  update: async (id, metadata) => {
+    try {
+      const updated = await playlistApi.update(id, metadata);
+      useDockStore.getState().updatePlaylist(updated);
+      set((state) => ({
+        playlists: ordered(
+          state.playlists.map((playlist) => (playlist.id === updated.id ? updated : playlist)),
+        ),
+        error: null,
+      }));
+      return updated;
+    } catch (cause) {
+      set({ error: message(cause, "The playlist could not be updated") });
       return null;
     }
   },

@@ -1,38 +1,31 @@
 import { AudioWaveform } from "lucide-react";
 import type { JSX } from "react";
 
+import { ArtworkModule } from "@/components/nowplaying/ArtworkModule";
+import { NowPlayingControls } from "@/components/nowplaying/NowPlayingControls";
 import { NowPlayingDeck } from "@/components/nowplaying/NowPlayingDeck";
 import { QualityBadge } from "@/components/player/QualityBadge";
-import { formatPosition } from "@/lib/format";
-import {
-  durationMs as resolveDuration,
-  EMPTY_STATUS,
-  playheadMs,
-  usePlaybackStore,
-} from "@/stores/playbackStore";
+import { EMPTY_STATUS, usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore } from "@/stores/uiStore";
 
-const FALLBACK = "—";
-
 /**
- * Full-window now-playing surface.
+ * Bounded full-window Now Playing surface.
  *
- * The header states what is playing and how it is being delivered. Below it,
- * one fixed deck keeps artwork, lyrics and spectrum together; an empty lyric
- * result gives its space to the spectrum rather than showing a vacant panel.
+ * Metadata, uncovered artwork and the complete transport share the left half;
+ * lyrics/spectrum occupy the symmetric right half. Nothing in this route grows
+ * with lyric length or playhead updates, and the route itself never scrolls.
  */
 export function NowPlayingView(): JSX.Element {
   const status = usePlaybackStore((state) => state.status);
-  const tick = usePlaybackStore((state) => state.tick);
   const queue = usePlaybackStore((state) => state.queue);
   const index = usePlaybackStore((state) => state.index);
-  const setRoute = useUiStore((state) => state.setRoute);
+  const back = useUiStore((state) => state.back);
   const track = status?.track ?? null;
   const trackId = track?.trackId ?? null;
 
   if (track === null) {
     return (
-      <div className="mx-auto flex w-full max-w-[1420px] flex-col items-center justify-center px-8 py-28 text-center">
+      <div className="flex h-full flex-col items-center justify-center overflow-hidden px-8 text-center">
         <div className="grid h-20 w-20 place-items-center rounded-full border border-white/[0.08] bg-white/[0.03]">
           <AudioWaveform className="h-7 w-7 text-white/25" aria-hidden="true" strokeWidth={1.4} />
         </div>
@@ -44,28 +37,26 @@ export function NowPlayingView(): JSX.Element {
         </p>
         <button
           type="button"
-          onClick={() => {
-            setRoute("home");
-          }}
+          onClick={back}
           className="accent-soft-text mt-5 text-[12.5px] underline-offset-4 hover:underline"
         >
-          Back to Home
+          Back
         </button>
       </div>
     );
   }
 
-  const position = playheadMs(status, tick);
-  const duration = resolveDuration(status, tick);
-  const queuePosition =
-    queue.length > 0 ? `${String(index + 1)} / ${String(queue.length)}` : FALLBACK;
   const entry = queue.find((item) => item.trackId === trackId) ?? queue[index] ?? null;
+  const queuePosition = queue.length > 0 ? `${String(index + 1)} / ${String(queue.length)}` : null;
 
   return (
-    <div className="mx-auto w-full max-w-[1420px] px-8 pt-10 pb-12">
-      <header className="flex flex-wrap items-end justify-between gap-6">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
+    <div
+      data-now-playing
+      className="mx-auto grid h-full min-h-0 w-full max-w-[1500px] grid-cols-2 gap-8 overflow-hidden px-8 py-6"
+    >
+      <div data-now-playing-primary className="flex min-h-0 flex-col">
+        <header className="shrink-0">
+          <div className="flex h-6 items-center gap-2">
             <QualityBadge status={status ?? EMPTY_STATUS} track={entry?.catalogue ?? null} />
             {status?.dop === true ? (
               <span className="rounded-full border border-spectrum-violet/30 bg-spectrum-violet/[0.10] px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em] text-spectrum-violet uppercase">
@@ -77,37 +68,37 @@ export function NowPlayingView(): JSX.Element {
                 Buffering
               </span>
             ) : null}
+            {queuePosition !== null ? (
+              <span className="tabular ml-auto text-[11px] text-white/25">{queuePosition}</span>
+            ) : null}
           </div>
-
-          <h1 className="mt-4 max-w-2xl text-[34px] leading-[1.08] font-semibold tracking-[-0.035em] text-balance text-white">
+          <h1 className="mt-2 truncate text-[30px] leading-[1.12] font-semibold tracking-[-0.035em] text-white">
             {track.title}
           </h1>
-          <p className="mt-2 text-[15px] text-white/55">
+          <p data-selectable="artist" className="mt-1 truncate text-[14px] text-white/55">
             {track.artist.length > 0 ? track.artist : "Unknown artist"}
           </p>
           {track.album.length > 0 ? (
-            <p className="mt-0.5 text-[13px] text-white/30">{track.album}</p>
+            <p data-selectable="album" className="mt-0.5 truncate text-[12.5px] text-white/30">
+              {track.album}
+            </p>
           ) : null}
+        </header>
+
+        <div className="my-4 flex min-h-0 flex-1 items-center justify-center overflow-hidden">
+          <ArtworkModule
+            trackId={trackId}
+            album={track.album}
+            artist={track.artist}
+            title={track.title}
+          />
         </div>
 
-        <div className="flex items-baseline gap-2">
-          <span className="tabular text-[13px] text-white/70">{formatPosition(position)}</span>
-          <span className="text-[13px] text-white/20">/</span>
-          <span className="tabular text-[13px] text-white/35">
-            {duration === null ? FALLBACK : formatPosition(duration)}
-          </span>
-          <span className="ml-3 text-[11px] text-white/25">{queuePosition}</span>
-        </div>
-      </header>
+        <NowPlayingControls />
+      </div>
 
-      <div className="mt-8">
-        <NowPlayingDeck
-          status={status}
-          trackId={trackId}
-          album={track.album}
-          artist={track.artist}
-          title={track.title}
-        />
+      <div data-now-playing-secondary className="h-full min-h-0">
+        <NowPlayingDeck status={status} trackId={trackId} />
       </div>
     </div>
   );

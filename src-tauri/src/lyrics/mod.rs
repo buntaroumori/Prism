@@ -16,10 +16,11 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use lofty::file::TaggedFileExt;
 use lofty::tag::ItemKey;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 
 use crate::error::PrismError;
@@ -27,6 +28,31 @@ use crate::error::PrismError;
 /// Longest accepted lyric body (a 20-minute prog epic fits in a few kilobytes;
 /// anything larger is a mistake or an attack on the cache).
 pub const MAX_LYRICS_BYTES: usize = 512 * 1024;
+const LRCLIB_GET: &str = "https://lrclib.net/api/get";
+const LRCLIB_SEARCH: &str = "https://lrclib.net/api/search";
+const LRCLIB_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The subset of LRCLIB's record contract consumed by Prism. Unknown fields
+/// are intentionally ignored so the provider can add metadata without breaking
+/// playback; every lyric body still passes through the strict local parser.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LrclibRecord {
+    id: i64,
+    track_name: String,
+    artist_name: String,
+    album_name: Option<String>,
+    duration: Option<f64>,
+    instrumental: Option<bool>,
+    plain_lyrics: Option<String>,
+    synced_lyrics: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExternalLyrics {
+    body: String,
+    source_url: String,
+}
 
 /// One timed line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -42,7 +68,7 @@ pub struct LyricLine {
 #[serde(rename_all = "camelCase")]
 pub struct LyricsDocument {
     pub track_id: String,
-    /// `embedded`, `sidecar` or `none`.
+    /// `embedded`, `sidecar`, `lrclib` or `none`.
     pub provider: String,
     /// True when `lines` carry usable timestamps.
     pub synced: bool,
@@ -243,6 +269,7 @@ pub fn parse_plain(input: &str) -> Vec<LyricLine> {
 pub enum LyricsSource {
     Embedded,
     Sidecar,
+    Lrclib,
 }
 
 impl LyricsSource {
@@ -251,6 +278,7 @@ impl LyricsSource {
         match self {
             Self::Embedded => "embedded",
             Self::Sidecar => "sidecar",
+            Self::Lrclib => "lrclib",
         }
     }
 }
@@ -306,6 +334,175 @@ pub fn sidecar_lyrics(path: &Path) -> Option<(PathBuf, String)> {
     None
 }
 
+/// Resolve a local miss against LRCLIB, first by exact metadata and then by a
+/// tightly validated search. No API key is required and no request is made when
+/// embedded or sidecar lyrics exist.
+async fn fetch_lrclib(
+    title: &str,
+    artist: &str,
+    album: &str,
+    duration_ms: i64,
+) -> Option<ExternalLyrics> {
+    if title.trim().is_empty() || artist.trim().is_empty() {
+        return None;
+    }
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("Prism/", env!("CARGO_PKG_VERSION")))
+        .timeout(LRCLIB_TIMEOUT)
+        .build()
+        .map_err(|error| {
+            tracing::debug!(%error, "cannot construct LRCLIB client");
+            error
+        })
+        .ok()?;
+
+    let mut exact = vec![
+        ("track_name", title.to_string()),
+        ("artist_name", artist.to_string()),
+    ];
+    if !album.trim().is_empty() {
+        exact.push(("album_name", album.to_string()));
+    }
+    if duration_ms > 0 {
+        exact.push(("duration", ((duration_ms + 500) / 1_000).to_string()));
+    }
+
+    let response = client
+        .get(LRCLIB_GET)
+        .query(&exact)
+        .send()
+        .await
+        .map_err(|error| {
+            tracing::debug!(%error, "LRCLIB exact lookup failed");
+            error
+        })
+        .ok()?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return search_lrclib(&client, title, artist, album, duration_ms).await;
+    }
+    if !response.status().is_success() {
+        tracing::debug!(status = %response.status(), "LRCLIB exact lookup rejected");
+        return None;
+    }
+    match response.json::<LrclibRecord>().await {
+        Ok(record) => external_from_record(&record),
+        Err(error) => {
+            tracing::debug!(%error, "LRCLIB returned an invalid exact record");
+            None
+        }
+    }
+}
+
+async fn search_lrclib(
+    client: &reqwest::Client,
+    title: &str,
+    artist: &str,
+    album: &str,
+    duration_ms: i64,
+) -> Option<ExternalLyrics> {
+    let response = client
+        .get(LRCLIB_SEARCH)
+        .query(&[("track_name", title), ("artist_name", artist)])
+        .send()
+        .await
+        .map_err(|error| {
+            tracing::debug!(%error, "LRCLIB search failed");
+            error
+        })
+        .ok()?;
+    if !response.status().is_success() {
+        tracing::debug!(status = %response.status(), "LRCLIB search rejected");
+        return None;
+    }
+    let mut records = match response.json::<Vec<LrclibRecord>>().await {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::debug!(%error, "LRCLIB returned an invalid search response");
+            return None;
+        }
+    };
+    records.retain(|record| {
+        record.track_name.trim().to_lowercase() == title.trim().to_lowercase()
+            && record.artist_name.trim().to_lowercase() == artist.trim().to_lowercase()
+            && duration_matches(record.duration, duration_ms)
+            && (record
+                .synced_lyrics
+                .as_deref()
+                .is_some_and(|body| !body.trim().is_empty())
+                || record
+                    .plain_lyrics
+                    .as_deref()
+                    .is_some_and(|body| !body.trim().is_empty()))
+    });
+    records.sort_by(|left, right| {
+        search_rank(left, album, duration_ms).cmp(&search_rank(right, album, duration_ms))
+    });
+    records.first().and_then(external_from_record)
+}
+
+/// Reject a different edit of the song. Unknown durations remain eligible but
+/// sort after a close, known match.
+fn duration_matches(candidate: Option<f64>, local_ms: i64) -> bool {
+    if local_ms <= 0 {
+        return true;
+    }
+    let Some(seconds) = candidate.filter(|value| value.is_finite() && *value > 0.0) else {
+        return true;
+    };
+    ((seconds * 1_000.0) - local_ms as f64).abs() <= 5_000.0
+}
+
+fn search_rank(record: &LrclibRecord, album: &str, local_ms: i64) -> (u8, i64, u8) {
+    let album_mismatch = if album.trim().is_empty()
+        || record
+            .album_name
+            .as_deref()
+            .is_some_and(|candidate| candidate.trim().to_lowercase() == album.trim().to_lowercase())
+    {
+        0
+    } else {
+        1
+    };
+    let distance = record.duration.map_or(i64::MAX / 4, |seconds| {
+        if local_ms <= 0 || !seconds.is_finite() {
+            i64::MAX / 4
+        } else {
+            ((seconds * 1_000.0) - local_ms as f64).abs() as i64
+        }
+    });
+    let unsynced = u8::from(
+        !record
+            .synced_lyrics
+            .as_deref()
+            .is_some_and(|body| parse_lrc(body).is_synced()),
+    );
+    (album_mismatch, distance, unsynced)
+}
+
+fn external_from_record(record: &LrclibRecord) -> Option<ExternalLyrics> {
+    let source_url = format!("https://lrclib.net/api/get/{}", record.id);
+    if let Some(body) = record.synced_lyrics.as_deref().map(str::trim)
+        && body.len() <= MAX_LYRICS_BYTES
+        && parse_lrc(body).is_synced()
+    {
+        return Some(ExternalLyrics {
+            body: body.to_string(),
+            source_url,
+        });
+    }
+    if record.instrumental == Some(true) {
+        return None;
+    }
+    let body = record.plain_lyrics.as_deref().map(str::trim)?;
+    if body.is_empty() || body.len() > MAX_LYRICS_BYTES {
+        return None;
+    }
+    Some(ExternalLyrics {
+        body: body.to_string(),
+        source_url,
+    })
+}
+
 /// Lyrics service: resolution order plus the `lyrics_cache` table.
 #[derive(Debug, Clone)]
 pub struct LyricsService {
@@ -328,13 +525,25 @@ impl LyricsService {
             return Ok(document);
         }
 
-        let row = sqlx::query("SELECT path, title FROM tracks WHERE id = ?1")
-            .bind(track_id)
-            .fetch_optional(&self.pool)
-            .await?
-            .ok_or_else(|| PrismError::invalid("unknown track"))?;
+        let row = sqlx::query(
+            "SELECT path, title, artist_name, album_artist_name, album_title, duration_ms \
+             FROM tracks WHERE id = ?1",
+        )
+        .bind(track_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| PrismError::invalid("unknown track"))?;
         let path: String = row.try_get("path")?;
         let title: String = row.try_get("title")?;
+        let track_artist: String = row.try_get("artist_name")?;
+        let album_artist: String = row.try_get("album_artist_name")?;
+        let album: String = row.try_get("album_title")?;
+        let duration_ms: i64 = row.try_get("duration_ms")?;
+        let artist = if track_artist.trim().is_empty() {
+            album_artist
+        } else {
+            track_artist
+        };
         let path = PathBuf::from(path);
 
         let (source, text, source_path) = if let Some(embedded) = embedded_lyrics(&path) {
@@ -346,7 +555,14 @@ impl LyricsService {
                 Some(sidecar_path.to_string_lossy().into_owned()),
             )
         } else {
-            return Ok(LyricsDocument::empty(track_id));
+            let Some(external) = fetch_lrclib(&title, &artist, &album, duration_ms).await else {
+                return Ok(LyricsDocument::empty(track_id));
+            };
+            (
+                LyricsSource::Lrclib,
+                external.body,
+                Some(external.source_url),
+            )
         };
 
         if text.len() > MAX_LYRICS_BYTES {
@@ -587,5 +803,52 @@ mod tests {
     fn a_document_reports_emptiness() {
         assert!(LyricsDocument::empty("t").is_empty());
         assert_eq!(LyricsDocument::empty("t").provider, "none");
+    }
+
+    fn lrclib_record() -> LrclibRecord {
+        LrclibRecord {
+            id: 42,
+            track_name: "Song".into(),
+            artist_name: "Artist".into(),
+            album_name: Some("Album".into()),
+            duration: Some(180.0),
+            instrumental: Some(false),
+            plain_lyrics: Some("plain words".into()),
+            synced_lyrics: Some("[00:01.00]timed words".into()),
+        }
+    }
+
+    #[test]
+    fn external_records_prefer_real_synchronized_lyrics() {
+        let resolved = external_from_record(&lrclib_record()).expect("synchronized lyrics");
+        assert_eq!(resolved.body, "[00:01.00]timed words");
+        assert!(resolved.source_url.ends_with("/42"));
+
+        let mut malformed = lrclib_record();
+        malformed.synced_lyrics = Some("not timed".into());
+        assert_eq!(
+            external_from_record(&malformed)
+                .expect("plain fallback")
+                .body,
+            "plain words"
+        );
+    }
+
+    #[test]
+    fn external_matching_rejects_a_different_duration() {
+        assert!(duration_matches(Some(180.0), 180_000));
+        assert!(duration_matches(Some(184.9), 180_000));
+        assert!(!duration_matches(Some(185.1), 180_000));
+        assert!(duration_matches(None, 180_000));
+        assert!(duration_matches(Some(999.0), 0));
+    }
+
+    #[test]
+    fn instrumental_records_do_not_fabricate_a_lyric_sheet() {
+        let mut record = lrclib_record();
+        record.synced_lyrics = None;
+        record.plain_lyrics = None;
+        record.instrumental = Some(true);
+        assert!(external_from_record(&record).is_none());
     }
 }

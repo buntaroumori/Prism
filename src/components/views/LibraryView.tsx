@@ -1,8 +1,18 @@
-import { ArrowDown, ArrowLeft, ArrowUp, Image as ImageIcon, LayoutGrid, X } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  ChevronLeft,
+  ChevronRight,
+  Image as ImageIcon,
+  LayoutGrid,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 
 import { AlbumCard } from "@/components/library/AlbumCard";
-import { formatCount } from "@/lib/format";
+import { PopoverSelect } from "@/components/ui/PopoverSelect";
+import { formatAlbumCount, formatCount } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
 import { useBrowseStore, type AlbumSortField } from "@/stores/browseStore";
 import { useLibraryStore } from "@/stores/libraryStore";
@@ -55,8 +65,12 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
   const playTracks = usePlaybackStore((state) => state.playTracks);
   const storedSort = useBrowseStore((state) => state.sort);
   const storedGenre = useBrowseStore((state) => state.genre);
+  const decade = useBrowseStore((state) => state.decade);
+  const year = useBrowseStore((state) => state.year);
   const cycleStoredSort = useBrowseStore((state) => state.cycleSort);
   const setStoredGenre = useBrowseStore((state) => state.setGenre);
+  const setDecade = useBrowseStore((state) => state.setDecade);
+  const setYear = useBrowseStore((state) => state.setYear);
 
   const curated = collection !== null || genre !== null;
   const [collectionSort, setCollectionSort] = useState<AlbumSort | null>(null);
@@ -71,6 +85,10 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
 
   const sort = curated ? collectionSort : storedSort;
   const activeGenre = curated ? genre : storedGenre;
+  const activeDecade = curated ? null : decade;
+  const activeYear = curated ? null : year;
+  const yearFrom = activeYear ?? activeDecade;
+  const yearTo = activeYear ?? (activeDecade === null ? null : activeDecade + 9);
   const libraryVersion = stats?.trackCount ?? 0;
 
   useEffect(() => {
@@ -96,7 +114,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
     setAlbums([]);
     setOffset(0);
     setLoading(true);
-  }, [query, sort, activeGenre, collection, libraryVersion]);
+  }, [query, sort, activeGenre, yearFrom, yearTo, collection, libraryVersion]);
 
   useEffect(() => {
     let active = true;
@@ -104,6 +122,8 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
       .albums({
         ...(query.length > 0 ? { text: query } : {}),
         ...(activeGenre !== null ? { genre: activeGenre } : {}),
+        ...(yearFrom !== null ? { yearFrom } : {}),
+        ...(yearTo !== null ? { yearTo } : {}),
         ...(collection !== null ? { collection } : {}),
         ...(sort !== null ? { sort } : {}),
         limit: PAGE_SIZE,
@@ -137,7 +157,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
     return () => {
       active = false;
     };
-  }, [query, sort, activeGenre, collection, offset, libraryVersion]);
+  }, [query, sort, activeGenre, yearFrom, yearTo, collection, offset, libraryVersion]);
 
   useEffect(() => {
     const node = sentinel.current;
@@ -161,6 +181,8 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
   const libraryContinuation = {
     ...(query.length > 0 ? { text: query } : {}),
     ...(activeGenre !== null ? { genre: activeGenre } : {}),
+    ...(yearFrom !== null ? { yearFrom } : {}),
+    ...(yearTo !== null ? { yearTo } : {}),
     ...(collection !== null ? { collection } : {}),
     ...(sort !== null ? { sort } : {}),
   } satisfies Omit<LibraryContinuation, "currentAlbumId">;
@@ -194,6 +216,16 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
         : { title: "Library", caption: "" }
     : null;
 
+  const decadeValues = (facets?.decades ?? [])
+    .map((facet) => Number.parseInt(facet.value, 10))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  const decadeIndex = activeDecade === null ? -1 : decadeValues.indexOf(activeDecade);
+  const yearsInDecade = (facets?.years ?? []).filter((facet) => {
+    const value = Number(facet.value);
+    return activeDecade !== null && value >= activeDecade && value <= activeDecade + 9;
+  });
+
   const changeSort = (field: AlbumSortField): void => {
     if (curated) {
       setCollectionSort((current) => nextSort(current, field));
@@ -211,7 +243,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
           className="mb-5 flex items-center gap-1.5 text-[11.5px] text-white/40 transition-colors hover:text-white"
         >
           <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-          Home
+          Back
         </button>
       ) : null}
 
@@ -276,41 +308,120 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
         </div>
 
         {!curated ? (
-          <label className="flex items-center gap-2 text-[11px] text-white/40">
-            Genre
-            <select
-              aria-label="Filter by genre"
+          <div className="flex flex-wrap items-center gap-2">
+            <PopoverSelect
+              ariaLabel="Filter by genre"
               value={storedGenre ?? ""}
-              onChange={(event) => {
-                setStoredGenre(event.target.value || null);
+              onChange={(value) => {
+                setStoredGenre(value || null);
               }}
-              className="h-8 max-w-[220px] rounded-lg border border-white/10 bg-oled-850 px-2.5 text-[11.5px] text-white/75"
-            >
-              <option value="">All genres</option>
-              {facets?.genres.map((facet) => (
-                <option key={facet.value} value={facet.value}>
-                  {facet.value} ({formatCount(facet.count)})
-                </option>
-              ))}
-              {storedGenre !== null && !facets?.genres.some((g) => g.value === storedGenre) ? (
-                <option value={storedGenre}>{storedGenre}</option>
-              ) : null}
-            </select>
-            {storedGenre !== null ? (
-              <button
-                type="button"
-                aria-label="Clear genre filter"
-                onClick={() => {
-                  setStoredGenre(null);
-                }}
-                className="grid h-7 w-7 place-items-center rounded-full text-white/35 hover:bg-white/[0.06] hover:text-white"
-              >
-                <X className="h-3.5 w-3.5" aria-hidden="true" />
-              </button>
-            ) : null}
-          </label>
+              options={[
+                { value: "", label: "All genres" },
+                ...(facets?.genres.map((facet) => ({
+                  value: facet.value,
+                  label: `${facet.value} (${formatAlbumCount(facet.count)})`,
+                })) ?? []),
+                ...(storedGenre !== null && !facets?.genres.some((g) => g.value === storedGenre)
+                  ? [{ value: storedGenre, label: storedGenre }]
+                  : []),
+              ]}
+              buttonClassName="w-[220px]"
+              menuClassName="w-[280px]"
+            />
+            <PopoverSelect
+              ariaLabel="Filter by decade"
+              value={activeDecade === null ? "" : String(activeDecade)}
+              onChange={(value) => {
+                setDecade(value.length === 0 ? null : Number(value));
+              }}
+              options={[
+                { value: "", label: "All decades" },
+                ...(facets?.decades.map((facet) => {
+                  const start = Number.parseInt(facet.value, 10);
+                  return {
+                    value: String(start),
+                    label: `${String(start)}s (${formatAlbumCount(facet.count)})`,
+                  };
+                }) ?? []),
+              ]}
+              buttonClassName="w-[190px]"
+              menuClassName="w-[230px]"
+            />
+          </div>
         ) : null}
       </div>
+
+      {activeDecade !== null ? (
+        <div
+          aria-label="Filter by year"
+          className="mt-3 flex flex-wrap items-center gap-1.5 rounded-2xl border border-white/[0.055] bg-white/[0.015] px-2 py-2"
+        >
+          <button
+            type="button"
+            aria-label="Previous decade"
+            title="Previous decade"
+            disabled={decadeIndex <= 0}
+            onClick={() => {
+              const previous = decadeValues[decadeIndex - 1];
+              if (previous !== undefined) setDecade(previous);
+            }}
+            className="grid h-7 w-7 place-items-center rounded-full text-white/45 transition-colors hover:bg-white/[0.07] hover:text-white disabled:opacity-20 disabled:hover:bg-transparent"
+          >
+            <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+          </button>
+          <span className="px-1 text-[10px] font-semibold tracking-[0.12em] text-white/30 uppercase">
+            {activeDecade}s
+          </span>
+          <span className="mx-1 h-4 w-px bg-white/[0.07]" aria-hidden="true" />
+          <button
+            type="button"
+            aria-pressed={activeYear === null}
+            onClick={() => {
+              setYear(null);
+            }}
+            className={
+              activeYear === null
+                ? "h-7 rounded-full bg-accent/[0.14] px-2.5 text-[11px] font-medium text-accent"
+                : "h-7 rounded-full px-2.5 text-[11px] text-white/45 hover:bg-white/[0.06] hover:text-white"
+            }
+          >
+            All years
+          </button>
+          {yearsInDecade.map((facet) => {
+            const value = Number(facet.value);
+            return (
+              <button
+                key={facet.value}
+                type="button"
+                aria-pressed={activeYear === value}
+                onClick={() => {
+                  setYear(activeYear === value ? null : value);
+                }}
+                className={
+                  activeYear === value
+                    ? "h-7 rounded-full bg-accent/[0.14] px-2.5 text-[11px] font-medium text-accent"
+                    : "h-7 rounded-full px-2.5 text-[11px] text-white/45 hover:bg-white/[0.06] hover:text-white"
+                }
+              >
+                {facet.value}
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            aria-label="Next decade"
+            title="Next decade"
+            disabled={decadeIndex < 0 || decadeIndex >= decadeValues.length - 1}
+            onClick={() => {
+              const next = decadeValues[decadeIndex + 1];
+              if (next !== undefined) setDecade(next);
+            }}
+            className="ml-auto grid h-7 w-7 place-items-center rounded-full text-white/45 transition-colors hover:bg-white/[0.07] hover:text-white disabled:opacity-20 disabled:hover:bg-transparent"
+          >
+            <ChevronRight className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
 
       {error !== null ? (
         <p role="alert" className="mt-4 text-[12px] text-critical">
@@ -322,8 +433,8 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
         <div className="mt-10 rounded-2xl border border-dashed border-white/[0.09] px-6 py-14 text-center">
           <p className="text-[13px] font-medium text-white/55">No albums to show</p>
           <p className="mx-auto mt-1 max-w-md text-[11.5px] leading-relaxed text-white/30">
-            {query.length > 0 || activeGenre !== null
-              ? "Try another search or clear the genre filter."
+            {query.length > 0 || activeGenre !== null || activeDecade !== null
+              ? "Try another search or clear the genre and decade filters."
               : "Add a music folder in Settings and run a scan."}
           </p>
         </div>

@@ -98,7 +98,7 @@ export function ArtistView({ artistId }: { artistId: string }): JSX.Element {
         className="mb-5 flex items-center gap-1.5 text-[11.5px] text-white/40 transition-colors hover:text-white"
       >
         <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-        Library
+        Back
       </button>
 
       <header className="flex flex-col gap-6 sm:flex-row sm:items-end">
@@ -112,7 +112,10 @@ export function ArtistView({ artistId }: { artistId: string }): JSX.Element {
           <p className="text-[10px] font-semibold tracking-[0.2em] text-white/30 uppercase">
             Artist
           </p>
-          <h1 className="mt-2 text-[32px] leading-[1.05] font-semibold tracking-[-0.035em] text-balance text-white">
+          <h1
+            data-selectable="artist"
+            className="mt-2 text-[32px] leading-[1.05] font-semibold tracking-[-0.035em] text-balance text-white"
+          >
             {artist.name}
           </h1>
           <p className="tabular mt-2 text-[12px] text-white/35">

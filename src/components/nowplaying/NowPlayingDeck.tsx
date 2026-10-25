@@ -1,6 +1,6 @@
+import { Activity } from "lucide-react";
 import type { JSX } from "react";
 
-import { ArtworkModule } from "@/components/nowplaying/ArtworkModule";
 import { SpectrumModule } from "@/components/nowplaying/SpectrumModule";
 import { LyricsPanel } from "@/components/player/LyricsPanel";
 import { useLyrics } from "@/hooks/useLyrics";
@@ -11,67 +11,67 @@ import type { PlayerStatus } from "@/types/ipc";
 interface NowPlayingDeckProps {
   status: PlayerStatus | null;
   trackId: string | null;
-  album: string;
-  artist: string;
-  title: string;
 }
 
 /**
- * The single Now Playing layout: artwork on the left, lyrics and spectrum on
- * the right. A track without lyrics does not leave an empty panel behind; the
- * spectrum expands into the complete secondary column instead.
+ * Symmetric secondary region for Now Playing.
+ *
+ * Lyrics own the region when they exist. The spectrum is opt-in alongside
+ * them, and becomes the sole panel automatically when resolution produced no
+ * lyric document. Both children are bounded; only the lyric sheet scrolls.
  */
-export function NowPlayingDeck({
-  status,
-  trackId,
-  album,
-  artist,
-  title,
-}: NowPlayingDeckProps): JSX.Element {
+export function NowPlayingDeck({ status, trackId }: NowPlayingDeckProps): JSX.Element {
   const lyrics = useLyrics(trackId);
   const showSpectrum = useUiStore((state) => state.showSpectrum);
+  const setAppearance = useUiStore((state) => state.setAppearance);
   const hasLyrics =
     lyrics.document !== null &&
     (lyrics.document.lines.length > 0 || lyrics.document.plainText.trim().length > 0);
-  // Loading and read errors still need their real state and retry control. A
-  // successfully resolved empty document is the only state that hides lyrics.
+  // Preserve genuine loading/error states instead of flashing the spectrum on
+  // every track change or disguising a read failure as an empty result.
   const showLyrics = hasLyrics || lyrics.loading || lyrics.error !== null;
-  const hasSecondaryColumn = showLyrics || showSpectrum;
+  const spectrumVisible = !showLyrics || showSpectrum;
 
   return (
-    <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-12">
-      <section
-        aria-label="Current album artwork"
-        className={cn(
-          "min-w-0 rounded-3xl border border-white/[0.05] bg-white/[0.015] p-5",
-          hasSecondaryColumn ? "lg:col-span-7" : "lg:col-span-12",
-        )}
-      >
-        <div className="flex h-full items-center justify-center">
-          <ArtworkModule trackId={trackId} album={album} artist={artist} title={title} />
-        </div>
-      </section>
-
-      {hasSecondaryColumn ? (
-        <div className="flex min-h-[520px] min-w-0 flex-col gap-5 lg:col-span-5">
-          {showLyrics ? (
-            <section
-              aria-label="Lyrics"
-              className={cn("min-h-[320px]", showSpectrum ? "flex-1" : "h-full")}
-            >
-              <LyricsPanel lyrics={lyrics} />
-            </section>
-          ) : null}
-          {showSpectrum ? (
-            <section
-              aria-label="Spectrum"
-              className={showLyrics ? "h-[210px] shrink-0" : "min-h-[520px] flex-1"}
-            >
-              <SpectrumModule sampleRate={status?.sourceFormat?.sampleRate ?? null} />
-            </section>
-          ) : null}
+    <section aria-label="Lyrics and spectrum" className="flex h-full min-h-0 flex-col">
+      {showLyrics ? (
+        <div className="mb-2 flex h-7 shrink-0 items-center justify-end">
+          <button
+            type="button"
+            aria-pressed={showSpectrum}
+            onClick={() => {
+              setAppearance({ showSpectrum: !showSpectrum });
+            }}
+            className={cn(
+              "flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[10.5px] transition-colors",
+              showSpectrum
+                ? "border-accent/30 bg-accent/[0.10] text-accent"
+                : "border-white/[0.07] text-white/35 hover:bg-white/[0.05] hover:text-white/70",
+            )}
+          >
+            <Activity className="h-3.5 w-3.5" aria-hidden="true" />
+            Spectrum
+          </button>
         </div>
       ) : null}
-    </div>
+
+      <div
+        className={cn(
+          "grid min-h-0 flex-1 gap-4",
+          showLyrics && spectrumVisible && "grid-rows-[minmax(0,1fr)_190px]",
+        )}
+      >
+        {showLyrics ? (
+          <div className="min-h-0">
+            <LyricsPanel lyrics={lyrics} />
+          </div>
+        ) : null}
+        {spectrumVisible ? (
+          <div className="min-h-0">
+            <SpectrumModule sampleRate={status?.sourceFormat?.sampleRate ?? null} />
+          </div>
+        ) : null}
+      </div>
+    </section>
   );
 }

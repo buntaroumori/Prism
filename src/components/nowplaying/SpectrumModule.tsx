@@ -28,7 +28,11 @@ export function SpectrumModule({ sampleRate }: { sampleRate: number | null }): J
   }, []);
 
   return (
-    <div className="flex h-full flex-col rounded-3xl border border-white/[0.06] bg-white/[0.02] p-5 backdrop-blur-xl">
+    <div
+      role="region"
+      aria-label="Spectrum"
+      className="flex h-full flex-col rounded-3xl border border-white/[0.06] bg-white/[0.02] p-5 backdrop-blur-xl"
+    >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity className="h-3.5 w-3.5 text-accent-soft" aria-hidden="true" />

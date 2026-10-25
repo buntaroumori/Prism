@@ -209,6 +209,7 @@ function DockRow({ item, collapsed }: { item: DockItem; collapsed: boolean }): J
         {!collapsed ? (
           <span className="min-w-0 flex-1">
             <span
+              data-selectable={album !== null ? "album" : undefined}
               className={cn(
                 "block truncate text-[11.5px]",
                 active ? "text-accent" : "text-white/75",

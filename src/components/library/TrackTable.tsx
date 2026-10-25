@@ -47,6 +47,9 @@ export function TrackTable({
   }, []);
 
   const groups = useMemo(() => {
+    if (playlistId !== undefined) {
+      return [[1, tracks.map((track, index) => ({ track, index }))] as const];
+    }
     const result = new Map<number, { track: TrackRow; index: number }[]>();
     tracks.forEach((track, index) => {
       const disc = track.discNo ?? 1;
@@ -55,9 +58,9 @@ export function TrackTable({
       result.set(disc, group);
     });
     return [...result.entries()].sort(([a], [b]) => a - b);
-  }, [tracks]);
+  }, [playlistId, tracks]);
 
-  const showDiscs = discCount > 1 || groups.length > 1;
+  const showDiscs = playlistId === undefined && (discCount > 1 || groups.length > 1);
 
   return (
     <div className={cn(showDiscs && "space-y-7")}>
@@ -107,7 +110,9 @@ export function TrackTable({
                         aria-hidden="true"
                       />
                     ) : (
-                      String(track.trackNo ?? index + 1).padStart(2, "0")
+                      String(
+                        playlistId === undefined ? (track.trackNo ?? index + 1) : index + 1,
+                      ).padStart(2, "0")
                     )}
                   </span>
 

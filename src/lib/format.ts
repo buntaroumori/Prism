@@ -41,6 +41,11 @@ export function formatCount(value: number): string {
   return value >= 10_000 ? compactNumber.format(value) : integerNumber.format(value);
 }
 
+/** Facet counts describe records, never the number of tracks behind them. */
+export function formatAlbumCount(value: number): string {
+  return `${formatCount(value)} ${value === 1 ? "album" : "albums"}`;
+}
+
 /** Milliseconds → `1h 02m`, `4m 12s`, `8.4s`. */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) {

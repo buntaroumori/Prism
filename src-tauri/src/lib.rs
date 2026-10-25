@@ -18,6 +18,7 @@ pub mod discord;
 pub mod error;
 pub mod logging;
 pub mod lyrics;
+pub mod media;
 pub mod metadata;
 pub mod palette;
 pub mod plugins;
@@ -332,6 +333,22 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             // The window is created hidden (`visible = false`) to avoid the
             // white flash before React paints the OLED background.
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(windows)]
+                {
+                    if let Some(state) = app.try_state::<AppState>() {
+                        let engine = std::sync::Arc::clone(state.engine());
+                        drop(state);
+                        match media::windows::MediaControls::initialize(&handle, &window, engine) {
+                            Ok(media) => {
+                                app.manage(media);
+                                media::windows::spawn(&handle);
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "Windows media integration is unavailable");
+                            }
+                        }
+                    }
+                }
                 window.show()?;
                 window.set_focus()?;
             }
@@ -360,6 +377,7 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::library::library_note_play,
             commands::playlists::playlist_list,
             commands::playlists::playlist_create,
+            commands::playlists::playlist_update,
             commands::playlists::playlist_add_tracks,
             commands::playlists::playlist_detail,
             commands::playlists::playlist_remove_track,

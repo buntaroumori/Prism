@@ -31,6 +31,16 @@ export function useDesktopControls(): void {
         event.stopPropagation();
         return;
       }
+      const target = event.target as HTMLElement | null;
+      const editable =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target?.isContentEditable === true;
+      // Select-all belongs to the field when a caret is inside one. Everywhere
+      // else the desktop restriction remains intact.
+      if ((event.ctrlKey || event.metaKey) && key === "a" && editable) {
+        return;
+      }
       if (
         (event.ctrlKey || event.metaKey) &&
         (BLOCKED_CTRL_KEYS.has(key) || (event.shiftKey && ["i", "j", "c"].includes(key)))

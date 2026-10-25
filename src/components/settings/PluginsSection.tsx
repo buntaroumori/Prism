@@ -3,6 +3,7 @@ import { useEffect, useState, type JSX, type ReactNode } from "react";
 import { Cpu, FolderOpen, Puzzle, RefreshCw, ShieldCheck, TriangleAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/Button";
+import { PopoverSelect } from "@/components/ui/PopoverSelect";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { hasBackend } from "@/lib/cover";
 import { toUiError } from "@/lib/errors";
@@ -388,21 +389,15 @@ function SettingControl({
           />
         </button>
       ) : setting.type === "select" ? (
-        <select
+        <PopoverSelect
           value={String(setting.value)}
           disabled={disabled}
-          aria-label={setting.label}
-          onChange={(event) => {
-            onChange(event.target.value);
-          }}
-          className="h-8 rounded-lg border border-white/10 bg-oled-900 px-2 text-[11.5px] text-white/75 focus:border-accent/40 focus:outline-none"
-        >
-          {setting.options.map((option) => (
-            <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
-        </select>
+          ariaLabel={setting.label}
+          onChange={onChange}
+          options={setting.options.map((option) => ({ value: option, label: option }))}
+          buttonClassName="min-w-[140px]"
+          menuClassName="min-w-[180px]"
+        />
       ) : setting.type === "string" ? (
         <input
           value={draft}

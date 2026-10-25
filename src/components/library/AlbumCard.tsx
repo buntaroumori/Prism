@@ -106,6 +106,7 @@ export function AlbumCard({
           onClick={() => {
             openAlbum(album.id);
           }}
+          data-selectable="album"
           className="block w-full truncate text-left text-[12.5px] font-medium tracking-tight text-white/90 hover:text-white hover:underline hover:decoration-white/30 hover:underline-offset-2"
           title={album.title}
         >
@@ -119,6 +120,7 @@ export function AlbumCard({
             }
           }}
           disabled={album.artistId === null}
+          data-selectable="artist"
           className="block w-full truncate text-left text-[11px] text-white/40 hover:text-white/75 hover:underline hover:decoration-white/25 hover:underline-offset-2 disabled:hover:text-white/40 disabled:hover:no-underline"
           title={album.albumArtist}
         >

@@ -1,9 +1,10 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState, type JSX } from "react";
-import { ListMusic, Maximize2 } from "lucide-react";
+import { ListMusic, Maximize2, Mic2 } from "lucide-react";
 
 import { CoverArt } from "@/components/ui/CoverArt";
 import { QualityBadge } from "@/components/player/QualityBadge";
+import { LyricsSheet } from "@/components/player/LyricsSheet";
 import { QueuePanel } from "@/components/player/QueuePanel";
 import { Scrubber } from "@/components/player/Scrubber";
 import { TransportControls } from "@/components/player/TransportControls";
@@ -48,6 +49,9 @@ export function PlayerBar(): JSX.Element {
   const previewVolumeDb = usePlaybackStore((state) => state.previewVolumeDb);
   const setMuted = usePlaybackStore((state) => state.setMuted);
   const setRoute = useUiStore((state) => state.setRoute);
+  const route = useUiStore((state) => state.route);
+  const sidebarHidden = useUiStore((state) => state.sidebarHidden);
+  const toggleSidebarHidden = useUiStore((state) => state.toggleSidebarHidden);
   const openAlbum = useUiStore((state) => state.openAlbum);
   const openArtist = useUiStore((state) => state.openArtist);
   const openAt = useContextMenuStore((state) => state.openAt);
@@ -55,7 +59,15 @@ export function PlayerBar(): JSX.Element {
   const [coverPath, setCoverPath] = useState<string | null>(null);
   const [coverThumbnailPath, setCoverThumbnailPath] = useState<string | null>(null);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
   const trackId = status?.track?.trackId ?? null;
+
+  useEffect(() => {
+    if (route === "now-playing") {
+      setQueueOpen(false);
+      setLyricsOpen(false);
+    }
+  }, [route]);
 
   // Cover lookup is keyed by track id, not by the whole snapshot: a volume
   // change must not re-query the artwork service.
@@ -194,6 +206,7 @@ export function PlayerBar(): JSX.Element {
                       openArtist(artistId);
                     }
                   }}
+                  data-selectable="artist"
                   className="block max-w-full truncate text-left text-[11.5px] text-white/45 focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none enabled:hover:text-white/70 enabled:hover:underline enabled:hover:decoration-white/20 enabled:hover:underline-offset-2 disabled:cursor-default"
                   aria-label={artistId === null ? undefined : `Open ${artist}`}
                 >
@@ -219,6 +232,8 @@ export function PlayerBar(): JSX.Element {
                 canSkip={canSkip}
                 busy={busy}
                 shuffled={shuffled}
+                sidebarHidden={sidebarHidden}
+                onToggleSidebar={toggleSidebarHidden}
                 onToggleShuffle={() => {
                   void toggleShuffle();
                 }}
@@ -253,6 +268,7 @@ export function PlayerBar(): JSX.Element {
                 aria-expanded={queueOpen}
                 title="Queue"
                 onClick={() => {
+                  setLyricsOpen(false);
                   setQueueOpen((open) => !open);
                 }}
                 className={
@@ -262,6 +278,24 @@ export function PlayerBar(): JSX.Element {
                 }
               >
                 <ListMusic className="h-[18px] w-[18px]" aria-hidden="true" />
+              </button>
+
+              <button
+                type="button"
+                aria-label={lyricsOpen ? "Hide synchronized lyrics" : "Show synchronized lyrics"}
+                aria-expanded={lyricsOpen}
+                title="Synchronized lyrics"
+                onClick={() => {
+                  setQueueOpen(false);
+                  setLyricsOpen((open) => !open);
+                }}
+                className={
+                  lyricsOpen
+                    ? "grid h-9 w-9 place-items-center rounded-full bg-accent/[0.14] text-accent"
+                    : "grid h-9 w-9 place-items-center rounded-full text-white/45 transition-colors hover:bg-white/[0.07] hover:text-white"
+                }
+              >
+                <Mic2 className="h-[18px] w-[18px]" aria-hidden="true" />
               </button>
 
               <VolumeControl
@@ -285,6 +319,16 @@ export function PlayerBar(): JSX.Element {
               <QueuePanel
                 onClose={() => {
                   setQueueOpen(false);
+                }}
+              />
+            ) : null}
+          </AnimatePresence>
+          <AnimatePresence>
+            {lyricsOpen ? (
+              <LyricsSheet
+                trackId={trackId}
+                onClose={() => {
+                  setLyricsOpen(false);
                 }}
               />
             ) : null}

@@ -32,25 +32,29 @@ designed for local music libraries, precise format handling and a configurable l
 
 - Incremental scanning with per-file error isolation and cooperative cancellation.
 - Album, artist, genre and multi-disc browsing with persistent sorting and filters, including
-  complete-release-date Year ordering.
+  complete-release-date Year ordering and dynamic decade/year filters based on available albums.
 - Full-text search with diacritic folding and grouped track, album and artist results.
 - Album pages with full release dates, genres, disc-aware tracklists and adjacent Play actions.
-- User playlists with explicit ordering, duplicate protection and custom covers chosen through a
-  native file picker.
-- Embedded and folder artwork, with optional online artwork providers and deduplicated master and
-  thumbnail caches.
+- User playlists with explicit ordering, duplicate protection, optional descriptions and genres,
+  and custom covers chosen through a native file picker.
+- Embedded and folder artwork, with optional online artwork providers, deduplicated master and
+  thumbnail caches, and background upgrades for missing thumbnails.
 - Home collections for recent additions, listening history, releases, genres and rediscovery.
 
 ### Interface and integration
 
 - Home, Library, Playlists, album, artist and Now Playing views.
-- One Now Playing layout with artwork and lyrics; Spectrum takes the lyrics panel's place when no
-  lyrics are available.
-- A reorderable Dock for pinned albums and playlists in expanded and collapsed sidebars.
+- A fixed Now Playing deck with aligned artwork, embedded transport controls and local or LRCLIB
+  lyrics with synchronized highlighting. Spectrum can accompany lyrics or take their panel when no
+  lyrics exist, and a microphone control opens a centered lyrics sheet.
+- A reorderable Dock for pinned albums and playlists in expanded and collapsed sidebars. The
+  sidebar can also be hidden and revealed from the left edge.
 - Persistent appearance, playback, browsing, Dock and window preferences.
-- A unified Settings view, including System information, opened from the top bar. Borderless
-  windows provide integrated fullscreen and minimize, maximize and close controls.
-- Application context menus and desktop-oriented track interactions.
+- A unified Settings view, including System information, opened from the draggable top bar.
+  Borderless windows provide integrated fullscreen and minimize, maximize and close controls;
+  Back and Settings navigation restore the previous route and scroll position.
+- Application context menus, Prism-styled selectors and desktop-oriented track interactions.
+- Windows system media controls with song metadata, artwork, seeking and native media-key support.
 - Optional Discord Rich Presence with configurable paused activity. A local album/artist artwork
   mapping accepts public HTTPS URLs without uploading local or embedded images.
 - Optional Lua and WebAssembly plugin runtimes with declared capabilities and resource limits.

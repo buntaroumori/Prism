@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { useEffect, type CSSProperties, type JSX } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type JSX } from "react";
 import { Info, TriangleAlert, X } from "lucide-react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
@@ -67,6 +67,10 @@ export function AppShell(): JSX.Element {
 
   const route = useUiStore((state) => state.route);
   const params = useUiStore((state) => state.params);
+  const sidebarHidden = useUiStore((state) => state.sidebarHidden);
+  const scrollRestore = useUiStore((state) => state.scrollRestore);
+  const mainRef = useRef<HTMLElement | null>(null);
+  const [sidebarPeek, setSidebarPeek] = useState(false);
   const intensity = useUiStore((state) => state.ambientIntensity);
   const accentSource = useUiStore((state) => state.accentSource);
   const accentColor = useUiStore((state) => state.accentColor);
@@ -86,6 +90,33 @@ export function AppShell(): JSX.Element {
   const artist = usePlaybackStore((state) => state.status?.track?.artist ?? null);
   const coverKey = useAlbumCoverKey(album, trackId, artist);
   const palette = useArtworkPalette(accentSource === "artwork" ? coverKey : null);
+  useEffect(() => {
+    setSidebarPeek(false);
+  }, [route, sidebarHidden]);
+
+  useEffect(() => {
+    if (scrollRestore === null) return;
+    let frame = 0;
+    let attempts = 0;
+    const timer = window.setTimeout(() => {
+      const restore = (): void => {
+        const scroller = mainRef.current;
+        if (scroller === null) return;
+        scroller.scrollTop = scrollRestore.top;
+        attempts += 1;
+        const reached = Math.abs(scroller.scrollTop - scrollRestore.top) <= 1;
+        const hasRoom = scroller.scrollHeight - scroller.clientHeight >= scrollRestore.top - 1;
+        if (reached || hasRoom || attempts >= 180) return;
+        frame = window.requestAnimationFrame(restore);
+      };
+      frame = window.requestAnimationFrame(restore);
+    }, 200);
+    return () => {
+      window.clearTimeout(timer);
+      window.cancelAnimationFrame(frame);
+    };
+  }, [scrollRestore]);
+
   const tokens = paletteTokens(palette, {
     accentSource,
     accentColor,
@@ -111,12 +142,41 @@ export function AppShell(): JSX.Element {
         reduced={resolvedEffects === "reduced"}
       />
 
-      <Sidebar />
+      {!sidebarHidden ? <Sidebar /> : null}
+      {sidebarHidden ? (
+        <div
+          className="fixed inset-y-0 left-0 z-[60] w-3"
+          onPointerEnter={() => {
+            setSidebarPeek(true);
+          }}
+          onPointerLeave={() => {
+            setSidebarPeek(false);
+          }}
+        >
+          <div
+            aria-hidden="true"
+            className="absolute inset-y-0 left-0 w-[2px] bg-accent/25 opacity-60"
+          />
+          {sidebarPeek ? (
+            <div className="absolute inset-y-0 left-0 shadow-[24px_0_70px_-30px_rgb(0_0_0/0.95)]">
+              <Sidebar />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="relative z-10 flex min-w-0 flex-1 flex-col">
         <TopBar />
 
-        <main className="relative min-h-0 flex-1 overflow-y-auto">
+        <main
+          ref={mainRef}
+          data-prism-scroll
+          className={
+            route === "now-playing"
+              ? "relative flex min-h-0 flex-1 flex-col overflow-hidden"
+              : "relative flex min-h-0 flex-1 flex-col overflow-y-auto"
+          }
+        >
           {(libraryError !== null || playbackError !== null) && (
             <div className="mx-auto w-full max-w-[1420px] px-8 pt-4">
               {[libraryError, playbackError].map((failure, index) =>
@@ -180,7 +240,9 @@ export function AppShell(): JSX.Element {
           <PageTransition route={route} params={params} />
         </main>
 
-        <PlayerBar />
+        <div className={route === "now-playing" ? "hidden" : "contents"}>
+          <PlayerBar />
+        </div>
       </div>
 
       <ContextMenuHost />
@@ -213,7 +275,7 @@ function PageTransition({
         animate={{ opacity: 1, y: 0 }}
         exit={reduce === true ? { opacity: 1, y: 0 } : { opacity: 0, y: -6 }}
         transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-        className="min-h-full"
+        className={route === "now-playing" ? "min-h-0 w-full flex-1" : "min-h-full w-full"}
       >
         {route === "home" ? <HomeView /> : null}
         {route === "library" ? <LibraryView /> : null}

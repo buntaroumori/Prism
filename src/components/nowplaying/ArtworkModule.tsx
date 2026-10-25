@@ -45,7 +45,10 @@ export function ArtworkModule({ trackId, album, artist, title }: ArtworkModulePr
   }, [trackId, artist, album]);
 
   return (
-    <div className="relative mx-auto w-full max-w-[540px] self-center">
+    <div
+      data-now-playing-artwork
+      className="relative mx-auto aspect-square h-full max-h-full w-auto max-w-full self-center"
+    >
       <div
         aria-hidden="true"
         className="absolute inset-6 rounded-full opacity-50 blur-[90px]"
@@ -58,12 +61,12 @@ export function ArtworkModule({ trackId, album, artist, title }: ArtworkModulePr
           animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
           exit={{ opacity: 0, scale: 1.015, filter: "blur(8px)" }}
           transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-          className="relative"
+          className="relative h-full w-full"
         >
           <CoverArt
             path={asset?.localPath ?? null}
             alt={album.length > 0 ? album : title}
-            className="aspect-square w-full rounded-[26px] shadow-[0_50px_120px_-60px_rgb(0_0_0/0.95)]"
+            className="h-full w-full rounded-[26px] shadow-[0_50px_120px_-60px_rgb(0_0_0/0.95)]"
             rounded="rounded-[26px]"
             fallbackClassName="h-16 w-16"
           />

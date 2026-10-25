@@ -46,6 +46,14 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Text is selectable only where it is useful metadata or editable input. */
+  :where(input, textarea, [contenteditable="true"], [data-selectable]) {
+    -webkit-user-select: text;
+    user-select: text;
   }
 
   ::selection {

@@ -1,4 +1,16 @@
-import { Disc3, ImagePlus, Info, ListPlus, Pin, PinOff, Play, Plus, Trash2, X } from "lucide-react";
+import {
+  Disc3,
+  ImagePlus,
+  Info,
+  ListPlus,
+  Pencil,
+  Pin,
+  PinOff,
+  Play,
+  Plus,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   useEffect,
   useLayoutEffect,
@@ -12,6 +24,7 @@ import { createPortal } from "react-dom";
 
 import { CoverArt } from "@/components/ui/CoverArt";
 import { Button } from "@/components/ui/Button";
+import { PlaylistEditorDialog } from "@/components/playlists/PlaylistEditorDialog";
 import { formatCount, formatLibraryDuration } from "@/lib/format";
 import { formatReleaseDate, sourceLabel } from "@/lib/sourceLabel";
 import { libraryApi } from "@/lib/ipc";
@@ -71,6 +84,7 @@ export function ContextMenuHost(): JSX.Element {
   const [creatingName, setCreatingName] = useState("");
   const [creatingBusy, setCreatingBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<PlaylistRow | null>(null);
+  const [renaming, setRenaming] = useState<PlaylistRow | null>(null);
   const create = usePlaylistStore((state) => state.create);
 
   useLayoutEffect(() => {
@@ -234,13 +248,6 @@ export function ContextMenuHost(): JSX.Element {
                 }}
               />
               <MenuItem
-                icon={Info}
-                label="Album details"
-                onClick={() => {
-                  showDetails(target.album);
-                }}
-              />
-              <MenuItem
                 icon={
                   target.kind === "dock-album" ||
                   dockItems.some(
@@ -267,6 +274,13 @@ export function ContextMenuHost(): JSX.Element {
                     pinAlbum(target.album);
                   }
                   close();
+                }}
+              />
+              <MenuItem
+                icon={Info}
+                label="Album details"
+                onClick={() => {
+                  showDetails(target.album);
                 }}
               />
             </>
@@ -410,6 +424,14 @@ export function ContextMenuHost(): JSX.Element {
                 }}
               />
               <MenuItem
+                icon={Pencil}
+                label="Rename playlist"
+                onClick={() => {
+                  setRenaming(target.playlist);
+                  close();
+                }}
+              />
+              <MenuItem
                 icon={ImagePlus}
                 label="Change cover"
                 onClick={() => {
@@ -482,10 +504,15 @@ export function ContextMenuHost(): JSX.Element {
                 <p className="text-[10px] font-semibold tracking-[0.16em] text-white/30 uppercase">
                   Album details
                 </p>
-                <h2 className="mt-1 text-[21px] leading-tight font-semibold text-white">
+                <h2
+                  data-selectable="album"
+                  className="mt-1 text-[21px] leading-tight font-semibold text-white"
+                >
                   {detailsAlbum.title}
                 </h2>
-                <p className="mt-1 text-[12.5px] text-white/45">{detailsAlbum.albumArtist}</p>
+                <p data-selectable="artist" className="mt-1 text-[12.5px] text-white/45">
+                  {detailsAlbum.albumArtist}
+                </p>
               </div>
             </div>
             <button
@@ -509,8 +536,12 @@ export function ContextMenuHost(): JSX.Element {
             <p className="mt-6 text-[12px] text-white/35">Reading details…</p>
           ) : (
             <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
-              <Detail label="Artist Name" value={details.album.albumArtist || "Unknown artist"} />
-              <Detail label="Album Title" value={details.album.title} />
+              <Detail
+                label="Artist Name"
+                value={details.album.albumArtist || "Unknown artist"}
+                selectable="artist"
+              />
+              <Detail label="Album Title" value={details.album.title} selectable="album" />
               <Detail
                 label="Date"
                 value={formatReleaseDate(details.album.releaseDate, details.album.year)}
@@ -592,6 +623,16 @@ export function ContextMenuHost(): JSX.Element {
             </div>
           </form>
         </Dialog>
+      ) : null}
+
+      {renaming !== null ? (
+        <PlaylistEditorDialog
+          playlist={renaming}
+          titleOnly
+          onClose={() => {
+            setRenaming(null);
+          }}
+        />
       ) : null}
 
       {confirmDelete !== null ? (
@@ -740,18 +781,25 @@ function Detail({
   value,
   wide = false,
   valueClassName = "text-white/75",
+  selectable,
 }: {
   label: string;
   value: string;
   wide?: boolean;
   valueClassName?: string;
+  selectable?: "album" | "artist";
 }) {
   return (
     <div className={wide ? "col-span-2 sm:col-span-3" : ""}>
       <dt className="text-[9.5px] font-semibold tracking-[0.14em] text-white/25 uppercase">
         {label}
       </dt>
-      <dd className={`mt-1 text-[12.5px] break-words ${valueClassName}`}>{value}</dd>
+      <dd
+        data-selectable={selectable}
+        className={`mt-1 text-[12.5px] break-words ${valueClassName}`}
+      >
+        {value}
+      </dd>
     </div>
   );
 }

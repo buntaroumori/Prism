@@ -9,6 +9,7 @@ import { formatReleaseDate, sourceLabel } from "@/lib/sourceLabel";
 import { cn } from "@/lib/utils";
 import { libraryApi } from "@/lib/ipc";
 import { useDockStore } from "@/stores/dockStore";
+import { useBrowseStore } from "@/stores/browseStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { AlbumDetail } from "@/types/ipc";
@@ -16,7 +17,10 @@ import type { AlbumDetail } from "@/types/ipc";
 /** One record, ordered by disc and track number with a section per disc. */
 export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
   const back = useUiStore((state) => state.back);
+  const navigate = useUiStore((state) => state.navigate);
   const openArtist = useUiStore((state) => state.openArtist);
+  const setGenre = useBrowseStore((state) => state.setGenre);
+  const setDecade = useBrowseStore((state) => state.setDecade);
   const playTracks = usePlaybackStore((state) => state.playTracks);
   const shuffleActive = usePlaybackStore((state) => state.shuffleSnapshot !== null);
   const [detail, setDetail] = useState<AlbumDetail | null>(null);
@@ -96,7 +100,7 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
         className="mb-5 flex items-center gap-1.5 text-[11.5px] text-white/40 transition-colors hover:text-white"
       >
         <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-        Library
+        Back
       </button>
 
       <header className="flex flex-col gap-6 sm:flex-row sm:items-end">
@@ -111,7 +115,10 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
           <p className="text-[10px] font-semibold tracking-[0.2em] text-white/30 uppercase">
             {album.releaseType ?? "Album"}
           </p>
-          <h1 className="mt-2 text-[32px] leading-[1.08] font-semibold tracking-[-0.035em] text-balance text-white">
+          <h1
+            data-selectable="album"
+            className="mt-2 text-[32px] leading-[1.08] font-semibold tracking-[-0.035em] text-balance text-white"
+          >
             {album.title}
           </h1>
           <p className="mt-2.5 text-[13px] text-white/50">
@@ -124,7 +131,18 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
             )}
           </p>
           {album.genre !== null ? (
-            <p className="mt-1 text-[11.5px] text-white/35">{album.genre}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setDecade(null);
+                setGenre(album.genre);
+                navigate("library");
+              }}
+              aria-label={`Show ${album.genre} albums in Library`}
+              className="mt-1 block text-[11.5px] text-white/35 transition-colors hover:text-accent hover:underline hover:underline-offset-2"
+            >
+              {album.genre}
+            </button>
           ) : null}
           <p className="tabular mt-1 text-[11.5px] text-white/30">
             {formatCount(album.trackCount)} tracks · {formatLibraryDuration(album.durationMs)} ·{" "}
@@ -193,11 +211,16 @@ export function ArtistLink({
 }): JSX.Element {
   const label = name.length > 0 ? name : "Unknown artist";
   if (id === null) {
-    return <span className={className}>{label}</span>;
+    return (
+      <span data-selectable="artist" className={className}>
+        {label}
+      </span>
+    );
   }
   return (
     <button
       type="button"
+      data-selectable="artist"
       onClick={() => {
         onOpen(id);
       }}

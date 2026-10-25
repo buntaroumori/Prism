@@ -642,7 +642,19 @@ pub async fn albums(
     limit: u32,
     offset: u32,
 ) -> Result<Page<AlbumRow>, PrismError> {
-    albums_filtered(pool, text, artist_id, None, None, Some(sort), limit, offset).await
+    albums_filtered(
+        pool,
+        text,
+        artist_id,
+        None,
+        None,
+        None,
+        None,
+        Some(sort),
+        limit,
+        offset,
+    )
+    .await
 }
 
 /// Browse albums with a genre or a Home collection applied.
@@ -656,6 +668,8 @@ pub async fn albums_filtered(
     text: Option<&str>,
     artist_id: Option<&str>,
     genre: Option<&str>,
+    year_from: Option<i64>,
+    year_to: Option<i64>,
     collection: Option<AlbumCollection>,
     sort: Option<AlbumSort>,
     limit: u32,
@@ -665,7 +679,9 @@ pub async fn albums_filtered(
     let offset = offset.min(5_000_000);
 
     let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM v_album_summary WHERE 1 = 1");
-    push_album_filters(&mut count, text, artist_id, genre, collection);
+    push_album_filters(
+        &mut count, text, artist_id, genre, year_from, year_to, collection,
+    );
     let total: i64 = count.build_query_scalar().fetch_one(pool).await?;
 
     let order = sort.map_or_else(
@@ -680,7 +696,15 @@ pub async fn albums_filtered(
     let mut builder = QueryBuilder::<Sqlite>::new(format!(
         "SELECT {ALBUM_COLUMNS} FROM v_album_summary WHERE 1 = 1"
     ));
-    push_album_filters(&mut builder, text, artist_id, genre, collection);
+    push_album_filters(
+        &mut builder,
+        text,
+        artist_id,
+        genre,
+        year_from,
+        year_to,
+        collection,
+    );
     builder
         .push(" ORDER BY ")
         .push(order)
@@ -707,6 +731,8 @@ fn push_album_filters(
     text: Option<&str>,
     artist_id: Option<&str>,
     genre: Option<&str>,
+    year_from: Option<i64>,
+    year_to: Option<i64>,
     collection: Option<AlbumCollection>,
 ) {
     if let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) {
@@ -733,6 +759,12 @@ fn push_album_filters(
             )
             .push_bind(genre.to_string())
             .push(" COLLATE NOCASE)");
+    }
+    if let Some(year) = year_from {
+        builder.push(" AND year >= ").push_bind(year);
+    }
+    if let Some(year) = year_to {
+        builder.push(" AND year <= ").push_bind(year);
     }
     if let Some(collection) = collection {
         builder
@@ -1049,13 +1081,14 @@ pub struct Facets {
     pub genres: Vec<Facet>,
     pub formats: Vec<Facet>,
     pub decades: Vec<Facet>,
+    pub years: Vec<Facet>,
 }
 
 /// Compute the filter-rail facets in three indexed group-bys.
 pub async fn facets(pool: &SqlitePool) -> Result<Facets, PrismError> {
     let genres = sqlx::query(
-        "SELECT genre AS value, COUNT(*) AS count FROM tracks \
-         WHERE missing = 0 AND trim(genre) <> '' \
+        "SELECT genre AS value, COUNT(DISTINCT album_id) AS count FROM tracks \
+         WHERE missing = 0 AND album_id IS NOT NULL AND trim(genre) <> '' \
          GROUP BY genre COLLATE NOCASE ORDER BY count DESC, value COLLATE NOCASE ASC LIMIT 64",
     )
     .fetch_all(pool)
@@ -1086,8 +1119,10 @@ pub async fn facets(pool: &SqlitePool) -> Result<Facets, PrismError> {
     .collect::<Result<Vec<_>, sqlx::Error>>()?;
 
     let decades = sqlx::query(
-        "SELECT (year / 10) * 10 AS value, COUNT(*) AS count FROM tracks \
-         WHERE missing = 0 AND year IS NOT NULL GROUP BY value ORDER BY value ASC",
+        "SELECT (year / 10) * 10 AS value, COUNT(*) AS count FROM albums AS al \
+         WHERE year IS NOT NULL AND EXISTS ( \
+             SELECT 1 FROM tracks AS t WHERE t.album_id = al.id AND t.missing = 0 \
+         ) GROUP BY value ORDER BY value ASC",
     )
     .fetch_all(pool)
     .await?
@@ -1100,10 +1135,28 @@ pub async fn facets(pool: &SqlitePool) -> Result<Facets, PrismError> {
     })
     .collect::<Result<Vec<_>, sqlx::Error>>()?;
 
+    let years = sqlx::query(
+        "SELECT year AS value, COUNT(*) AS count FROM albums AS al \
+         WHERE year IS NOT NULL AND EXISTS ( \
+             SELECT 1 FROM tracks AS t WHERE t.album_id = al.id AND t.missing = 0 \
+         ) GROUP BY year ORDER BY year ASC",
+    )
+    .fetch_all(pool)
+    .await?
+    .iter()
+    .map(|row| {
+        Ok(Facet {
+            value: row.try_get::<i64, _>("value")?.to_string(),
+            count: row.try_get("count")?,
+        })
+    })
+    .collect::<Result<Vec<_>, sqlx::Error>>()?;
+
     Ok(Facets {
         genres,
         formats,
         decades,
+        years,
     })
 }
 

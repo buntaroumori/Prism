@@ -122,7 +122,7 @@ export function LyricsPanel({
         <Frame className={className}>
           <div
             ref={containerRef}
-            className="h-full scrollbar-thin overflow-y-auto px-1 py-2"
+            className="min-h-0 flex-1 scrollbar-thin overflow-y-auto px-1 py-2"
             onWheel={suspendFollow}
           >
             <p className="mb-3 text-[10px] font-medium tracking-[0.16em] text-white/25 uppercase">
@@ -146,7 +146,7 @@ export function LyricsPanel({
       <Frame className={className}>
         <EmptyState
           title="No lyrics for this track"
-          body="Prism reads an embedded USLT frame first, then a .lrc file beside the audio file. Add one and refresh."
+          body="Prism checks embedded lyrics, a sidecar .lrc file, then LRCLIB. Add a local file or refresh to try again."
           onRefresh={refresh}
         />
       </Frame>
@@ -155,7 +155,7 @@ export function LyricsPanel({
 
   return (
     <Frame className={className}>
-      <div className="flex items-center justify-between px-1 pb-2">
+      <div className="flex shrink-0 items-center justify-between px-1 pb-2">
         <p className="text-[10px] font-medium tracking-[0.16em] text-white/25 uppercase">
           {document.synced ? "Synced" : "Plain"} · {document.provider}
           {document.language !== null ? ` · ${document.language}` : ""}
@@ -163,7 +163,7 @@ export function LyricsPanel({
         <button
           type="button"
           onClick={refresh}
-          aria-label="Re-read lyrics from disk"
+          aria-label="Refresh lyrics"
           className="grid h-6 w-6 place-items-center rounded-full text-white/25 transition-colors hover:bg-white/[0.06] hover:text-white/70"
         >
           <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
@@ -174,7 +174,7 @@ export function LyricsPanel({
         ref={containerRef}
         onWheel={suspendFollow}
         onTouchMove={suspendFollow}
-        className="relative h-full scrollbar-thin overflow-y-auto pr-2 pb-16"
+        className="relative min-h-0 flex-1 scrollbar-thin overflow-y-auto pr-2 pb-16"
       >
         {document.offsetMs !== 0 ? (
           <p className="mb-2 text-[10px] text-white/20">
@@ -188,6 +188,7 @@ export function LyricsPanel({
           return (
             <p
               key={`${String(line.timeMs)}-${String(lineIndex)}`}
+              aria-current={isActive ? "true" : undefined}
               ref={(element) => {
                 if (element === null) {
                   lineRefs.current.delete(lineIndex);
@@ -230,8 +231,10 @@ function Frame({
 }): JSX.Element {
   return (
     <div
+      role="region"
+      aria-label="Lyrics"
       className={cn(
-        "relative h-full overflow-hidden rounded-3xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-xl",
+        "relative flex h-full flex-col overflow-hidden rounded-3xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-xl",
         className,
       )}
     >

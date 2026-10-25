@@ -11,7 +11,7 @@ breaking changes to the plugin API, IPC contract or supported data formats requi
 version. Minor and patch releases preserve compatibility within their major version line.
 
 Database migrations are forward-only. A release must be able to open databases written by supported
-earlier releases. Prism 1.0.0 includes the migration path for existing 0.1.x catalogues.
+earlier releases. Prism 1.1.0 retains the migration path for existing 0.1.x and 1.0.x catalogues.
 
 ## Version carriers
 

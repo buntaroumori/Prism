@@ -57,6 +57,8 @@ export interface LibraryContinuation {
   text?: string;
   artistId?: string;
   genre?: string;
+  yearFrom?: number;
+  yearTo?: number;
   collection?: AlbumCollection;
   sort?: AlbumSort;
 }
@@ -656,6 +658,8 @@ export const usePlaybackStore = create<PlaybackStore>()((set, get) => ({
         ...(continuation.text !== undefined ? { text: continuation.text } : {}),
         ...(continuation.artistId !== undefined ? { artistId: continuation.artistId } : {}),
         ...(continuation.genre !== undefined ? { genre: continuation.genre } : {}),
+        ...(continuation.yearFrom !== undefined ? { yearFrom: continuation.yearFrom } : {}),
+        ...(continuation.yearTo !== undefined ? { yearTo: continuation.yearTo } : {}),
         ...(continuation.collection !== undefined ? { collection: continuation.collection } : {}),
         sort: continuation.sort ?? ("artist" as const),
       };

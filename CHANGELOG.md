@@ -6,6 +6,46 @@ Notable user-visible changes are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-10-25
+
+### Added
+
+- Dynamic Library decade filtering with ordered year buttons, decade navigation and album-count
+  labels for genre and decade facets.
+- Local-first lyric resolution with LRCLIB lookup, cached plain or synchronized lyrics and real-time
+  line highlighting. The integration does not infer word timing that the source does not provide.
+- A centered synchronized-lyrics sheet opened from the Player Bar microphone control.
+- Windows System Media Transport Controls integration with music metadata, cached artwork,
+  playback position, seeking and native transport or media-key commands.
+- Full playlist editing from the in-page pencil, including an optional description and genre.
+
+### Changed
+
+- Now Playing uses a bounded, non-scrolling two-column deck with metadata above unframed artwork,
+  complete playback controls below it and equally sized lyrics and Spectrum panels. The global
+  Player Bar is hidden only on this route.
+- Spectrum remains optional alongside lyrics and becomes the sole right-hand panel when lyrics are
+  unavailable. The sidebar can be hidden from the transport and revealed from the left edge.
+- Non-interactive Top Bar space drags the desktop window. Genre, output and other remaining native
+  selectors use Prism-styled components.
+- Album genre links open the corresponding Library filter. Detail Back controls and the Settings
+  toggle restore the actual previous route and its scroll position.
+- Artwork views share thumbnail requests and upgrade missing legacy thumbnails in the background;
+  output-device enumeration no longer blocks entry to Settings.
+- Album Details follows Pin Album in context menus. Playlist context rename changes only the title,
+  while playlist rows are numbered independently from stored track metadata.
+- Text selection is limited to album names, artist names and editable content; Ctrl+A remains
+  available inside editable fields.
+
+### Fixed
+
+- Removed avoidable cover-loading and scrolling stalls on Home and Library, and the repeatable delay
+  when opening Settings.
+- Custom playlist-cover imports now use Windows-safe managed filenames instead of playlist ids that
+  contain invalid path characters.
+- Returning from Now Playing restores the global Player Bar immediately without carrying its fixed
+  layout or scrolling constraints into other views.
+
 ## [1.0.0] — 2026-10-23
 
 ### Added
@@ -148,7 +188,8 @@ Notable user-visible changes are recorded here. The format follows
 - Optional Lua and WebAssembly plugin runtimes with capability checks and resource limits.
 - Windows and Linux packaging configuration, dependency licence inventory and release checksums.
 
-[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.1.0
 [1.0.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.0.0
 [0.1.4]: https://github.com/buntaroumori/Prism/releases/tag/v0.1.4
 [0.1.3]: https://github.com/buntaroumori/Prism/releases/tag/v0.1.3

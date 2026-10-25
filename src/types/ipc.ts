@@ -236,6 +236,7 @@ export const FacetsSchema = z.object({
   genres: z.array(FacetSchema),
   formats: z.array(FacetSchema),
   decades: z.array(FacetSchema),
+  years: z.array(FacetSchema),
 });
 export type Facets = z.infer<typeof FacetsSchema>;
 
@@ -275,6 +276,7 @@ export const PlaylistRowSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   description: z.string().nullable(),
+  genre: z.string().nullable(),
   kind: z.enum(["static", "smart"]),
   createdAt: z.string().min(1),
   updatedAt: z.string().min(1),
@@ -537,6 +539,10 @@ export const PlayerTickSchema = z.object({
 });
 export type PlayerTick = z.infer<typeof PlayerTickSchema>;
 
+/** Queue-aware commands emitted by native operating-system media controls. */
+export const SystemMediaCommandSchema = z.enum(["next", "previous"]);
+export type SystemMediaCommand = z.infer<typeof SystemMediaCommandSchema>;
+
 /** One output endpoint reported by `player_devices`. */
 export const OutputDeviceSchema = z.object({
   id: z.string().min(1),
@@ -638,13 +644,14 @@ export type LyricLine = z.infer<typeof LyricLineSchema>;
 /**
  * Resolved lyrics for a track.
  *
- * `provider` is `embedded`, `sidecar` or `none`. `synced` is true only when the
- * timestamps are usable, which is what decides between a karaoke panel and a
- * static lyric sheet. `offsetMs` is the file's global shift, already applied.
+ * `provider` is `embedded`, `sidecar`, `lrclib` or `none`. `synced` is true
+ * only when line timestamps are usable, which decides between a karaoke panel
+ * and a static lyric sheet. `offsetMs` is the source's global shift, already
+ * applied. LRCLIB supplies line-level timing; no word-level timing is implied.
  */
 export const LyricsDocumentSchema = z.object({
   trackId: z.string().min(1),
-  provider: z.enum(["embedded", "sidecar", "none"]),
+  provider: z.enum(["embedded", "sidecar", "lrclib", "none"]),
   synced: z.boolean(),
   language: z.string().nullable(),
   offsetMs: z.number().int(),

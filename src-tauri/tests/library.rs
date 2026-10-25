@@ -1148,6 +1148,8 @@ async fn home_see_all_queries_match_their_shelves_and_rediscover_reacts_to_plays
         None,
         None,
         None,
+        None,
+        None,
         Some(search::AlbumCollection::RecentReleases),
         None,
         50,
@@ -1170,10 +1172,20 @@ async fn home_see_all_queries_match_their_shelves_and_rediscover_reacts_to_plays
         "Fresh releases means the newest year, not a twelve-year window"
     );
 
-    let electronic =
-        search::albums_filtered(&pool, None, None, Some("Electronic"), None, None, 50, 0)
-            .await
-            .expect("genre collection");
+    let electronic = search::albums_filtered(
+        &pool,
+        None,
+        None,
+        Some("Electronic"),
+        None,
+        None,
+        None,
+        None,
+        50,
+        0,
+    )
+    .await
+    .expect("genre collection");
     let genre = home
         .genres
         .iter()
