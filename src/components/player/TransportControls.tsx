@@ -25,6 +25,7 @@ interface TransportControlsProps {
   onNext: () => void;
   onPrevious: () => void;
   onStop: () => void;
+  compact?: boolean;
 }
 
 /**
@@ -46,20 +47,25 @@ export function TransportControls({
   onNext,
   onPrevious,
   onStop,
+  compact = false,
 }: TransportControlsProps): JSX.Element {
   const playing = state === "playing" || state === "buffering";
   const idle = state === "stopped";
   const label = playing ? "Pause" : state === "paused" ? "Resume" : "Play";
+  const secondarySize = compact ? "h-8 w-8" : "h-9 w-9";
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className={cn("flex items-center", compact ? "gap-0.5" : "gap-1.5")}>
       <button
         type="button"
         onClick={onToggleSidebar}
         aria-label={sidebarHidden ? "Show sidebar" : "Hide sidebar"}
         aria-pressed={sidebarHidden}
         title={sidebarHidden ? "Show sidebar" : "Hide sidebar"}
-        className="grid h-9 w-9 place-items-center rounded-full text-white/40 transition-colors hover:bg-white/[0.07] hover:text-white focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none"
+        className={cn(
+          "grid place-items-center rounded-full text-white/40 transition-colors hover:bg-white/[0.07] hover:text-white focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
+          secondarySize,
+        )}
       >
         {sidebarHidden ? (
           <PanelLeftOpen className="h-[17px] w-[17px]" aria-hidden="true" />
@@ -76,7 +82,9 @@ export function TransportControls({
         aria-pressed={shuffled}
         title={shuffled ? "Restore the original queue order" : "Shuffle the upcoming queue"}
         className={cn(
-          "mr-1 grid h-9 w-9 place-items-center rounded-full transition-colors",
+          "grid place-items-center rounded-full transition-colors",
+          compact ? "mr-0.5" : "mr-1",
+          secondarySize,
           "focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
           "disabled:opacity-30 disabled:hover:bg-transparent",
           shuffled
@@ -93,7 +101,8 @@ export function TransportControls({
         disabled={idle}
         aria-label="Previous track"
         className={cn(
-          "grid h-9 w-9 place-items-center rounded-full text-white/60 transition-colors",
+          "grid place-items-center rounded-full text-white/60 transition-colors",
+          secondarySize,
           "hover:bg-white/[0.07] hover:text-white disabled:opacity-30 disabled:hover:bg-transparent",
           "focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
         )}
@@ -108,7 +117,8 @@ export function TransportControls({
         aria-label={label}
         aria-pressed={playing}
         className={cn(
-          "grid h-11 w-11 place-items-center rounded-full bg-white text-oled-950 transition-transform duration-150",
+          "grid place-items-center rounded-full bg-white text-oled-950 transition-transform duration-150",
+          compact ? "h-9 w-9" : "h-11 w-11",
           "hover:scale-[1.04] active:scale-[0.97] disabled:pointer-events-none disabled:opacity-40",
           "focus-visible:ring-2 focus-visible:ring-white/80 focus-visible:ring-offset-2 focus-visible:ring-offset-oled-950 focus-visible:outline-none",
         )}
@@ -131,7 +141,8 @@ export function TransportControls({
         disabled={!canSkip}
         aria-label="Next track"
         className={cn(
-          "grid h-9 w-9 place-items-center rounded-full text-white/60 transition-colors",
+          "grid place-items-center rounded-full text-white/60 transition-colors",
+          secondarySize,
           "hover:bg-white/[0.07] hover:text-white disabled:opacity-30 disabled:hover:bg-transparent",
           "focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
         )}
@@ -145,7 +156,8 @@ export function TransportControls({
         disabled={idle}
         aria-label="Stop"
         className={cn(
-          "grid h-9 w-9 place-items-center rounded-full text-white/35 transition-colors",
+          "grid place-items-center rounded-full text-white/35 transition-colors",
+          secondarySize,
           "hover:bg-white/[0.07] hover:text-white/80 disabled:pointer-events-none disabled:opacity-0",
           "focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
         )}

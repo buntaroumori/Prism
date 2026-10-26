@@ -271,7 +271,7 @@ function backendFixture() {
   return {
     get_app_info: {
       name: "Prism",
-      version: "1.1.0",
+      version: "1.2.0",
       tauriVersion: "2.11.6",
       targetOs: "linux",
       targetArch: "x86_64",
@@ -343,11 +343,21 @@ function backendFixture() {
       tookMs: 1,
     },
     library_facets: {
-      genres: [{ value: "Electronic", count: 2 }],
+      genres: [
+        { value: "Electronic", count: 2 },
+        ...Array.from({ length: 18 }, (_, index) => ({
+          value: `Fixture genre ${String(index + 1).padStart(2, "0")}`,
+          count: 0,
+        })),
+      ],
       formats: [],
       decades: [
         { value: "2000s", count: 1 },
         { value: "2010s", count: 1 },
+        ...Array.from({ length: 14 }, (_, index) => ({
+          value: `${String(2020 + index * 10)}s`,
+          count: 0,
+        })),
       ],
       sampleRates: [],
       bitDepths: [],
@@ -961,6 +971,11 @@ async function main() {
         .getByText(/FLAC|16\/44\.1K/)
         .count()) === 0,
   );
+  check(
+    "Album tracklists do not gain playlist-only covers or source-album columns",
+    (await rows.locator("[data-playlist-cover]").count()) === 0 &&
+      (await rows.locator("[data-playlist-album]").count()) === 0,
+  );
   const playsBeforeSelect = await page.evaluate(
     () => window.__prismCalls.filter((call) => call.command === "player_play").length,
   );
@@ -1011,15 +1026,59 @@ async function main() {
       playNext?.args?.tracks?.[1]?.trackId === "al-one-t2",
     JSON.stringify(playNext?.args ?? {}),
   );
-  await footer.getByRole("button", { name: "Open queue", exact: true }).click();
-  const queueDialog = page.getByRole("dialog", { name: "Playback queue", exact: true });
-  await queueDialog.waitFor();
   check(
-    "Queue rows show title, artist and album",
-    (await queueDialog.getByText("Kid A track 2", { exact: true }).count()) >= 1 &&
-      (await queueDialog.getByText("Radiohead · Kid A", { exact: true }).count()) >= 1,
+    "Queue has no Sidebar destination and is opened only by its transport button",
+    (await page.locator("aside nav[aria-label='Primary'] button[aria-label='Queue']").count()) ===
+      0,
   );
-  await queueDialog.getByRole("button", { name: "Close queue", exact: true }).click();
+  await footer.getByRole("button", { name: "Open queue", exact: true }).click();
+  const queuePage = page.locator("[data-queue-page]");
+  await queuePage.waitFor();
+  check(
+    "Queue rows show title, artist and album on a full content page",
+    (await queuePage.getByText("Kid A track 2", { exact: true }).count()) >= 1 &&
+      (await queuePage.getByText("Radiohead · Kid A", { exact: true }).count()) >= 1 &&
+      (await page.getByRole("dialog", { name: "Playback queue", exact: true }).count()) === 0 &&
+      (await page.locator("[data-route]").getAttribute("data-route")) === "queue",
+  );
+  const queueGeometry = await queuePage.evaluate((node) => {
+    const main = document.querySelector("main");
+    if (!main) return null;
+    const bounds = node.getBoundingClientRect();
+    const host = main.getBoundingClientRect();
+    return {
+      position: getComputedStyle(node).position,
+      widthRatio: bounds.width / host.width,
+      inside: bounds.x >= host.x && bounds.right <= host.right + 1,
+    };
+  });
+  check(
+    "the queue editor uses the large route rather than a fixed floating panel",
+    queueGeometry !== null &&
+      queueGeometry.position !== "fixed" &&
+      queueGeometry.widthRatio >= 0.85 &&
+      queueGeometry.inside &&
+      JSON.stringify(queueGeometry),
+  );
+  await queuePage.getByRole("button", { name: "Back", exact: true }).click();
+  await page.waitForFunction(
+    () => document.querySelector("[data-route]")?.getAttribute("data-route") === "album",
+  );
+  check(
+    "Queue Back returns to the actual previous Album page",
+    (await page.locator("[data-route]").getAttribute("data-route")) === "album",
+  );
+  await footer.getByRole("button", { name: "Open queue", exact: true }).click();
+  await queuePage.waitFor();
+  await footer.getByRole("button", { name: "Close queue", exact: true }).click();
+  await page.waitForFunction(
+    () => document.querySelector("[data-route]")?.getAttribute("data-route") === "album",
+  );
+  check(
+    "the Player Bar Queue button toggles entry and exit",
+    (await queuePage.count()) === 0 &&
+      (await page.locator("[data-route]").getAttribute("data-route")) === "album",
+  );
   const orderBeforeShuffle = playNext?.args?.tracks?.map((track) => track.trackId);
   await footer.getByRole("button", { name: "Shuffle queue", exact: true }).click();
   await page.waitForTimeout(200);
@@ -1060,6 +1119,34 @@ async function main() {
     "the playlist contains the song that was added",
     (await page.locator("[data-track-row]").count()) === 1,
   );
+  const playlistCover = page.locator("[data-track-row] [data-playlist-cover]").first();
+  check(
+    "each playlist row fits its own source-album cover between number and Play",
+    (await playlistCover.count()) === 1 &&
+      (await playlistCover.evaluate((node) => {
+        const row = node.closest("[data-track-row]");
+        const play = row?.querySelector("button[aria-label^='Play ']");
+        if (!row || !play) return false;
+        const number = row.querySelector(":scope > span");
+        if (!number) return false;
+        return (
+          node.getBoundingClientRect().x > number.getBoundingClientRect().x &&
+          node.getBoundingClientRect().right < play.getBoundingClientRect().x &&
+          node.getBoundingClientRect().height <= row.getBoundingClientRect().height
+        );
+      })) &&
+      (await page.locator("[data-playlist-album]").first().textContent()) === "Kid A",
+  );
+  await page.locator("[data-playlist-album]").first().click();
+  await page.waitForFunction(
+    () => document.querySelector("[data-route]")?.getAttribute("data-route") === "album",
+  );
+  check(
+    "the source album name in a playlist opens that album",
+    (await page.locator("[data-route]").getAttribute("data-route")) === "album",
+  );
+  await page.locator("main").getByRole("button", { name: "Back", exact: true }).click();
+  await page.waitForSelector("[data-playlist-album]");
   check(
     "playlist numbering starts at one without changing track metadata",
     (await page.locator("[data-track-row] > span").first().textContent())?.trim() === "01" &&
@@ -1121,10 +1208,28 @@ async function main() {
     .click({ button: "right" });
   await page.getByRole("menuitem", { name: "Pin playlist", exact: true }).click();
   const dockPlaylist = page.locator(
-    "aside section[aria-label='Dock'] button[aria-label='Evening']",
+    "aside section[aria-label='Pinned items'] button[aria-label='Evening']",
   );
   check("playlists can join the same Dock as albums", (await dockPlaylist.count()) === 1);
+  check(
+    "the Sidebar no longer renders a Dock heading",
+    (await page
+      .locator("aside h2")
+      .filter({ hasText: /^Dock$/ })
+      .count()) === 0,
+  );
+  await page.waitForTimeout(1_000);
+  const pinnedBeforeCollapse = await dockPlaylist.boundingBox();
   await page.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
+  await page.waitForTimeout(1_000);
+  const pinnedAfterCollapse = await dockPlaylist.boundingBox();
+  check(
+    "collapsing the Sidebar does not vertically shift pinned items",
+    pinnedBeforeCollapse !== null &&
+      pinnedAfterCollapse !== null &&
+      Math.abs(pinnedBeforeCollapse.y - pinnedAfterCollapse.y) <= 1,
+    JSON.stringify({ before: pinnedBeforeCollapse, after: pinnedAfterCollapse }),
+  );
   await dockPlaylist.click();
   await page.waitForTimeout(250);
   check(
@@ -1216,7 +1321,7 @@ async function main() {
   await page.getByRole("menuitem", { name: "Pin album", exact: true }).click();
   await page.locator("main button[aria-label='Open Lemonade']").click({ button: "right" });
   await page.getByRole("menuitem", { name: "Pin album", exact: true }).click();
-  const dockButtons = page.locator("aside section[aria-label='Dock'] button");
+  const dockButtons = page.locator("aside section[aria-label='Pinned items'] button");
   check(
     "new Dock pins appear first and navigate as album entries",
     (await dockButtons.count()) === 2 &&
@@ -1228,14 +1333,14 @@ async function main() {
   check(
     "a Dock context menu unpins only that album",
     (await page
-      .locator("aside section[aria-label='Dock'] button[aria-label='Lemonade']")
+      .locator("aside section[aria-label='Pinned items'] button[aria-label='Lemonade']")
       .count()) === 0 &&
       (await page
-        .locator("aside section[aria-label='Dock'] button[aria-label='Kid A']")
+        .locator("aside section[aria-label='Pinned items'] button[aria-label='Kid A']")
         .count()) === 1,
   );
   await page
-    .locator("aside section[aria-label='Dock'] button[aria-label='Kid A']")
+    .locator("aside section[aria-label='Pinned items'] button[aria-label='Kid A']")
     .click({ button: "right" });
   await page.getByRole("menuitem", { name: "Unpin album", exact: true }).click();
 
@@ -1280,15 +1385,52 @@ async function main() {
   await sortBar.getByRole("button", { name: /^Artist/ }).click();
   const genreFilter = page.getByRole("button", { name: "Filter by genre", exact: true });
   await genreFilter.click();
+  const genreMenu = page.getByRole("listbox", { name: "Filter by genre", exact: true });
+  const genreMenuBox = await genreMenu.boundingBox();
+  if (genreMenuBox !== null) {
+    await page.mouse.move(genreMenuBox.x + genreMenuBox.width / 2, genreMenuBox.y + 80);
+    await page.mouse.wheel(0, 180);
+    await page.waitForTimeout(150);
+  }
+  check(
+    "scrolling the genre popover keeps it open",
+    (await genreMenu.isVisible()) && (await genreMenu.evaluate((node) => node.scrollTop)) > 0,
+  );
+  if (genreMenuBox !== null) {
+    await page.mouse.move(genreMenuBox.x + genreMenuBox.width - 4, genreMenuBox.y + 45);
+    await page.mouse.down();
+    await page.mouse.move(genreMenuBox.x + genreMenuBox.width - 4, genreMenuBox.y + 130, {
+      steps: 5,
+    });
+    await page.mouse.up();
+    await page.waitForTimeout(100);
+  }
+  check(
+    "dragging inside the genre popover scrollbar does not dismiss it",
+    await genreMenu.isVisible(),
+  );
   await page.getByRole("option", { name: "Electronic (2 albums)", exact: true }).click();
   await page.waitForTimeout(250);
   await page.locator("aside nav[aria-label='Primary'] button[aria-label='Home']").click();
   await page.locator("aside nav[aria-label='Primary'] button[aria-label='Library']").click();
   await page.waitForTimeout(250);
   check(
-    "sort direction and genre survive leaving Library",
+    "sort direction survives leaving Library while genre is cleared",
     (await sortBar.getByRole("button", { name: /^Artist/ }).getAttribute("aria-pressed")) ===
-      "true" && (await genreFilter.textContent())?.includes("Electronic"),
+      "true" && (await genreFilter.textContent())?.includes("All genres"),
+  );
+  const transientBrowse = await page.evaluate(() => {
+    const stored = JSON.parse(localStorage.getItem("prism.library.browse") || "null");
+    return stored?.state ?? null;
+  });
+  check(
+    "only Library sorting is persisted among search and filter controls",
+    transientBrowse !== null &&
+      transientBrowse.sort === "artistDesc" &&
+      transientBrowse.genre === undefined &&
+      transientBrowse.decade === undefined &&
+      transientBrowse.year === undefined,
+    JSON.stringify(transientBrowse),
   );
   check(
     "the year row is hidden until a decade is active",
@@ -1296,6 +1438,23 @@ async function main() {
   );
   const decadeFilter = page.getByRole("button", { name: "Filter by decade", exact: true });
   await decadeFilter.click();
+  const decadeMenu = page.getByRole("listbox", { name: "Filter by decade", exact: true });
+  const decadeMenuBox = await decadeMenu.boundingBox();
+  if (decadeMenuBox !== null) {
+    await page.mouse.move(decadeMenuBox.x + decadeMenuBox.width / 2, decadeMenuBox.y + 80);
+    await page.mouse.wheel(0, 180);
+    await page.waitForTimeout(120);
+    await page.mouse.move(decadeMenuBox.x + decadeMenuBox.width - 4, decadeMenuBox.y + 45);
+    await page.mouse.down();
+    await page.mouse.move(decadeMenuBox.x + decadeMenuBox.width - 4, decadeMenuBox.y + 120, {
+      steps: 4,
+    });
+    await page.mouse.up();
+  }
+  check(
+    "decade scrolling and scrollbar dragging keep the popover open",
+    (await decadeMenu.isVisible()) && (await decadeMenu.evaluate((node) => node.scrollTop)) > 0,
+  );
   await page.getByRole("option", { name: "2000s (1 album)", exact: true }).click();
   await page.waitForTimeout(250);
   const decadeCall = await page.evaluate(() =>
@@ -1331,6 +1490,40 @@ async function main() {
       (await yearRow.getByRole("button", { name: "2016", exact: true }).count()) === 0,
   );
 
+  await page.getByRole("button", { name: "Clear filters", exact: true }).click();
+  await page.waitForTimeout(200);
+  check(
+    "Clear filters restores the unfiltered Library without changing its sort",
+    (await page.locator("[aria-label='Filter by year']").count()) === 0 &&
+      (await decadeFilter.textContent())?.includes("All decades") &&
+      (await sortBar.getByRole("button", { name: /^Artist/ }).getAttribute("aria-pressed")) ===
+        "true",
+  );
+  const librarySearch = page.getByRole("textbox", { name: "Search the library", exact: true });
+  await librarySearch.fill("Radiohead");
+  await librarySearch.press("Enter");
+  await page.waitForTimeout(250);
+  const searchCall = await page.evaluate(() =>
+    window.__prismCalls.filter((call) => call.command === "library_albums").at(-1),
+  );
+  check(
+    "submitting a Library search applies its text query",
+    searchCall?.args?.text === "Radiohead",
+    JSON.stringify(searchCall?.args ?? {}),
+  );
+  await page.locator("aside nav[aria-label='Primary'] button[aria-label='Home']").click();
+  await page.locator("aside nav[aria-label='Primary'] button[aria-label='Library']").click();
+  await page.waitForTimeout(250);
+  const clearedSearchCall = await page.evaluate(() =>
+    window.__prismCalls.filter((call) => call.command === "library_albums").at(-1),
+  );
+  check(
+    "leaving and returning clears Library search text and results",
+    (await librarySearch.inputValue()) === "" &&
+      (clearedSearchCall?.args?.text === null || clearedSearchCall?.args?.text === undefined),
+    JSON.stringify(clearedSearchCall?.args ?? {}),
+  );
+
   // ---- Appearance controls have visible effects -----------------------------
   console.log("Appearance and desktop input");
   await page.locator("header button[aria-label='Settings']").click();
@@ -1340,6 +1533,62 @@ async function main() {
     (await page.getByRole("heading", { name: "System", exact: true }).count()) === 1 &&
       (await page.locator("aside nav[aria-label='Configuration']").count()) === 0 &&
       (await page.getByText("Library indexed", { exact: true }).count()) === 0,
+  );
+  const themeChoices = page.getByRole("radiogroup", { name: "Theme", exact: true });
+  check(
+    "Theme is the first Settings section with three symbolic Home previews",
+    (await page
+      .locator("main section")
+      .first()
+      .getByRole("heading", { name: "Theme", exact: true })
+      .count()) === 1 && (await themeChoices.locator("[data-theme-choice]").count()) === 3,
+  );
+  await themeChoices.getByRole("radio", { name: "Light", exact: true }).click();
+  await page.waitForTimeout(150);
+  const lightColours = await page.evaluate(() => ({
+    className: document.documentElement.className,
+    background: getComputedStyle(document.body).backgroundColor,
+    text: getComputedStyle(document.body).color,
+    expectedText: (() => {
+      const probe = document.createElement("span");
+      probe.style.color = "color-mix(in oklab, rgb(28 28 32) 85%, transparent)";
+      document.body.appendChild(probe);
+      const value = getComputedStyle(probe).color;
+      probe.remove();
+      return value;
+    })(),
+  }));
+  check(
+    "Light flips semantic surfaces and ink across the shell",
+    lightColours.className.includes("light") &&
+      lightColours.background === "rgb(244, 244, 246)" &&
+      lightColours.text === lightColours.expectedText,
+    JSON.stringify(lightColours),
+  );
+  await themeChoices.getByRole("radio", { name: "Dark", exact: true }).click();
+  await page.waitForTimeout(100);
+  check(
+    "Dark retains the original OLED colorimetry",
+    (await page.evaluate(() => getComputedStyle(document.body).backgroundColor)) ===
+      "rgb(8, 8, 10)" &&
+      (await page.evaluate(() => document.documentElement.classList.contains("dark"))),
+  );
+  await themeChoices.getByRole("radio", { name: "System", exact: true }).click();
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.waitForTimeout(120);
+  const systemLight = await page.evaluate(() =>
+    document.documentElement.classList.contains("light"),
+  );
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.waitForTimeout(120);
+  const systemDark = await page.evaluate(() => document.documentElement.classList.contains("dark"));
+  check("System follows live operating-system light/dark changes", systemLight && systemDark);
+  await themeChoices.getByRole("radio", { name: "Dark", exact: true }).click();
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.waitForTimeout(100);
+  check(
+    "a fixed Dark choice does not follow the system preference",
+    await page.evaluate(() => document.documentElement.classList.contains("dark")),
   );
   const effects = page.getByRole("radiogroup", { name: "Visual effects" });
   await effects.getByRole("radio", { name: "Reduced", exact: true }).click();
@@ -1497,18 +1746,29 @@ async function main() {
   );
 
   // ---- Everything is still chosen after a reload ----------------------------
+  await page.locator("header button[aria-label='Settings']").click();
+  await page
+    .getByRole("radiogroup", { name: "Theme", exact: true })
+    .getByRole("radio", { name: "Light", exact: true })
+    .click();
   await page.reload({ waitUntil: "networkidle" });
   await page.waitForSelector("main", { timeout: 15_000 });
   await page.locator("aside nav[aria-label='Primary'] button[aria-label='Library']").click();
   await page.waitForTimeout(300);
   check(
-    "library choices and cover size survive a reload",
-    (
-      await page.getByRole("button", { name: "Filter by genre", exact: true }).textContent()
-    )?.includes("Electronic") &&
+    "theme and Library sorting preferences survive a reload without restoring filters",
+    (await page.evaluate(() => document.documentElement.classList.contains("light"))) &&
+      (
+        await page.getByRole("button", { name: "Filter by genre", exact: true }).textContent()
+      )?.includes("All genres") &&
       (await page.locator("[data-cover-size]").getAttribute("data-cover-size")) === "260" &&
       (await page.locator("[data-density]").getAttribute("data-density")) === "compact",
   );
+  await page.locator("header button[aria-label='Settings']").click();
+  await page
+    .getByRole("radiogroup", { name: "Theme", exact: true })
+    .getByRole("radio", { name: "Dark", exact: true })
+    .click();
   await page.locator("aside nav[aria-label='Primary'] button[aria-label='Now Playing']").click();
   try {
     await page.getByRole("region", { name: "Spectrum", exact: true }).waitFor({ timeout: 5_000 });
@@ -1550,27 +1810,51 @@ async function main() {
     .click();
   const synchronizedFooter = synchronized.locator("footer");
   await synchronizedFooter.waitFor({ timeout: 5_000 });
+  const mainBeforeLyrics = await synchronized.locator("main").boundingBox();
   await synchronizedFooter
     .getByRole("button", { name: "Show synchronized lyrics", exact: true })
     .click();
-  const lyricSheet = synchronized.getByRole("region", {
-    name: "Synchronized lyrics",
-    exact: true,
-  });
+  const lyricSheet = synchronized.locator("[data-lyrics-dock]");
   await lyricSheet.waitFor({ timeout: 3_000 });
+  await synchronized.waitForFunction(() => {
+    const node = document.querySelector("[data-lyrics-dock]");
+    if (!node) return false;
+    const transform = getComputedStyle(node).transform;
+    return transform === "none" || transform === "matrix(1, 0, 0, 1, 0, 0)";
+  });
   const sheetGeometry = await lyricSheet.evaluate((node) => {
+    const main = document.querySelector("main");
+    const topbar = document.querySelector("[data-topbar]");
+    const player = document.querySelector("footer");
+    if (!main || !topbar || !player) return null;
     const bounds = node.getBoundingClientRect();
+    const mainBounds = main.getBoundingClientRect();
     return {
       x: bounds.x,
       width: bounds.width,
       viewport: window.innerWidth,
+      topDifference: Math.abs(bounds.top - topbar.getBoundingClientRect().bottom),
+      bottomDifference: Math.abs(bounds.bottom - player.getBoundingClientRect().top),
+      mainRightDifference: Math.abs(mainBounds.right - bounds.left),
+      rightDifference: Math.abs(bounds.right - window.innerWidth),
+      mainWidth: mainBounds.width,
+      position: getComputedStyle(node).position,
+      siblings: node.parentElement === main.parentElement,
     };
   });
   check(
-    "the microphone opens a centred 60–70% lyrics sheet",
-    sheetGeometry.width / sheetGeometry.viewport >= 0.6 &&
-      sheetGeometry.width / sheetGeometry.viewport <= 0.7 &&
-      Math.abs(sheetGeometry.x + sheetGeometry.width / 2 - sheetGeometry.viewport / 2) <= 1,
+    "Lyrics is a bounded right column that shrinks the current page",
+    sheetGeometry !== null &&
+      mainBeforeLyrics !== null &&
+      sheetGeometry.width >= 300 &&
+      sheetGeometry.width <= 432 &&
+      sheetGeometry.topDifference <= 1 &&
+      sheetGeometry.bottomDifference <= 1 &&
+      sheetGeometry.mainRightDifference <= 1 &&
+      sheetGeometry.rightDifference <= 1 &&
+      Math.abs(mainBeforeLyrics.width - sheetGeometry.mainWidth - sheetGeometry.width) <= 2 &&
+      sheetGeometry.position !== "fixed" &&
+      sheetGeometry.siblings,
     JSON.stringify(sheetGeometry),
   );
   await synchronized.evaluate(() => {
@@ -1582,7 +1866,7 @@ async function main() {
   });
   await synchronized.waitForFunction(() =>
     document
-      .querySelector("[aria-label='Synchronized lyrics'] [aria-current='true']")
+      .querySelector("[data-lyrics-dock] [aria-current='true']")
       ?.textContent?.includes("Second synchronized line"),
   );
   check(
@@ -1594,15 +1878,29 @@ async function main() {
     .getByRole("button", { name: "Hide synchronized lyrics", exact: true })
     .click();
   await lyricSheet.waitFor({ state: "hidden", timeout: 3_000 });
+  await synchronized.waitForTimeout(300);
+  const mainAfterLyrics = await synchronized.locator("main").boundingBox();
+  check(
+    "closing the lyrics column restores the page width",
+    mainBeforeLyrics !== null &&
+      mainAfterLyrics !== null &&
+      Math.abs(mainBeforeLyrics.width - mainAfterLyrics.width) <= 1,
+    JSON.stringify({ before: mainBeforeLyrics, after: mainAfterLyrics }),
+  );
 
   await synchronized
     .locator("aside nav[aria-label='Primary'] button[aria-label='Now Playing']")
     .click();
-  const primary = synchronized.locator("[data-now-playing-primary]");
+  const nowPlaying = synchronized.locator("[data-now-playing]");
   const secondary = synchronized.locator("[data-now-playing-secondary]");
-  await primary.waitFor({ timeout: 3_000 });
+  await nowPlaying.waitFor({ timeout: 3_000 });
   await synchronized.getByRole("region", { name: "Lyrics", exact: true }).waitFor();
-  await synchronized.waitForTimeout(250);
+  await synchronized.waitForFunction(() => {
+    const route = document.querySelector("[data-now-playing]")?.parentElement;
+    if (!route) return false;
+    const transform = getComputedStyle(route).transform;
+    return transform === "none" || transform === "matrix(1, 0, 0, 1, 0, 0)";
+  });
   check(
     "Now Playing hides only the global Player Bar",
     !(await synchronizedFooter.isVisible()) &&
@@ -1610,27 +1908,30 @@ async function main() {
   );
   const fixedGeometry = await synchronized.evaluate(() => {
     const main = document.querySelector("main");
-    const primaryNode = document.querySelector("[data-now-playing-primary]");
+    const artworkRegion = document.querySelector("[data-now-playing-artwork-region]");
     const secondaryNode = document.querySelector("[data-now-playing-secondary]");
+    const controls = document.querySelector("[data-now-playing-controls]");
     const artwork = document.querySelector("[data-now-playing-artwork]");
-    if (!main || !primaryNode || !secondaryNode || !artwork) return null;
-    const left = primaryNode.getBoundingClientRect();
+    if (!main || !artworkRegion || !secondaryNode || !controls || !artwork) return null;
+    const left = artworkRegion.getBoundingClientRect();
     const right = secondaryNode.getBoundingClientRect();
     const art = artwork.getBoundingClientRect();
     return {
       overflow: main.scrollHeight - main.clientHeight,
       widthDifference: Math.abs(left.width - right.width),
-      heightDifference: Math.abs(left.height - right.height),
+      topDifference: Math.abs(art.top - right.top),
+      bottomDifference: Math.abs(controls.getBoundingClientRect().bottom - right.bottom),
       artworkWidth: art.width,
       artworkHeight: art.height,
     };
   });
   check(
-    "fixed columns and artwork stay bounded without route scrolling",
+    "the Lyrics/Spectrum column aligns with artwork top and playback bottom",
     fixedGeometry !== null &&
       fixedGeometry.overflow <= 1 &&
       fixedGeometry.widthDifference <= 1 &&
-      fixedGeometry.heightDifference <= 1 &&
+      fixedGeometry.topDifference <= 1 &&
+      fixedGeometry.bottomDifference <= 1 &&
       fixedGeometry.artworkWidth >= 100 &&
       fixedGeometry.artworkHeight >= 100 &&
       Math.abs(fixedGeometry.artworkWidth - fixedGeometry.artworkHeight) <= 1,
@@ -1638,23 +1939,62 @@ async function main() {
   );
   check(
     "the embedded Now Playing transport is complete",
-    (await primary.getByRole("button", { name: "Pause", exact: true }).count()) === 1 &&
-      (await primary.getByRole("button", { name: "Previous track", exact: true }).count()) === 1 &&
-      (await primary.getByRole("button", { name: "Next track", exact: true }).count()) === 1 &&
-      (await primary.getByRole("button", { name: "Stop", exact: true }).count()) === 1 &&
-      (await primary.getByRole("button", { name: "Open queue", exact: true }).count()) === 1 &&
-      (await primary.getByRole("slider", { name: "Seek", exact: true }).count()) === 1 &&
-      (await primary.getByRole("slider", { name: "Volume", exact: true }).count()) === 1,
+    (await nowPlaying.getByRole("button", { name: "Pause", exact: true }).count()) === 1 &&
+      (await nowPlaying.getByRole("button", { name: "Previous track", exact: true }).count()) ===
+        1 &&
+      (await nowPlaying.getByRole("button", { name: "Next track", exact: true }).count()) === 1 &&
+      (await nowPlaying.getByRole("button", { name: "Stop", exact: true }).count()) === 1 &&
+      (await nowPlaying.getByRole("button", { name: "Open queue", exact: true }).count()) === 1 &&
+      (await nowPlaying.getByRole("slider", { name: "Seek", exact: true }).count()) === 1 &&
+      (await nowPlaying.getByRole("slider", { name: "Volume", exact: true }).count()) === 1,
+  );
+  const transportGeometry = await synchronized.evaluate(() => {
+    const controls = document.querySelector("[data-now-playing-controls]");
+    const volume = controls?.querySelector("[role='slider'][aria-label='Volume']");
+    const queue = controls?.querySelector("button[aria-label='Open queue']");
+    const play = controls?.querySelector("button[aria-label='Pause']");
+    const seek = controls?.querySelector("[role='slider'][aria-label='Seek']");
+    if (!volume || !queue || !play || !seek) return null;
+    const volumeBox = volume.getBoundingClientRect();
+    const queueBox = queue.getBoundingClientRect();
+    const playBox = play.getBoundingClientRect();
+    const seekBox = seek.getBoundingClientRect();
+    return {
+      volumeAboveSeek: volumeBox.bottom <= seekBox.top,
+      queueAboveSeek: queueBox.bottom <= seekBox.top,
+      volumeLevel: Math.abs(volumeBox.y + volumeBox.height / 2 - (playBox.y + playBox.height / 2)),
+      queueLevel: Math.abs(queueBox.y + queueBox.height / 2 - (playBox.y + playBox.height / 2)),
+      volumeLeft: volumeBox.right < playBox.x,
+      queueRight: queueBox.x > playBox.right,
+    };
+  });
+  check(
+    "Volume and Queue flank the transport above the seek bar",
+    transportGeometry !== null &&
+      transportGeometry.volumeAboveSeek &&
+      transportGeometry.queueAboveSeek &&
+      transportGeometry.volumeLevel <= 8 &&
+      transportGeometry.queueLevel <= 8 &&
+      transportGeometry.volumeLeft &&
+      transportGeometry.queueRight,
+    JSON.stringify(transportGeometry),
   );
   check(
     "lyrics exist without enabling Spectrum by default",
     (await synchronized.getByRole("region", { name: "Lyrics", exact: true }).count()) === 1 &&
       (await synchronized.getByRole("region", { name: "Spectrum", exact: true }).count()) === 0,
   );
-  await primary.getByRole("button", { name: "Open queue", exact: true }).click();
-  const embeddedQueue = synchronized.getByRole("dialog", { name: "Playback queue", exact: true });
+  await nowPlaying.getByRole("button", { name: "Open queue", exact: true }).click();
+  const embeddedQueue = synchronized.locator("[data-queue-page]");
   await embeddedQueue.waitFor();
-  await embeddedQueue.getByRole("button", { name: "Close queue", exact: true }).click();
+  check(
+    "the embedded Queue button opens the same full page",
+    (await synchronized.locator("[data-route]").getAttribute("data-route")) === "queue" &&
+      (await synchronized.getByRole("dialog", { name: "Playback queue", exact: true }).count()) ===
+        0,
+  );
+  await embeddedQueue.getByRole("button", { name: "Back", exact: true }).click();
+  await nowPlaying.waitFor();
   await synchronized
     .locator("[data-now-playing-secondary]")
     .getByRole("button", { name: "Spectrum", exact: true })
@@ -1678,6 +2018,55 @@ async function main() {
       Math.abs(panelWidths.container - panelWidths.spectrum) <= 1,
     JSON.stringify(panelWidths),
   );
+  await synchronized.locator("[data-now-playing-title]").click();
+  await synchronized.waitForFunction(
+    () => document.querySelector("[data-route]")?.getAttribute("data-route") === "album",
+  );
+  check(
+    "the Now Playing song title opens its source album",
+    (await synchronized.locator("[data-route]").getAttribute("data-route")) === "album",
+  );
+  await synchronized.locator("main").getByRole("button", { name: "Back", exact: true }).click();
+  await nowPlaying.waitFor();
+  await synchronized.locator("[data-now-playing-album]").click();
+  await synchronized.waitForFunction(
+    () => document.querySelector("[data-route]")?.getAttribute("data-route") === "album",
+  );
+  check(
+    "the Now Playing album name opens that album",
+    (await synchronized.locator("[data-route]").getAttribute("data-route")) === "album",
+  );
+  await synchronized.locator("main").getByRole("button", { name: "Back", exact: true }).click();
+  await nowPlaying.waitFor();
+  await synchronized.locator("[data-now-playing-artist]").click();
+  await synchronized.waitForFunction(
+    () => document.querySelector("[data-route]")?.getAttribute("data-route") === "artist",
+  );
+  check(
+    "the Now Playing artist name opens that artist",
+    (await synchronized.locator("[data-route]").getAttribute("data-route")) === "artist",
+  );
+  await synchronized.locator("main").getByRole("button", { name: "Back", exact: true }).click();
+  await nowPlaying.waitFor();
+  await synchronized.locator("[data-now-playing-genre]").click();
+  await synchronized.waitForFunction(
+    () => document.querySelector("[data-route]")?.getAttribute("data-route") === "library",
+  );
+  await synchronized.waitForTimeout(250);
+  const nowPlayingGenreCall = await synchronized.evaluate(() =>
+    window.__prismCalls.filter((call) => call.command === "library_albums").at(-1),
+  );
+  check(
+    "Now Playing genre explicitly opens that genre in Library",
+    nowPlayingGenreCall?.args?.genre === "Electronic" &&
+      (
+        await synchronized
+          .getByRole("button", { name: "Filter by genre", exact: true })
+          .textContent()
+      )?.includes("Electronic"),
+    JSON.stringify(nowPlayingGenreCall?.args ?? {}),
+  );
+
   await synchronized.locator("aside nav[aria-label='Primary'] button[aria-label='Home']").click();
   check(
     "the global Player Bar returns immediately outside Now Playing",
@@ -1728,7 +2117,21 @@ async function main() {
     height: 360,
   });
   const albumScroll = await synchronized.locator("main").evaluate((node) => {
+    const descriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+    if (descriptor?.get && descriptor?.set) {
+      Object.defineProperty(node, "scrollTop", {
+        configurable: true,
+        get() {
+          return descriptor.get.call(this);
+        },
+        set(value) {
+          window.__prismScrollWrites = (window.__prismScrollWrites ?? 0) + 1;
+          descriptor.set.call(this, value);
+        },
+      });
+    }
     node.scrollTop = 160;
+    window.__prismScrollWrites = 0;
     return node.scrollTop;
   });
   check("the originating Album can be scrolled for restoration", albumScroll > 0);
@@ -1748,6 +2151,13 @@ async function main() {
     "clicking Settings again restores the prior route and exact scroll position",
     (await synchronized.locator("main").evaluate((node) => node.scrollTop)) === albumScroll,
     `expected=${String(albumScroll)}`,
+  );
+  await synchronized.waitForTimeout(450);
+  const restorationWrites = await synchronized.evaluate(() => window.__prismScrollWrites ?? -1);
+  check(
+    "Back performs one instantaneous scroll write instead of visible paginated scrolling",
+    restorationWrites === 1,
+    `scrollTop writes=${String(restorationWrites)}`,
   );
   await synchronized.close();
 

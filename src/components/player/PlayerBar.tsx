@@ -4,8 +4,6 @@ import { ListMusic, Maximize2, Mic2 } from "lucide-react";
 
 import { CoverArt } from "@/components/ui/CoverArt";
 import { QualityBadge } from "@/components/player/QualityBadge";
-import { LyricsSheet } from "@/components/player/LyricsSheet";
-import { QueuePanel } from "@/components/player/QueuePanel";
 import { Scrubber } from "@/components/player/Scrubber";
 import { TransportControls } from "@/components/player/TransportControls";
 import { VolumeControl } from "@/components/player/VolumeControl";
@@ -49,7 +47,6 @@ export function PlayerBar(): JSX.Element {
   const previewVolumeDb = usePlaybackStore((state) => state.previewVolumeDb);
   const setMuted = usePlaybackStore((state) => state.setMuted);
   const setRoute = useUiStore((state) => state.setRoute);
-  const route = useUiStore((state) => state.route);
   const sidebarHidden = useUiStore((state) => state.sidebarHidden);
   const toggleSidebarHidden = useUiStore((state) => state.toggleSidebarHidden);
   const openAlbum = useUiStore((state) => state.openAlbum);
@@ -58,16 +55,11 @@ export function PlayerBar(): JSX.Element {
 
   const [coverPath, setCoverPath] = useState<string | null>(null);
   const [coverThumbnailPath, setCoverThumbnailPath] = useState<string | null>(null);
-  const [queueOpen, setQueueOpen] = useState(false);
-  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const lyricsOpen = useUiStore((state) => state.lyricsOpen);
+  const toggleLyrics = useUiStore((state) => state.toggleLyrics);
+  const queueOpen = useUiStore((state) => state.route === "queue");
+  const toggleQueue = useUiStore((state) => state.toggleQueue);
   const trackId = status?.track?.trackId ?? null;
-
-  useEffect(() => {
-    if (route === "now-playing") {
-      setQueueOpen(false);
-      setLyricsOpen(false);
-    }
-  }, [route]);
 
   // Cover lookup is keyed by track id, not by the whole snapshot: a volume
   // change must not re-query the artwork service.
@@ -264,13 +256,10 @@ export function PlayerBar(): JSX.Element {
             <div className="flex min-w-0 items-center justify-end gap-3">
               <button
                 type="button"
-                aria-label="Open queue"
+                aria-label={queueOpen ? "Close queue" : "Open queue"}
                 aria-expanded={queueOpen}
                 title="Queue"
-                onClick={() => {
-                  setLyricsOpen(false);
-                  setQueueOpen((open) => !open);
-                }}
+                onClick={toggleQueue}
                 className={
                   queueOpen
                     ? "grid h-9 w-9 place-items-center rounded-full bg-accent/[0.14] text-accent"
@@ -285,10 +274,7 @@ export function PlayerBar(): JSX.Element {
                 aria-label={lyricsOpen ? "Hide synchronized lyrics" : "Show synchronized lyrics"}
                 aria-expanded={lyricsOpen}
                 title="Synchronized lyrics"
-                onClick={() => {
-                  setQueueOpen(false);
-                  setLyricsOpen((open) => !open);
-                }}
+                onClick={toggleLyrics}
                 className={
                   lyricsOpen
                     ? "grid h-9 w-9 place-items-center rounded-full bg-accent/[0.14] text-accent"
@@ -314,25 +300,6 @@ export function PlayerBar(): JSX.Element {
               />
             </div>
           </div>
-          <AnimatePresence>
-            {queueOpen ? (
-              <QueuePanel
-                onClose={() => {
-                  setQueueOpen(false);
-                }}
-              />
-            ) : null}
-          </AnimatePresence>
-          <AnimatePresence>
-            {lyricsOpen ? (
-              <LyricsSheet
-                trackId={trackId}
-                onClose={() => {
-                  setLyricsOpen(false);
-                }}
-              />
-            ) : null}
-          </AnimatePresence>
         </motion.footer>
       ) : null}
     </AnimatePresence>

@@ -56,7 +56,13 @@ export function PopoverSelect({
         triggerRef.current?.focus();
       }
     };
-    const closeScroll = (): void => {
+    const closeScroll = (event: Event): void => {
+      // The listbox emits scroll events for wheel gestures and scrollbar drags.
+      // Those are interactions inside the popover, not a reason to dismiss it.
+      const target = event.target;
+      if (target instanceof Node && rootRef.current?.contains(target) === true) {
+        return;
+      }
       setOpen(false);
     };
     window.addEventListener("pointerdown", closeOutside);
@@ -113,7 +119,7 @@ export function PopoverSelect({
           role="listbox"
           aria-label={ariaLabel}
           className={cn(
-            "glass absolute top-[calc(100%+6px)] right-0 z-[70] max-h-[320px] min-w-full overflow-y-auto rounded-2xl p-1.5 shadow-2xl",
+            "glass absolute top-[calc(100%+6px)] right-0 z-[70] max-h-[320px] min-w-full overflow-y-auto overscroll-contain rounded-2xl p-1.5 shadow-2xl",
             menuClassName,
           )}
         >

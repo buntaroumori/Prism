@@ -1,5 +1,5 @@
-import { Reorder, motion, useDragControls } from "framer-motion";
-import { GripVertical, ListMusic, Play, X } from "lucide-react";
+import { Reorder, useDragControls } from "framer-motion";
+import { ArrowLeft, GripVertical, ListMusic, Play } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -8,7 +8,6 @@ import {
   type JSX,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { createPortal } from "react-dom";
 
 import { CoverArt } from "@/components/ui/CoverArt";
 import { formatDuration } from "@/lib/format";
@@ -98,117 +97,105 @@ export function QueuePanel({ onClose }: QueuePanelProps): JSX.Element {
     if (target >= 0) void jumpTo(target);
   };
 
-  return createPortal(
-    <>
-      <motion.button
+  return (
+    <div data-queue-page className="mx-auto w-full max-w-[1280px] px-8 pt-6 pb-12">
+      <button
         type="button"
-        aria-label="Close queue"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
         onClick={onClose}
-        className="fixed inset-0 z-[39] cursor-default bg-black/25"
-      />
-      <motion.aside
-        role="dialog"
-        aria-label="Playback queue"
-        initial={{ opacity: 0, x: 24, scale: 0.985 }}
-        animate={{ opacity: 1, x: 0, scale: 1 }}
-        exit={{ opacity: 0, x: 18, scale: 0.99 }}
-        transition={{ type: "spring", stiffness: 360, damping: 34 }}
-        className="glass fixed top-4 right-4 bottom-[108px] z-40 flex w-[min(470px,calc(100vw-32px))] flex-col overflow-hidden rounded-3xl border border-white/[0.09] shadow-2xl"
+        className="mb-5 flex items-center gap-1.5 text-[11.5px] text-white/40 transition-colors hover:text-white"
       >
-        <header className="flex shrink-0 items-center justify-between border-b border-white/[0.07] px-5 py-4">
-          <div>
-            <h2 className="flex items-center gap-2 text-[14px] font-semibold text-white">
-              <ListMusic className="h-4 w-4 text-accent" aria-hidden="true" />
-              Queue
-            </h2>
-            <p className="mt-0.5 text-[11px] text-white/35">
-              {queue.length === 0
-                ? "Nothing queued"
-                : `${String(index + 1)} of ${String(queue.length)} · ${String(Math.max(queue.length - index - 1, 0))} upcoming`}
-            </p>
-          </div>
-          <button
-            type="button"
-            aria-label="Close queue"
-            onClick={onClose}
-            className="grid h-8 w-8 place-items-center rounded-full text-white/40 hover:bg-white/[0.07] hover:text-white"
+        <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
+        Back
+      </button>
+
+      <header className="flex flex-wrap items-end justify-between gap-4 border-b border-white/[0.06] pb-5">
+        <div>
+          <h1 className="flex items-center gap-2.5 text-[26px] leading-none font-semibold tracking-[-0.03em] text-white">
+            <ListMusic className="h-5 w-5 text-accent" aria-hidden="true" />
+            Queue
+          </h1>
+          <p className="mt-2 text-[12px] text-white/35">
+            {queue.length === 0
+              ? "Nothing queued"
+              : `${String(index + 1)} of ${String(queue.length)} · ${String(Math.max(queue.length - index - 1, 0))} upcoming`}
+          </p>
+        </div>
+        <p className="text-[10.5px] text-white/25">Double-click a song to play it</p>
+      </header>
+
+      <div className="mt-6 grid items-start gap-5 lg:grid-cols-[minmax(270px,0.34fr)_minmax(0,1fr)]">
+        {current !== null ? (
+          <section
+            aria-label="Current song"
+            className="rounded-2xl border border-accent/[0.13] bg-accent/[0.025] p-3 lg:sticky lg:top-6"
           >
-            <X className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </header>
+            <p className="px-2 pt-1 pb-2 text-[9.5px] font-semibold tracking-[0.15em] text-accent/70 uppercase">
+              Now playing
+            </p>
+            <QueueRow
+              entry={current}
+              position={(positions.get(current.queueId) ?? 0) + 1}
+              current
+              onJump={jump}
+            />
+          </section>
+        ) : null}
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-3" data-interactive>
-          {current !== null ? (
-            <section aria-label="Current song" className="mb-3">
-              <p className="px-2 pb-1.5 text-[9.5px] font-semibold tracking-[0.15em] text-accent/70 uppercase">
-                Now playing
-              </p>
-              <QueueRow
-                entry={current}
-                position={(positions.get(current.queueId) ?? 0) + 1}
-                current
-                onJump={jump}
-              />
-            </section>
-          ) : null}
-
+        <section aria-label="Upcoming songs" className="min-w-0">
+          <p className="px-2 pb-2 text-[9.5px] font-semibold tracking-[0.15em] text-white/30 uppercase">
+            Up next
+          </p>
           {blocks.length === 0 ? (
-            <div className="grid place-items-center px-6 py-14 text-center">
-              <ListMusic className="mb-3 h-7 w-7 text-white/15" aria-hidden="true" />
-              <p className="text-[12px] text-white/40">
-                {current === null ? "Play an album, playlist or track." : "End of the queue."}
-              </p>
-              <p className="mt-1 text-[10.5px] text-white/25">
-                Use Play next on any album or track to add it here.
-              </p>
+            <div className="grid min-h-[280px] place-items-center rounded-2xl border border-dashed border-white/[0.08] px-6 py-14 text-center">
+              <div>
+                <ListMusic className="mx-auto mb-3 h-7 w-7 text-white/15" aria-hidden="true" />
+                <p className="text-[12.5px] text-white/40">
+                  {current === null ? "Play an album, playlist or track." : "End of the queue."}
+                </p>
+                <p className="mt-1 text-[11px] text-white/25">
+                  Use Play next on any album or track to add it here.
+                </p>
+              </div>
             </div>
           ) : (
-            <section aria-label="Upcoming songs">
-              <p className="px-2 pb-2 text-[9.5px] font-semibold tracking-[0.15em] text-white/30 uppercase">
-                Up next
-              </p>
-              <Reorder.Group
-                axis="y"
-                values={blocks}
-                onReorder={(nextBlocks) => {
-                  changeDraft([
-                    ...shownQueue.slice(0, shownQueue.length - upcoming.length),
-                    ...nextBlocks.flatMap((block) => block.entries),
-                  ]);
-                }}
-                className="space-y-2"
-              >
-                {blocks.map((block) => (
-                  <QueueBlockItem
-                    key={block.id}
-                    block={block}
-                    positions={positions}
-                    onJump={jump}
-                    onReorder={(entries) => {
-                      changeDraft([
-                        ...shownQueue.slice(0, shownQueue.length - upcoming.length),
-                        ...blocks.flatMap((candidate) =>
-                          candidate.id === block.id ? entries : candidate.entries,
-                        ),
-                      ]);
-                    }}
-                    onCommit={commitDraft}
-                    onBeginDrag={beginDrag}
-                  />
-                ))}
-              </Reorder.Group>
-            </section>
+            <Reorder.Group
+              axis="y"
+              values={blocks}
+              onReorder={(nextBlocks) => {
+                changeDraft([
+                  ...shownQueue.slice(0, shownQueue.length - upcoming.length),
+                  ...nextBlocks.flatMap((block) => block.entries),
+                ]);
+              }}
+              className="space-y-2.5"
+            >
+              {blocks.map((block) => (
+                <QueueBlockItem
+                  key={block.id}
+                  block={block}
+                  positions={positions}
+                  onJump={jump}
+                  onReorder={(entries) => {
+                    changeDraft([
+                      ...shownQueue.slice(0, shownQueue.length - upcoming.length),
+                      ...blocks.flatMap((candidate) =>
+                        candidate.id === block.id ? entries : candidate.entries,
+                      ),
+                    ]);
+                  }}
+                  onCommit={commitDraft}
+                  onBeginDrag={beginDrag}
+                />
+              ))}
+            </Reorder.Group>
           )}
-        </div>
-        <footer className="shrink-0 border-t border-white/[0.06] px-5 py-2.5 text-[10px] text-white/25">
-          Drag albums or songs to reorder · Right-click to remove
-        </footer>
-      </motion.aside>
-    </>,
-    document.body,
+        </section>
+      </div>
+
+      <footer className="mt-5 border-t border-white/[0.06] px-1 pt-3 text-[11px] text-white/25">
+        Drag albums or songs to reorder · Right-click to remove
+      </footer>
+    </div>
   );
 }
 
@@ -266,13 +253,13 @@ function QueueBlockItem({
             path={first.catalogue.coverPath}
             url={first.catalogue.coverUrl}
             alt=""
-            className="h-9 w-9 shrink-0"
-            rounded="rounded-lg"
-            fallbackClassName="h-4 w-4"
+            className="h-12 w-12 shrink-0"
+            rounded="rounded-xl"
+            fallbackClassName="h-5 w-5"
           />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[11.5px] font-medium text-white/75">{block.title}</p>
-            <p className="truncate text-[10px] text-white/30">
+            <p className="truncate text-[13px] font-medium text-white/75">{block.title}</p>
+            <p className="truncate text-[11px] text-white/30">
               {block.artist} · Album · {String(block.entries.length)} songs
             </p>
           </div>
@@ -331,11 +318,11 @@ function QueueRow({
         openAt(event.clientX, event.clientY, { kind: "queue-track", entry });
       }}
       className={cn(
-        "group flex min-w-0 items-center gap-2 rounded-xl px-2 py-2 select-none",
+        "group flex min-w-0 items-center gap-3 rounded-xl px-3 py-2.5 select-none",
         current ? "bg-accent/[0.055]" : "cursor-pointer hover:bg-white/[0.04]",
       )}
     >
-      <span className="tabular w-5 shrink-0 text-center text-[10px] text-white/20">
+      <span className="tabular w-7 shrink-0 text-center text-[11px] text-white/20">
         {String(position).padStart(2, "0")}
       </span>
       <button
@@ -358,15 +345,15 @@ function QueueRow({
         path={entry.catalogue.coverPath}
         url={entry.catalogue.coverUrl}
         alt=""
-        className="h-9 w-9 shrink-0"
-        rounded="rounded-lg"
-        fallbackClassName="h-4 w-4"
+        className="h-12 w-12 shrink-0"
+        rounded="rounded-xl"
+        fallbackClassName="h-5 w-5"
       />
       <div className="min-w-0 flex-1">
-        <p className={cn("truncate text-[11.5px]", current ? "text-accent" : "text-white/80")}>
+        <p className={cn("truncate text-[13px]", current ? "text-accent" : "text-white/80")}>
           {entry.title}
         </p>
-        <p className="truncate text-[10px] text-white/30">
+        <p className="truncate text-[11px] text-white/30">
           {entry.artist || "Unknown artist"}
           {entry.album.length > 0 ? ` · ${entry.album}` : ""}
         </p>

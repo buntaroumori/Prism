@@ -84,8 +84,10 @@ export function Sidebar(): JSX.Element {
         <AppLogo className="h-8 w-8" />
         {!collapsed ? (
           <div className="min-w-0">
-            <p className="truncate text-[13px] font-semibold tracking-tight text-white">Prism</p>
-            <p className="truncate text-[9px] font-medium tracking-[0.22em] text-white/30 uppercase">
+            <p className="truncate text-[13px] leading-4 font-semibold tracking-tight text-white">
+              Prism
+            </p>
+            <p className="truncate text-[9px] leading-3 font-medium tracking-[0.22em] text-white/30 uppercase">
               Your music
             </p>
           </div>
@@ -98,12 +100,7 @@ export function Sidebar(): JSX.Element {
 
       <div className="mx-3 my-4 h-px shrink-0 bg-white/[0.06]" />
 
-      <section aria-label="Dock" className="flex min-h-0 flex-1 flex-col">
-        {!collapsed ? (
-          <h2 className="mb-2 px-5 text-[9.5px] font-semibold tracking-[0.18em] text-white/25 uppercase">
-            Dock
-          </h2>
-        ) : null}
+      <section aria-label="Pinned items" className="flex min-h-0 flex-1 flex-col">
         {dock.length === 0 ? (
           !collapsed ? (
             <p className="px-5 text-[10.5px] leading-relaxed text-white/25">
@@ -172,7 +169,11 @@ function DockRow({ item, collapsed }: { item: DockItem; collapsed: boolean }): J
     (playlist !== null && route === "playlist" && params.playlistId === playlist.id);
 
   return (
-    <Reorder.Item value={item} className="relative list-none rounded-xl bg-oled-900/95">
+    <Reorder.Item
+      value={item}
+      layout="position"
+      className="relative list-none rounded-xl bg-oled-900/95"
+    >
       <button
         type="button"
         aria-label={title}

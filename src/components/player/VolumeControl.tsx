@@ -15,6 +15,8 @@ interface VolumeControlProps {
   onToggleMute: () => void;
   /** Explicit, idempotent unmute for the start of a slider gesture. */
   onUnmute: () => void;
+  /** Narrow transport rows keep the slider and hide only its numeric readout. */
+  compact?: boolean;
 }
 
 /**
@@ -30,6 +32,7 @@ export function VolumeControl({
   onCommit,
   onToggleMute,
   onUnmute,
+  compact = false,
 }: VolumeControlProps): JSX.Element {
   const value = Math.min(0, Math.max(-60, volumeDb));
   const percent = muted ? 0 : volumePercentFromDb(value);
@@ -52,7 +55,9 @@ export function VolumeControl({
     muted || percent === 0 ? VolumeX : percent > 75 ? Volume2 : percent > 35 ? Volume1 : Volume;
 
   return (
-    <div className="no-drag flex w-[150px] shrink-0 items-center gap-2">
+    <div
+      className={cn("no-drag flex shrink-0 items-center gap-2", compact ? "w-[92px]" : "w-[150px]")}
+    >
       <button
         type="button"
         onClick={onToggleMute}
@@ -83,9 +88,11 @@ export function VolumeControl({
           onCommit(volumeDbFromPercent(next));
         }}
       />
-      <span className="tabular w-7 text-right text-[10px] text-white/30" aria-hidden="true">
-        {percent}
-      </span>
+      {!compact ? (
+        <span className="tabular w-7 text-right text-[10px] text-white/30" aria-hidden="true">
+          {percent}
+        </span>
+      ) : null}
     </div>
   );
 }

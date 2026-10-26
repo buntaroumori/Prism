@@ -1,9 +1,10 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { useEffect, useRef, useState, type CSSProperties, type JSX } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from "react";
 import { Info, TriangleAlert, X } from "lucide-react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
 import { ContextMenuHost } from "@/components/ContextMenuHost";
+import { LyricsSheet } from "@/components/player/LyricsSheet";
 import { PlayerBar } from "@/components/player/PlayerBar";
 import { Sidebar } from "@/components/Sidebar";
 import { TopBar } from "@/components/TopBar";
@@ -12,6 +13,7 @@ import { LibraryView } from "@/components/views/LibraryView";
 import { NowPlayingView } from "@/components/views/NowPlayingView";
 import { PlaylistsView } from "@/components/views/PlaylistsView";
 import { PlaylistView } from "@/components/views/PlaylistView";
+import { QueueView } from "@/components/views/QueueView";
 import { AlbumView } from "@/components/views/AlbumView";
 import { ArtistView } from "@/components/views/ArtistView";
 import { SettingsView } from "@/components/views/SettingsView";
@@ -52,6 +54,37 @@ export function AppShell(): JSX.Element {
   const clearPlaybackError = usePlaybackStore((state) => state.clearError);
   const notice = usePlaybackStore((state) => state.notice);
   const clearNotice = usePlaybackStore((state) => state.clearNotice);
+  const theme = useUiStore((state) => state.theme);
+  const [resolvedTheme, setResolvedTheme] = useState<"light" | "dark">(() =>
+    document.documentElement.classList.contains("light") ? "light" : "dark",
+  );
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = (): void => {
+      const resolved = theme === "system" ? (media.matches ? "dark" : "light") : theme;
+      const root = document.documentElement;
+      root.classList.toggle("light", resolved === "light");
+      root.classList.toggle("dark", resolved === "dark");
+      root.style.colorScheme = resolved;
+      root.style.setProperty(
+        "--prism-boot-background",
+        resolved === "light" ? "#f4f4f6" : "#08080a",
+      );
+      document
+        .querySelector('meta[name="theme-color"]')
+        ?.setAttribute("content", resolved === "light" ? "#f4f4f6" : "#08080a");
+      document
+        .querySelector('meta[name="color-scheme"]')
+        ?.setAttribute("content", resolved === "light" ? "light" : "dark");
+      setResolvedTheme(resolved);
+    };
+    apply();
+    media.addEventListener("change", apply);
+    return () => {
+      media.removeEventListener("change", apply);
+    };
+  }, [theme]);
 
   useEffect(() => {
     void loadOverview();
@@ -69,6 +102,8 @@ export function AppShell(): JSX.Element {
   const params = useUiStore((state) => state.params);
   const sidebarHidden = useUiStore((state) => state.sidebarHidden);
   const scrollRestore = useUiStore((state) => state.scrollRestore);
+  const lyricsOpen = useUiStore((state) => state.lyricsOpen);
+  const setLyricsOpen = useUiStore((state) => state.setLyricsOpen);
   const mainRef = useRef<HTMLElement | null>(null);
   const [sidebarPeek, setSidebarPeek] = useState(false);
   const intensity = useUiStore((state) => state.ambientIntensity);
@@ -94,26 +129,39 @@ export function AppShell(): JSX.Element {
     setSidebarPeek(false);
   }, [route, sidebarHidden]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (scrollRestore === null) return;
-    let frame = 0;
-    let attempts = 0;
-    const timer = window.setTimeout(() => {
-      const restore = (): void => {
-        const scroller = mainRef.current;
-        if (scroller === null) return;
-        scroller.scrollTop = scrollRestore.top;
-        attempts += 1;
-        const reached = Math.abs(scroller.scrollTop - scrollRestore.top) <= 1;
-        const hasRoom = scroller.scrollHeight - scroller.clientHeight >= scrollRestore.top - 1;
-        if (reached || hasRoom || attempts >= 180) return;
-        frame = window.requestAnimationFrame(restore);
-      };
-      frame = window.requestAnimationFrame(restore);
-    }, 200);
+    const scroller = mainRef.current;
+    if (scroller === null) return;
+
+    let restored = false;
+    const restore = (): void => {
+      if (restored) return;
+      const top = Math.max(0, scrollRestore.top);
+      const hasRoom = scroller.scrollHeight - scroller.clientHeight >= top - 1;
+      if (!hasRoom) return;
+
+      // One write, before paint whenever the content is already available.
+      // If pagination still needs to grow, later mutations retry the geometry
+      // check but never drag the user through every intermediate offset.
+      restored = true;
+      const behavior = scroller.style.scrollBehavior;
+      scroller.style.scrollBehavior = "auto";
+      scroller.scrollTop = top;
+      scroller.style.scrollBehavior = behavior;
+      observer.disconnect();
+    };
+
+    const observer = new MutationObserver(restore);
+    observer.observe(scroller, { childList: true, subtree: true });
+    restore();
+    const frame = window.requestAnimationFrame(restore);
+    window.addEventListener("resize", restore);
     return () => {
-      window.clearTimeout(timer);
+      restored = true;
+      observer.disconnect();
       window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", restore);
     };
   }, [scrollRestore]);
 
@@ -124,6 +172,7 @@ export function AppShell(): JSX.Element {
     tintStrength,
     corners,
     density,
+    light: resolvedTheme === "light",
   });
 
   return (
@@ -131,6 +180,8 @@ export function AppShell(): JSX.Element {
       className="relative flex h-full overflow-hidden bg-oled-950 text-white"
       style={tokens}
       data-route={route}
+      data-theme={resolvedTheme}
+      data-lyrics-open={lyricsOpen}
       data-density={density}
       data-corners={corners}
       data-effects={resolvedEffects}
@@ -168,77 +219,89 @@ export function AppShell(): JSX.Element {
       <div className="relative z-10 flex min-w-0 flex-1 flex-col">
         <TopBar />
 
-        <main
-          ref={mainRef}
-          data-prism-scroll
-          className={
-            route === "now-playing"
-              ? "relative flex min-h-0 flex-1 flex-col overflow-hidden"
-              : "relative flex min-h-0 flex-1 flex-col overflow-y-auto"
-          }
-        >
-          {(libraryError !== null || playbackError !== null) && (
-            <div className="mx-auto w-full max-w-[1420px] px-8 pt-4">
-              {[libraryError, playbackError].map((failure, index) =>
-                failure === null ? null : (
-                  <div
-                    key={`${failure.code}-${String(index)}`}
-                    role="alert"
-                    className="mb-2 flex items-start gap-3 rounded-2xl border border-critical/20 bg-critical/[0.06] px-4 py-2.5"
-                  >
-                    <TriangleAlert
-                      className="mt-0.5 h-4 w-4 shrink-0 text-critical"
-                      aria-hidden="true"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[12px] font-medium text-critical">
-                        {failure.code === "output" ? "Output device" : "Request failed"} ·{" "}
-                        {failure.code}
-                      </p>
-                      <p className="mt-0.5 text-[11.5px] text-white/50">{failure.message}</p>
-                    </div>
-                    <button
-                      type="button"
-                      aria-label="Dismiss"
-                      onClick={() => {
-                        clearLibraryError();
-                        clearPlaybackError();
-                      }}
-                      className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-white/30 hover:bg-white/[0.06] hover:text-white/70"
+        <div className="relative flex min-h-0 min-w-0 flex-1">
+          <main
+            ref={mainRef}
+            data-prism-scroll
+            className={
+              route === "now-playing"
+                ? "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+                : "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto"
+            }
+          >
+            {(libraryError !== null || playbackError !== null) && (
+              <div className="mx-auto w-full max-w-[1420px] px-8 pt-4">
+                {[libraryError, playbackError].map((failure, index) =>
+                  failure === null ? null : (
+                    <div
+                      key={`${failure.code}-${String(index)}`}
+                      role="alert"
+                      className="mb-2 flex items-start gap-3 rounded-2xl border border-critical/20 bg-critical/[0.06] px-4 py-2.5"
                     >
-                      <X className="h-3.5 w-3.5" aria-hidden="true" />
-                    </button>
-                  </div>
-                ),
-              )}
-            </div>
-          )}
-
-          {notice !== null ? (
-            <div className="mx-auto w-full max-w-[1420px] px-8 pt-4">
-              <div
-                role="status"
-                className="flex items-start gap-3 rounded-2xl border border-warning/20 bg-warning/[0.05] px-4 py-2.5"
-              >
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-[12px] font-medium text-warning">Skipped · {notice.title}</p>
-                  <p className="mt-0.5 text-[11.5px] text-white/50">{notice.message}</p>
-                </div>
-                <button
-                  type="button"
-                  aria-label="Dismiss"
-                  onClick={clearNotice}
-                  className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-white/30 hover:bg-white/[0.06] hover:text-white/70"
-                >
-                  <X className="h-3.5 w-3.5" aria-hidden="true" />
-                </button>
+                      <TriangleAlert
+                        className="mt-0.5 h-4 w-4 shrink-0 text-critical"
+                        aria-hidden="true"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[12px] font-medium text-critical">
+                          {failure.code === "output" ? "Output device" : "Request failed"} ·{" "}
+                          {failure.code}
+                        </p>
+                        <p className="mt-0.5 text-[11.5px] text-white/50">{failure.message}</p>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Dismiss"
+                        onClick={() => {
+                          clearLibraryError();
+                          clearPlaybackError();
+                        }}
+                        className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-white/30 hover:bg-white/[0.06] hover:text-white/70"
+                      >
+                        <X className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
+                  ),
+                )}
               </div>
-            </div>
-          ) : null}
+            )}
 
-          <PageTransition route={route} params={params} />
-        </main>
+            {notice !== null ? (
+              <div className="mx-auto w-full max-w-[1420px] px-8 pt-4">
+                <div
+                  role="status"
+                  className="flex items-start gap-3 rounded-2xl border border-warning/20 bg-warning/[0.05] px-4 py-2.5"
+                >
+                  <Info className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden="true" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12px] font-medium text-warning">Skipped · {notice.title}</p>
+                    <p className="mt-0.5 text-[11.5px] text-white/50">{notice.message}</p>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Dismiss"
+                    onClick={clearNotice}
+                    className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-white/30 hover:bg-white/[0.06] hover:text-white/70"
+                  >
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            <PageTransition route={route} params={params} restoring={scrollRestore !== null} />
+          </main>
+
+          <AnimatePresence initial={false}>
+            {lyricsOpen && route !== "now-playing" ? (
+              <LyricsSheet
+                onClose={() => {
+                  setLyricsOpen(false);
+                }}
+              />
+            ) : null}
+          </AnimatePresence>
+        </div>
 
         <div className={route === "now-playing" ? "hidden" : "contents"}>
           <PlayerBar />
@@ -260,9 +323,11 @@ export function AppShell(): JSX.Element {
 function PageTransition({
   route,
   params,
+  restoring,
 }: {
   route: ShellRoute;
   params: RouteParams;
+  restoring: boolean;
 }): JSX.Element {
   const reduce = useReducedMotion();
   const key = `${route}:${params.albumId ?? ""}:${params.artistId ?? ""}:${params.collection ?? ""}:${params.genre ?? ""}:${params.playlistId ?? ""}`;
@@ -271,10 +336,10 @@ function PageTransition({
     <AnimatePresence mode="wait" initial={false}>
       <motion.div
         key={key}
-        initial={reduce === true ? false : { opacity: 0, y: 8 }}
+        initial={reduce === true || restoring ? false : { opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        exit={reduce === true ? { opacity: 1, y: 0 } : { opacity: 0, y: -6 }}
-        transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+        exit={{ opacity: 0, y: 0, transition: { duration: 0 } }}
+        transition={{ duration: restoring ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
         className={route === "now-playing" ? "min-h-0 w-full flex-1" : "min-h-full w-full"}
       >
         {route === "home" ? <HomeView /> : null}
@@ -293,6 +358,7 @@ function PageTransition({
           <ArtistView artistId={params.artistId} />
         ) : null}
         {route === "now-playing" ? <NowPlayingView /> : null}
+        {route === "queue" ? <QueueView /> : null}
         {route === "settings" ? <SettingsView /> : null}
       </motion.div>
     </AnimatePresence>
@@ -316,6 +382,7 @@ function paletteTokens(
     tintStrength: number;
     corners: "sharp" | "soft" | "round";
     density: "comfortable" | "compact";
+    light: boolean;
   },
 ): CSSProperties {
   const tokens: Record<string, string> = {
@@ -342,20 +409,26 @@ function paletteTokens(
     return tokens;
   }
 
+  const neutralSurface = appearance.light ? "#ffffff" : "#12131c";
+  const neutralBackground = appearance.light ? "#f4f4f6" : "#08080a";
+  const strength = appearance.light ? appearance.tintStrength * 0.22 : appearance.tintStrength;
+  const surfaceColour = appearance.light ? palette.highlight : palette.surface;
+  const backgroundColour = appearance.light ? palette.accent : palette.background;
+
   return {
     ...tokens,
     ...(appearance.accentSource === "artwork"
       ? {
           "--prism-accent": palette.accent,
           "--prism-accent-soft": palette.accentSoft,
-          "--prism-surface": mixTint(palette.surface, "#12131c", appearance.tintStrength),
-          "--prism-background": mixTint(palette.background, "#08080a", appearance.tintStrength),
+          "--prism-surface": mixTint(surfaceColour, neutralSurface, strength),
+          "--prism-background": mixTint(backgroundColour, neutralBackground, strength),
           "--prism-highlight": palette.highlight,
           "--prism-highlight-alt": palette.highlightAlt,
         }
       : {
-          "--prism-surface": mixTint(palette.surface, "#12131c", appearance.tintStrength),
-          "--prism-background": mixTint(palette.background, "#08080a", appearance.tintStrength),
+          "--prism-surface": mixTint(surfaceColour, neutralSurface, strength),
+          "--prism-background": mixTint(backgroundColour, neutralBackground, strength),
         }),
   } as CSSProperties;
 }

@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
+import { useBrowseStore } from "@/stores/browseStore";
+import { useLibraryStore } from "@/stores/libraryStore";
 import type { AlbumCollection } from "@/types/ipc";
 
 /**
@@ -17,6 +19,7 @@ export type ShellRoute =
   | "playlists"
   | "playlist"
   | "now-playing"
+  | "queue"
   | "settings"
   | "album"
   | "artist";
@@ -62,6 +65,9 @@ export type Density = "comfortable" | "compact";
 /** Accent policy: follow the artwork, or pin a colour. */
 export type AccentSource = "artwork" | "fixed";
 
+/** Fixed colour scheme, or the operating system's current light/dark choice. */
+export type ThemePreference = "light" | "dark" | "system";
+
 /**
  * How much of the interface may cost the compositor.
  *
@@ -86,8 +92,11 @@ interface UiState {
   navigationNonce: number;
   /** Full rail visibility, distinct from the existing narrow/expanded mode. */
   sidebarHidden: boolean;
+  /** The right-hand lyrics column is shell state, not a Player Bar dialog. */
+  lyricsOpen: boolean;
 
   /* ------------------------------------------------------------ appearance */
+  theme: ThemePreference;
   accentSource: AccentSource;
   accentColor: string;
   /** 0–100: opacity of the frosted surfaces over the OLED black. */
@@ -114,8 +123,12 @@ interface UiState {
   openArtist: (artistId: string) => void;
   openCollection: (collection: AlbumCollection | null, genre?: string) => void;
   openPlaylist: (playlistId: string) => void;
+  openLibraryGenre: (genre: string) => void;
   setRoute: (route: ShellRoute) => void;
   toggleSettings: () => void;
+  toggleQueue: () => void;
+  toggleLyrics: () => void;
+  setLyricsOpen: (open: boolean) => void;
   back: () => void;
 
   setMeasuredEffects: (effects: ResolvedEffects) => void;
@@ -130,6 +143,7 @@ interface UiState {
 /** The subset of the store the appearance panel writes. */
 export type AppearanceState = Pick<
   UiState,
+  | "theme"
   | "accentSource"
   | "accentColor"
   | "glassOpacity"
@@ -145,6 +159,7 @@ export type AppearanceState = Pick<
 >;
 
 const DEFAULT_APPEARANCE: AppearanceState = {
+  theme: "dark",
   accentSource: "artwork",
   accentColor: "#7dd3fc",
   glassOpacity: 62,
@@ -184,6 +199,7 @@ export const useUiStore = create<UiState>()(
       navigationNonce: 0,
       paletteKey: null,
       measuredEffects: null,
+      lyricsOpen: false,
       ...DEFAULT_APPEARANCE,
 
       setMeasuredEffects: (measuredEffects) => {
@@ -213,33 +229,37 @@ export const useUiStore = create<UiState>()(
       },
 
       navigate: (route, params) => {
+        clearLibraryTransientState(get().route, route);
         set((state) => go(state, route, routeParams(params)));
       },
 
       openAlbum: (albumId) => {
-        set((state) => go(state, "album", { ...NO_PARAMS, albumId }));
+        get().navigate("album", { albumId });
       },
 
       openArtist: (artistId) => {
-        set((state) => go(state, "artist", { ...NO_PARAMS, artistId }));
+        get().navigate("artist", { artistId });
       },
 
       openCollection: (collection, genre) => {
-        set((state) =>
-          go(state, "collection", {
-            ...NO_PARAMS,
-            collection,
-            genre: genre ?? null,
-          }),
-        );
+        get().navigate("collection", { collection, genre: genre ?? null });
       },
 
       openPlaylist: (playlistId) => {
-        set((state) => go(state, "playlist", { ...NO_PARAMS, playlistId }));
+        get().navigate("playlist", { playlistId });
+      },
+
+      openLibraryGenre: (genre) => {
+        const normalized = genre.trim();
+        if (normalized.length === 0) return;
+        useLibraryStore.getState().setQuery("");
+        useBrowseStore.getState().clearFilters();
+        useBrowseStore.getState().setGenre(normalized);
+        get().navigate("library");
       },
 
       setRoute: (route) => {
-        set((state) => go(state, route, { ...NO_PARAMS }));
+        get().navigate(route);
       },
 
       toggleSettings: () => {
@@ -250,37 +270,62 @@ export const useUiStore = create<UiState>()(
         }
       },
 
-      back: () => {
-        set((state) => {
-          const previous = state.history[state.history.length - 1];
-          const nonce = state.navigationNonce + 1;
-          if (previous !== undefined) {
-            return {
-              route: previous.route,
-              params: previous.params,
-              history: state.history.slice(0, -1),
-              navigationNonce: nonce,
-              scrollRestore: { nonce, top: previous.scrollTop },
-            };
-          }
+      toggleQueue: () => {
+        if (get().route === "queue") {
+          get().back();
+        } else {
+          get().setRoute("queue");
+        }
+      },
 
-          // Directly opened detail routes still have a sensible fallback.
-          const fallback: Partial<Record<ShellRoute, ShellRoute>> = {
-            album: "library",
-            artist: "library",
-            collection: "home",
-            playlist: "playlists",
-            settings: "home",
-            "now-playing": "home",
-          };
-          const route = fallback[state.route];
-          if (route === undefined) return {};
-          return {
-            route,
-            params: { ...NO_PARAMS },
+      toggleLyrics: () => {
+        set((state) => ({ lyricsOpen: !state.lyricsOpen }));
+      },
+
+      setLyricsOpen: (lyricsOpen) => {
+        set({ lyricsOpen });
+      },
+
+      back: () => {
+        const state = get();
+        const previous = state.history[state.history.length - 1];
+        const nonce = state.navigationNonce + 1;
+        if (previous !== undefined) {
+          clearLibraryTransientState(state.route, previous.route);
+          if (previous.route === "library") {
+            useLibraryStore.getState().setQuery("");
+            useBrowseStore.getState().clearFilters();
+          }
+          set({
+            route: previous.route,
+            params: previous.params,
+            history: state.history.slice(0, -1),
             navigationNonce: nonce,
-            scrollRestore: { nonce, top: 0 },
-          };
+            scrollRestore: { nonce, top: previous.scrollTop },
+            lyricsOpen: previous.route === "now-playing" ? false : state.lyricsOpen,
+          });
+          return;
+        }
+
+        // Directly opened detail routes still have a sensible fallback.
+        const fallback: Partial<Record<ShellRoute, ShellRoute>> = {
+          album: "library",
+          artist: "library",
+          collection: "home",
+          playlist: "playlists",
+          queue: "home",
+          settings: "home",
+          "now-playing": "home",
+        };
+        const route = fallback[state.route];
+        if (route === undefined) return;
+        clearLibraryTransientState(state.route, route);
+        set({
+          route,
+          params: { ...NO_PARAMS },
+          navigationNonce: nonce,
+          scrollRestore: { nonce, top: 0 },
+          lyricsOpen: route === "now-playing" ? false : state.lyricsOpen,
         });
       },
 
@@ -296,6 +341,7 @@ export const useUiStore = create<UiState>()(
         set((state) => {
           const next: AppearanceState = { ...state, ...patch };
           return {
+            theme: next.theme,
             accentSource: next.accentSource,
             accentColor: next.accentColor,
             glassOpacity: clamp(Math.round(next.glassOpacity), 0, 100),
@@ -318,13 +364,14 @@ export const useUiStore = create<UiState>()(
     }),
     {
       name: "prism.shell.preferences",
-      version: 4,
+      version: 5,
       storage: createJSONStorage(() => localStorage),
       partialize: (
         state,
       ): AppearanceState & { sidebarCollapsed: boolean; sidebarHidden: boolean } => ({
         sidebarCollapsed: state.sidebarCollapsed,
         sidebarHidden: state.sidebarHidden,
+        theme: state.theme,
         accentSource: state.accentSource,
         accentColor: state.accentColor,
         glassOpacity: state.glassOpacity,
@@ -340,12 +387,13 @@ export const useUiStore = create<UiState>()(
       }),
       // v1 stored `activeSection`; v2 introduced the router; v3 split the
       // appearance knobs out of the ambient switch and added the mosaic size;
-      // v4 lets the compositor budget be chosen or measured.
+      // v4 lets the compositor budget be chosen or measured; v5 adds the
+      // light/dark/system preference while retaining dark as the default.
       migrate: (persisted, version) => {
         if (version < 2) {
           return { ...DEFAULT_APPEARANCE, sidebarCollapsed: false };
         }
-        if (version < 4) {
+        if (version < 5) {
           return { ...DEFAULT_APPEARANCE, ...(persisted as object) };
         }
         return persisted;
@@ -371,7 +419,12 @@ function locationKey(route: ShellRoute, params: RouteParams): string {
 /** Navigate forward while remembering exactly where the current view was. */
 function go(state: UiState, route: ShellRoute, params: RouteParams): Partial<UiState> {
   if (locationKey(state.route, state.params) === locationKey(route, params)) {
-    return { route, params, scrollRestore: null };
+    return {
+      route,
+      params,
+      scrollRestore: null,
+      lyricsOpen: route === "now-playing" ? false : state.lyricsOpen,
+    };
   }
   const scroller =
     typeof document === "undefined"
@@ -387,7 +440,16 @@ function go(state: UiState, route: ShellRoute, params: RouteParams): Partial<UiS
     params,
     history: [...state.history, current].slice(-50),
     scrollRestore: null,
+    lyricsOpen: route === "now-playing" ? false : state.lyricsOpen,
   };
+}
+
+/** Leaving Library drops transient search/filter state, never the saved sort. */
+function clearLibraryTransientState(current: ShellRoute, next: ShellRoute): void {
+  if (current === "library" && next !== "library") {
+    useLibraryStore.getState().setQuery("");
+    useBrowseStore.getState().clearFilters();
+  }
 }
 
 function clamp(value: number, min: number, max: number): number {

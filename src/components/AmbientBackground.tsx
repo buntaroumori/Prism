@@ -65,7 +65,7 @@ export function AmbientBackground({
             opacity: Number(primary) * 0.55,
           }}
         />
-        <div className="absolute inset-0 bg-[radial-gradient(120%_85%_at_50%_0%,transparent_18%,rgb(8_8_10/0.6)_72%,rgb(8_8_10/0.92)_100%)]" />
+        <div className="ambient-vignette absolute inset-0" />
       </div>
     );
   }
@@ -100,7 +100,7 @@ export function AmbientBackground({
       />
 
       {/* Vignette: keeps the outer 15 % of the window readable against the orbs. */}
-      <div className="absolute inset-0 bg-[radial-gradient(120%_85%_at_50%_0%,transparent_18%,rgb(8_8_10/0.6)_72%,rgb(8_8_10/0.92)_100%)]" />
+      <div className="ambient-vignette absolute inset-0" />
       <div className="grain absolute inset-0 opacity-[0.03] mix-blend-overlay" />
     </div>
   );

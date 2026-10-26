@@ -9,7 +9,6 @@ import { formatReleaseDate, sourceLabel } from "@/lib/sourceLabel";
 import { cn } from "@/lib/utils";
 import { libraryApi } from "@/lib/ipc";
 import { useDockStore } from "@/stores/dockStore";
-import { useBrowseStore } from "@/stores/browseStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { AlbumDetail } from "@/types/ipc";
@@ -17,10 +16,8 @@ import type { AlbumDetail } from "@/types/ipc";
 /** One record, ordered by disc and track number with a section per disc. */
 export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
   const back = useUiStore((state) => state.back);
-  const navigate = useUiStore((state) => state.navigate);
   const openArtist = useUiStore((state) => state.openArtist);
-  const setGenre = useBrowseStore((state) => state.setGenre);
-  const setDecade = useBrowseStore((state) => state.setDecade);
+  const openLibraryGenre = useUiStore((state) => state.openLibraryGenre);
   const playTracks = usePlaybackStore((state) => state.playTracks);
   const shuffleActive = usePlaybackStore((state) => state.shuffleSnapshot !== null);
   const [detail, setDetail] = useState<AlbumDetail | null>(null);
@@ -134,9 +131,8 @@ export function AlbumView({ albumId }: { albumId: string }): JSX.Element {
             <button
               type="button"
               onClick={() => {
-                setDecade(null);
-                setGenre(album.genre);
-                navigate("library");
+                const genre = album.genre;
+                if (genre !== null) openLibraryGenre(genre);
               }}
               aria-label={`Show ${album.genre} albums in Library`}
               className="mt-1 block text-[11.5px] text-white/35 transition-colors hover:text-accent hover:underline hover:underline-offset-2"

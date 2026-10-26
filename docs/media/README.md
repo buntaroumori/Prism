@@ -6,10 +6,10 @@ These assets support the project documentation.
 
 | File              | View                                           |
 | :---------------- | :--------------------------------------------- |
-| `home.png`        | Home listening history and recent additions    |
-| `library.png`     | Library album grid, sorting and genre filter   |
+| `home.png`        | Home collection rails and recent additions     |
+| `library.png`     | Library album grid, sorting and filters        |
 | `now-playing.png` | Now Playing with artwork and spectrum analysis |
-| `appearance.png`  | Appearance within the unified Settings view    |
+| `appearance.png`  | Theme and output within unified Settings       |
 
 The screenshots are referenced by the [repository README](../../README.md#screenshots). Keep their
 filenames stable when replacing them so documentation links remain valid. The curated screens use a

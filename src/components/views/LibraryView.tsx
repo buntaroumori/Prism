@@ -69,6 +69,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
   const year = useBrowseStore((state) => state.year);
   const cycleStoredSort = useBrowseStore((state) => state.cycleSort);
   const setStoredGenre = useBrowseStore((state) => state.setGenre);
+  const clearFilters = useBrowseStore((state) => state.clearFilters);
   const setDecade = useBrowseStore((state) => state.setDecade);
   const setYear = useBrowseStore((state) => state.setYear);
 
@@ -309,6 +310,17 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
 
         {!curated ? (
           <div className="flex flex-wrap items-center gap-2">
+            {storedGenre !== null || activeDecade !== null ? (
+              <button
+                type="button"
+                onClick={clearFilters}
+                title="Clear genre, decade and year filters"
+                className="flex h-8 items-center gap-1.5 rounded-full border border-white/10 px-3 text-[11px] text-white/50 transition-colors hover:bg-white/[0.05] hover:text-white"
+              >
+                <X className="h-3 w-3" aria-hidden="true" />
+                Clear filters
+              </button>
+            ) : null}
             <PopoverSelect
               ariaLabel="Filter by genre"
               value={storedGenre ?? ""}

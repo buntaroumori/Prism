@@ -16,9 +16,9 @@ designed for local music libraries, precise format handling and a configurable l
 ### Playback
 
 - Gapless playback with prefetching and sample-aware track boundaries.
-- A reorderable queue with album groups, Play next, removal, double-click jumping and queue-aware
-  Skip. Album playback stops at its boundary by default; optional continuation follows the
-  originating Library filters and ordering.
+- A full-page, reorderable queue opened from the Player Bar, with album groups, Play next,
+  removal, double-click jumping and queue-aware Skip. Album playback stops at its boundary by
+  default; optional continuation follows the originating Library filters and ordering.
 - Shuffle with exact prior-order restoration and immediate volume changes while dragging.
 - Native output through WASAPI, optional ASIO, PipeWire and ALSA, with a shared-output fallback.
 - Source-rate and fixed-rate output policies, with format negotiation and resampling when required.
@@ -31,12 +31,14 @@ designed for local music libraries, precise format handling and a configurable l
 ### Library
 
 - Incremental scanning with per-file error isolation and cooperative cancellation.
-- Album, artist, genre and multi-disc browsing with persistent sorting and filters, including
-  complete-release-date Year ordering and dynamic decade/year filters based on available albums.
+- Album, artist, genre and multi-disc browsing with persistent sorting and transient search,
+  genre, decade and year filters, including complete-release-date Year ordering and dynamic facets
+  based on available albums. A Clear filters action restores the complete Library.
 - Full-text search with diacritic folding and grouped track, album and artist results.
 - Album pages with full release dates, genres, disc-aware tracklists and adjacent Play actions.
 - User playlists with explicit ordering, duplicate protection, optional descriptions and genres,
-  and custom covers chosen through a native file picker.
+  and custom covers chosen through a native file picker. Playlist rows show each track's source
+  cover and a link to its source album.
 - Embedded and folder artwork, with optional online artwork providers, deduplicated master and
   thumbnail caches, and background upgrades for missing thumbnails.
 - Home collections for recent additions, listening history, releases, genres and rediscovery.
@@ -45,14 +47,18 @@ designed for local music libraries, precise format handling and a configurable l
 
 - Home, Library, Playlists, album, artist and Now Playing views.
 - A fixed Now Playing deck with aligned artwork, embedded transport controls and local or LRCLIB
-  lyrics with synchronized highlighting. Spectrum can accompany lyrics or take their panel when no
-  lyrics exist, and a microphone control opens a centered lyrics sheet.
+  lyrics with synchronized highlighting. Volume and Queue sit beside transport above the seek bar,
+  and song, album, artist and genre metadata open their corresponding views. Spectrum can accompany
+  lyrics or take their panel when no lyrics exist.
+- A synchronized-lyrics column docked between the Top Bar and Player Bar. The current page makes
+  room for it and expands again when it closes.
 - A reorderable Dock for pinned albums and playlists in expanded and collapsed sidebars. The
   sidebar can also be hidden and revealed from the left edge.
-- Persistent appearance, playback, browsing, Dock and window preferences.
+- Light, Dark and System themes with a symbolic Home preview in Settings. Persistent appearance,
+  playback, browsing, Dock and window preferences retain the existing dark colorimetry.
 - A unified Settings view, including System information, opened from the draggable top bar.
   Borderless windows provide integrated fullscreen and minimize, maximize and close controls;
-  Back and Settings navigation restore the previous route and scroll position.
+  Back and Settings navigation restore the previous route and exact scroll position immediately.
 - Application context menus, Prism-styled selectors and desktop-oriented track interactions.
 - Windows system media controls with song metadata, artwork, seeking and native media-key support.
 - Optional Discord Rich Presence with configurable paused activity. A local album/artist artwork

@@ -6,6 +6,35 @@ Notable user-visible changes are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-10-26
+
+### Added
+
+- Light, Dark and System themes with a symbolic Home preview at the top of Settings and a complete
+  light colour treatment across the shell.
+- Clear filters for Library search and genre, decade and year controls, while preserving the chosen
+  sorting direction.
+- Source-album covers and clickable source-album names in playlist tracklists.
+
+### Changed
+
+- Synchronized lyrics now occupy a right-hand column between the Top Bar and Player Bar. The
+  current page shrinks alongside the column and expands again when it closes.
+- Queue is a full content-area page opened only from the Player Bar. The same button toggles exit,
+  and Back returns to the actual previous page.
+- Now Playing places Volume and Queue beside transport above the seek bar, aligns the secondary
+  column with the artwork and playback area, and links song, album, artist and genre metadata to
+  their corresponding views.
+- Library searches and filters are transient when leaving the route; only sorting persists among
+  those controls. Explicit genre links still open the requested Library filter.
+- Back navigation restores the exact previous scroll position in one instantaneous write.
+
+### Fixed
+
+- Genre and decade menus remain open while scrolling or dragging their scrollbars.
+- Collapsing the Sidebar no longer shifts pinned albums or playlists vertically after removing the
+  Dock heading and stabilising the branded header height.
+
 ## [1.1.0] — 2026-10-25
 
 ### Added
@@ -188,7 +217,8 @@ Notable user-visible changes are recorded here. The format follows
 - Optional Lua and WebAssembly plugin runtimes with capability checks and resource limits.
 - Windows and Linux packaging configuration, dependency licence inventory and release checksums.
 
-[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.0
 [1.1.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.1.0
 [1.0.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.0.0
 [0.1.4]: https://github.com/buntaroumori/Prism/releases/tag/v0.1.4

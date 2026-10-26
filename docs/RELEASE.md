@@ -11,7 +11,7 @@ breaking changes to the plugin API, IPC contract or supported data formats requi
 version. Minor and patch releases preserve compatibility within their major version line.
 
 Database migrations are forward-only. A release must be able to open databases written by supported
-earlier releases. Prism 1.1.0 retains the migration path for existing 0.1.x and 1.0.x catalogues.
+earlier releases. Prism 1.2.0 retains the migration path for existing 0.1.x and 1.0.x catalogues.
 
 ## Version carriers
 
@@ -28,7 +28,7 @@ Check them before tagging:
 
 ```bash
 node scripts/check-version.mjs
-node scripts/check-version.mjs v1.1.0
+node scripts/check-version.mjs v1.2.0
 ```
 
 The second command also checks the proposed tag.
@@ -54,12 +54,12 @@ mismatched version metadata should be resolved before a tag is created.
 4. Run the local quality gate:
 
    ```bash
-   node scripts/check-version.mjs v1.1.0
+   node scripts/check-version.mjs v1.2.0
    pnpm check
    pnpm build
    pnpm schema:validate
    pnpm licenses:check
-   python3 scripts/validate_release.py v1.1.0
+   python3 scripts/validate_release.py v1.2.0
    cargo fmt --all -- --check
    cargo clippy --all-targets -- -D clippy::correctness -D clippy::suspicious -D clippy::perf
    cargo test --all-targets
@@ -73,8 +73,8 @@ mismatched version metadata should be resolved before a tag is created.
 Create an annotated tag from the reviewed commit:
 
 ```bash
-git tag -a v1.1.0 -m "Release v1.1.0"
-git push origin v1.1.0
+git tag -a v1.2.0 -m "Release v1.2.0"
+git push origin v1.2.0
 ```
 
 The tag must match the manifest versions. The release workflow is triggered by tags matching `v*`.
@@ -127,8 +127,8 @@ for a release.
 Download the release and verify its checksums:
 
 ```bash
-gh release download v1.1.0 --repo buntaroumori/Prism --dir /tmp/prism-1.1.0
-cd /tmp/prism-1.1.0
+gh release download v1.2.0 --repo buntaroumori/Prism --dir /tmp/prism-1.2.0
+cd /tmp/prism-1.2.0
 sha256sum -c SHA256SUMS.txt
 ```
 

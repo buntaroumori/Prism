@@ -15,18 +15,21 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Neutral ink and surfaces are semantic RGB tokens. Dark keeps the
+        // original OLED values; `.light` flips the same utilities everywhere.
+        white: "rgb(var(--prism-ink) / <alpha-value>)",
         oled: {
-          950: "#08080a",
-          900: "#0b0b0e",
-          850: "#0e0e11",
-          800: "#121215",
-          750: "#17171b",
-          700: "#1c1c21",
+          950: "rgb(var(--prism-surface-950) / <alpha-value>)",
+          900: "rgb(var(--prism-surface-900) / <alpha-value>)",
+          850: "rgb(var(--prism-surface-850) / <alpha-value>)",
+          800: "rgb(var(--prism-surface-800) / <alpha-value>)",
+          750: "rgb(var(--prism-surface-750) / <alpha-value>)",
+          700: "rgb(var(--prism-surface-700) / <alpha-value>)",
         },
         glass: {
-          DEFAULT: "rgb(255 255 255 / 0.06)",
-          strong: "rgb(255 255 255 / 0.10)",
-          border: "rgb(255 255 255 / 0.10)",
+          DEFAULT: "rgb(var(--prism-ink) / 0.06)",
+          strong: "rgb(var(--prism-ink) / 0.10)",
+          border: "rgb(var(--prism-ink) / 0.10)",
         },
         accent: {
           DEFAULT: "#7c8cff",

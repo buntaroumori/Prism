@@ -16,9 +16,10 @@ interface BrowseState {
   setGenre: (genre: string | null) => void;
   setDecade: (decade: number | null) => void;
   setYear: (year: number | null) => void;
+  clearFilters: () => void;
 }
 
-/** Library choices survive route changes, rescans and application restarts. */
+/** Only sorting is persistent; searches and filters are transient Library state. */
 export const useBrowseStore = create<BrowseState>()(
   persist(
     (set) => ({
@@ -50,23 +51,23 @@ export const useBrowseStore = create<BrowseState>()(
       setYear: (year) => {
         set((state) => ({ year: state.decade === null ? null : year }));
       },
+
+      clearFilters: () => {
+        set({ genre: null, decade: null, year: null });
+      },
     }),
     {
       name: "prism.library.browse",
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         sort: state.sort,
-        genre: state.genre,
-        decade: state.decade,
-        year: state.year,
       }),
       migrate: (persisted) => ({
-        sort: "artist",
+        sort: (persisted as { sort?: AlbumSort }).sort ?? "artist",
         genre: null,
         decade: null,
         year: null,
-        ...(persisted as object),
       }),
     },
   ),

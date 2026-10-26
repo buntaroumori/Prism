@@ -262,15 +262,26 @@ Dock and window preferences use versioned persistence where appropriate.
 
 Long track results are paged and virtualised. Page requests are generation-scoped so a late response
 from a previous query cannot replace current results. Album grids use backend pagination and stable
-ordering.
+ordering. Library sorting persists, while text and genre/decade/year filters are transient and reset
+when the route is left; explicit genre-navigation actions install their requested filter before the
+transition. Back restoration performs one instant scroll write after the destination renders.
 
-### Now Playing
+### Queue, lyrics and Now Playing
+
+Queue is a full content-area route owned by the Player Bar toggle. Its Back control follows actual
+route history, and its larger rows retain album grouping, reordering, removal and direct playback.
+It is not a floating panel or a Sidebar destination.
+
+The Player Bar lyrics control mounts a bounded right-hand column between the Top Bar and Player Bar.
+The column participates in the shell layout, so the current route gives up exactly its width and
+recovers that space on close. Lyrics remain available without replacing the current route.
 
 Now Playing uses one bounded, non-scrolling deck. The left column places metadata above aligned,
-unframed artwork and complete transport, seek, volume and queue controls below it. The right column
-has the same available width and height. The global Player Bar is unmounted only on this route and
-returns immediately elsewhere; its microphone control opens a centered synchronized-lyrics sheet
-with a short slide transition.
+unframed artwork and complete transport controls below it, with Volume and Queue beside transport
+above the seek bar. The right column aligns with the artwork top and playback-area bottom and has
+the same available width and height. Song, album, artist and genre metadata use the same catalogue
+navigation contracts as the Player Bar. The global Player Bar is unmounted only on this route and
+returns immediately elsewhere.
 
 Lyrics and Spectrum can share the right column. Spectrum defaults off when lyrics exist and becomes
 the sole right-hand panel when no lyrics are available. The analyser runs on decoded audio in the
@@ -286,9 +297,11 @@ not provide.
 
 ### Desktop shell
 
-Settings opens from a top-bar gear and contains output, playback, library, integration, appearance
-and System sections. Device enumeration is asynchronous so entering Settings does not wait for an
-output backend. Native window decorations are disabled, with fullscreen and minimize, maximize and
+Settings opens from a top-bar gear and starts with Light, Dark and System theme controls, followed
+by output, playback, library, integration, appearance and System sections. Semantic colour tokens
+cover both themes, while the System option follows live operating-system changes and a pre-paint
+bootstrap prevents a theme flash. Device enumeration is asynchronous so entering Settings does not
+wait for an output backend. Native window decorations are disabled, with fullscreen and minimize, maximize and
 close controls integrated into the same top bar. Non-interactive bar space starts native window
 dragging; buttons, menus and the search field are excluded.
 
@@ -298,7 +311,8 @@ destination. Global text selection is disabled outside album names, artist names
 content, while editable Ctrl+A remains available.
 
 The Dock stores pinned album and playlist identities in newest-first order. Pins can be reordered,
-opened and removed in both expanded and collapsed sidebars. Album and playlist context menus share
+opened and removed in both expanded and collapsed sidebars. The branded header keeps the same
+height in both states, so collapsing the rail does not move the pinned rows vertically. Album and playlist context menus share
 the same navigation and playback actions as their full views.
 
 ### Windows media controls

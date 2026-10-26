@@ -29,6 +29,7 @@ const ROUTE_LABELS: Record<ShellRoute, string> = {
   playlists: "Playlists",
   playlist: "Playlist",
   "now-playing": "Now Playing",
+  queue: "Queue",
   settings: "Settings",
   album: "Album",
   artist: "Artist",
@@ -65,6 +66,16 @@ export function TopBar(): JSX.Element {
   const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const previousRoute = useRef(route);
+
+  useEffect(() => {
+    if (previousRoute.current === "library" && route !== "library") {
+      setText("");
+      setResults(null);
+      setOpen(false);
+    }
+    previousRoute.current = route;
+  }, [route]);
 
   const running = scan?.running === true || progress !== null;
   const label = ROUTE_LABELS[route];
@@ -137,6 +148,7 @@ export function TopBar(): JSX.Element {
 
   return (
     <header
+      data-topbar
       onMouseDown={(event) => {
         const target = event.target as Element | null;
         if (

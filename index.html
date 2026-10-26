@@ -10,6 +10,31 @@
       content="Prism — an audiophile-grade, open-source local music player for Windows and Linux."
     />
     <title>Prism</title>
+    <script>
+      (function () {
+        var preference = "dark";
+        try {
+          var saved = JSON.parse(localStorage.getItem("prism.shell.preferences") || "null");
+          if (saved && saved.state && /^(light|dark|system)$/.test(saved.state.theme)) {
+            preference = saved.state.theme;
+          }
+        } catch (_) {}
+        var light =
+          preference === "light" ||
+          (preference === "system" &&
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches === false);
+        var root = document.documentElement;
+        root.classList.toggle("light", light);
+        root.classList.toggle("dark", !light);
+        root.style.colorScheme = light ? "light" : "dark";
+        root.style.setProperty("--prism-boot-background", light ? "#f4f4f6" : "#08080a");
+        var themeColor = document.querySelector('meta[name="theme-color"]');
+        if (themeColor) themeColor.setAttribute("content", light ? "#f4f4f6" : "#08080a");
+        var colorScheme = document.querySelector('meta[name="color-scheme"]');
+        if (colorScheme) colorScheme.setAttribute("content", light ? "light" : "dark");
+      })();
+    </script>
     <style>
       /* Paint OLED black before the bundle evaluates: eliminates the white
          flash between WebView creation and React's first commit. */
@@ -18,7 +43,7 @@
       #root {
         margin: 0;
         min-height: 100%;
-        background-color: #08080a;
+        background-color: var(--prism-boot-background, #08080a);
       }
       /* Boot watchdog. Inline so it runs even when the bundle throws while
          being evaluated; Tauri hashes inline scripts into the CSP, so it is

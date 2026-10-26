@@ -1,11 +1,14 @@
 import { AudioLines, Play } from "lucide-react";
 import { useEffect, useMemo, useState, type JSX } from "react";
 
+import { CoverArt } from "@/components/ui/CoverArt";
 import { formatDuration } from "@/lib/format";
+import { cachedTrackCover, trackCover } from "@/lib/trackCover";
 import { cn } from "@/lib/utils";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
-import type { TrackRow } from "@/types/ipc";
+import { useUiStore } from "@/stores/uiStore";
+import type { CoverAsset, TrackRow } from "@/types/ipc";
 
 interface TrackTableProps {
   tracks: TrackRow[];
@@ -27,6 +30,7 @@ export function TrackTable({
 }: TrackTableProps): JSX.Element {
   const [selected, setSelected] = useState<string | null>(null);
   const openAt = useContextMenuStore((state) => state.openAt);
+  const openAlbum = useUiStore((state) => state.openAlbum);
   const currentId = usePlaybackStore((state) => state.status?.track?.trackId ?? null);
   const playing = usePlaybackStore((state) => state.status?.state === "playing");
 
@@ -116,6 +120,8 @@ export function TrackTable({
                     )}
                   </span>
 
+                  {playlistId !== undefined ? <PlaylistTrackCover track={track} /> : null}
+
                   <button
                     type="button"
                     aria-label={`Play ${track.title}`}
@@ -147,6 +153,27 @@ export function TrackTable({
                     ) : null}
                   </div>
 
+                  {playlistId !== undefined ? (
+                    <div className="w-[clamp(120px,20vw,260px)] min-w-0 shrink-0 text-[11.5px] text-white/35">
+                      {track.albumId === null ? (
+                        <span className="block truncate">{track.album || "—"}</span>
+                      ) : (
+                        <button
+                          type="button"
+                          data-playlist-album
+                          title={track.album}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (track.albumId !== null) openAlbum(track.albumId);
+                          }}
+                          className="block max-w-full truncate text-left hover:text-white/70 hover:underline hover:underline-offset-2 focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none"
+                        >
+                          {track.album}
+                        </button>
+                      )}
+                    </div>
+                  ) : null}
+
                   <span className="tabular shrink-0 text-[11.5px] text-white/30">
                     {track.durationMs > 0 ? formatDuration(track.durationMs) : "—"}
                   </span>
@@ -156,6 +183,46 @@ export function TrackTable({
           </ol>
         </section>
       ))}
+    </div>
+  );
+}
+
+/** Small, cached source-album artwork used only by playlist rows. */
+function PlaylistTrackCover({ track }: { track: TrackRow }): JSX.Element {
+  const [asset, setAsset] = useState<CoverAsset | null>(() =>
+    cachedTrackCover(track.id, track.artist, track.album),
+  );
+
+  useEffect(() => {
+    let active = true;
+    const cached = cachedTrackCover(track.id, track.artist, track.album);
+    if (cached !== null) {
+      setAsset(cached);
+      return;
+    }
+    void trackCover(track.id, track.artist, track.album)
+      .then((next) => {
+        if (active) setAsset(next);
+      })
+      .catch(() => {
+        if (active) setAsset(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [track.id, track.artist, track.album]);
+
+  return (
+    <div data-playlist-cover className="shrink-0">
+      <CoverArt
+        path={asset?.localPath ?? track.coverPath}
+        thumbnailPath={asset?.thumbnailPath ?? null}
+        url={asset?.remoteUrl ?? track.coverUrl}
+        alt=""
+        className="h-9 w-9"
+        rounded="rounded-lg"
+        fallbackClassName="h-4 w-4"
+      />
     </div>
   );
 }

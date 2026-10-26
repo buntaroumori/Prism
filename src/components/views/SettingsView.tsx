@@ -7,8 +7,11 @@ import {
   FolderPlus,
   FolderX,
   Loader2,
+  Monitor,
+  Moon,
   Power,
   RefreshCw,
+  Sun,
   Trash2,
 } from "lucide-react";
 
@@ -26,7 +29,7 @@ import { useLibraryStore } from "@/stores/libraryStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { usePlaybackPreferencesStore } from "@/stores/playbackPreferencesStore";
 import { useOutputStore, BUFFER_CHOICES } from "@/stores/outputStore";
-import { COVER_SIZE_MAX, COVER_SIZE_MIN, useUiStore } from "@/stores/uiStore";
+import { COVER_SIZE_MAX, COVER_SIZE_MIN, useUiStore, type ThemePreference } from "@/stores/uiStore";
 import type { DiscordStatus, LibraryRoot } from "@/types/ipc";
 
 /**
@@ -47,6 +50,7 @@ export function SettingsView(): JSX.Element {
         </p>
       </header>
 
+      <ThemeSection />
       <OutputSection />
       <PlaybackSection />
       <LibrarySection />
@@ -55,6 +59,122 @@ export function SettingsView(): JSX.Element {
       <PluginsSection />
       <AppearanceSection />
       <SystemView embedded />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Theme
+// ---------------------------------------------------------------------------
+
+const THEME_OPTIONS = [
+  { value: "light", label: "Light", caption: "Fixed light", icon: Sun },
+  { value: "dark", label: "Dark", caption: "Fixed dark", icon: Moon },
+  { value: "system", label: "System", caption: "Light / dark", icon: Monitor },
+] as const;
+
+function ThemeSection(): JSX.Element {
+  const theme = useUiStore((state) => state.theme);
+  const setAppearance = useUiStore((state) => state.setAppearance);
+
+  return (
+    <Section
+      title="Theme"
+      description="Choose a fixed appearance or follow the operating system. Your choice is applied immediately and remembered."
+    >
+      <div role="radiogroup" aria-label="Theme" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {THEME_OPTIONS.map((option) => {
+          const selected = theme === option.value;
+          const Icon = option.icon;
+          return (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              aria-label={option.label}
+              data-theme-choice={option.value}
+              onClick={() => {
+                setAppearance({ theme: option.value });
+              }}
+              className={cn(
+                "rounded-2xl border p-3 text-left transition-colors focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
+                selected
+                  ? "border-accent/45 bg-accent/[0.07]"
+                  : "border-white/[0.07] bg-white/[0.02] hover:border-white/[0.14] hover:bg-white/[0.04]",
+              )}
+            >
+              <HomePreview theme={option.value} />
+              <span className="mt-3 flex items-center gap-2">
+                <Icon
+                  className={cn("h-4 w-4", selected ? "text-accent" : "text-white/40")}
+                  aria-hidden="true"
+                />
+                <span className={cn("text-[12.5px] font-medium", selected && "text-accent")}>
+                  {option.label}
+                </span>
+                <span className="ml-auto text-[9.5px] text-white/25">{option.caption}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
+function HomePreview({ theme }: { theme: ThemePreference }): JSX.Element {
+  if (theme === "system") {
+    return (
+      <div aria-hidden="true" className="grid grid-cols-2 overflow-hidden rounded-xl">
+        <MiniHome dark />
+        <MiniHome dark={false} />
+      </div>
+    );
+  }
+  return <MiniHome dark={theme === "dark"} />;
+}
+
+/** Symbolic Home silhouette: rail, search, shelf labels and album covers. */
+function MiniHome({ dark }: { dark: boolean }): JSX.Element {
+  const base = dark ? "#08080a" : "#f4f4f6";
+  const panel = dark ? "#17171b" : "#ffffff";
+  const line = dark ? "rgba(255,255,255,.16)" : "rgba(28,28,32,.16)";
+  const faint = dark ? "rgba(255,255,255,.07)" : "rgba(28,28,32,.07)";
+  return (
+    <div
+      aria-hidden="true"
+      className="flex h-[68px] min-w-0 overflow-hidden rounded-xl border"
+      style={{ background: base, borderColor: line }}
+    >
+      <div
+        className="flex w-[22%] shrink-0 flex-col gap-1.5 border-r p-2"
+        style={{ borderColor: line }}
+      >
+        <span className="h-2 w-2 rounded-full bg-accent" />
+        <span className="mt-1 h-1 rounded-full" style={{ background: line }} />
+        <span className="h-1 w-3/4 rounded-full" style={{ background: faint }} />
+        <span className="h-1 w-4/5 rounded-full" style={{ background: faint }} />
+      </div>
+      <div className="min-w-0 flex-1 p-2">
+        <div className="mx-auto h-2 w-3/5 rounded-full" style={{ background: panel }} />
+        <div className="mt-2 h-1 w-2/5 rounded-full" style={{ background: line }} />
+        <div className="mt-1.5 grid grid-cols-3 gap-1">
+          {[0, 1, 2].map((item) => (
+            <span
+              key={item}
+              className="aspect-square rounded-[3px]"
+              style={{ background: faint }}
+            />
+          ))}
+        </div>
+        <div className="mt-1.5 h-1 w-1/3 rounded-full" style={{ background: line }} />
+        <div className="mt-1 grid grid-cols-3 gap-1">
+          {[0, 1, 2].map((item) => (
+            <span key={item} className="h-2 rounded-[2px]" style={{ background: faint }} />
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
