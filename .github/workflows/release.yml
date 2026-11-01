@@ -271,7 +271,7 @@ jobs:
         run: node scripts/generate-changelog.mjs > RELEASE_NOTES.md
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: Prism ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
