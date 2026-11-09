@@ -87,6 +87,9 @@ jobs:
       - name: Frontend typecheck, lint and format
         run: pnpm check
 
+      - name: Verify frame-rate-independent timing
+        run: node scripts/test-frame-timing.mjs
+
       - name: Build frontend
         run: pnpm build
 

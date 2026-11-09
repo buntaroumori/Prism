@@ -6,6 +6,15 @@ Notable user-visible changes are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.2.2] — 2026-10-19
+
+### Changed
+
+- The full ambient background uses animated radial gradients instead of large blurred surfaces.
+- Rail inertia and Spectrum interpolation use elapsed time rather than display frame count.
+- On NVIDIA Wayland sessions, Prism defaults to the NVIDIA explicit-sync workaround before WebKit
+  starts. An explicitly supplied `__NV_DISABLE_EXPLICIT_SYNC` value is respected.
+
 ## [1.2.1] — 2026-10-19
 
 ### Added
@@ -228,7 +237,8 @@ Notable user-visible changes are recorded here. The format follows
 - Optional Lua and WebAssembly plugin runtimes with capability checks and resource limits.
 - Windows and Linux packaging configuration, dependency licence inventory and release checksums.
 
-[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.2
 [1.2.1]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.1
 [1.2.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.0
 [1.1.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.1.0

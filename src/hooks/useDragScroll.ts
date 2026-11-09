@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
+import { decayingDistance, exponentialDecay } from "@/lib/frameTiming";
+
 interface DragScroll {
   /** Attach to the scrolling element. */
   ref: RefObject<HTMLDivElement | null>;
@@ -43,6 +45,7 @@ export function useDragScroll(): DragScroll {
   const lastX = useRef(0);
   const lastT = useRef(0);
   const frame = useRef<number | null>(null);
+  const lastFrame = useRef<number | null>(null);
 
   const [left, setLeft] = useState(false);
   const [right, setRight] = useState(false);
@@ -52,19 +55,25 @@ export function useDragScroll(): DragScroll {
       cancelAnimationFrame(frame.current);
       frame.current = null;
     }
+    lastFrame.current = null;
   }, []);
 
-  const glide = useCallback(() => {
+  const glide = useCallback((time: number) => {
     const node = ref.current;
     if (node === null) {
       return;
     }
-    velocity.current *= 0.92;
+    const elapsed = Math.min(32, Math.max(0, time - (lastFrame.current ?? time)));
+    lastFrame.current = time;
+    const decay = exponentialDecay(0.92, elapsed, 16);
+    const distance = decayingDistance(velocity.current, decay, 0.92, 16);
+    velocity.current *= decay;
     if (Math.abs(velocity.current) < 0.05) {
       frame.current = null;
+      lastFrame.current = null;
       return;
     }
-    node.scrollLeft -= velocity.current * 16;
+    node.scrollLeft -= distance;
     frame.current = requestAnimationFrame(glide);
   }, []);
 

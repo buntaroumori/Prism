@@ -126,6 +126,12 @@ The Tauri process starts the Vite development server and opens the desktop windo
 library scanning and filesystem access require the desktop application; they are not emulated in a
 standalone browser.
 
+### NVIDIA and Wayland
+
+On Wayland sessions with the NVIDIA driver loaded, Prism defaults to
+`__NV_DISABLE_EXPLICIT_SYNC=1` before starting WebKitGTK. An explicitly supplied value is
+respected. If graphics issues persist, see the [Tauri Linux graphics troubleshooting guide](https://v2.tauri.app/develop/debug/linux-graphics/).
+
 ### Production packages
 
 ```bash

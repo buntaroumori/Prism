@@ -19,6 +19,12 @@ system.
 | Memory checks         | Inspect native execution and selected pure-Rust modules      | Valgrind and Miri                     |
 | Release validation    | Check versioning, licences, workflow and artefact coverage   | `python3 scripts/validate_release.py` |
 
+## Frame-rate-independent animation
+
+`node scripts/test-frame-timing.mjs` checks equivalent inertial displacement and interpolation at
+60, 120, 144 and 240 Hz. This mathematical check does not measure the actual display rate or
+rendering performance of WebKitGTK. Validate frame pacing and interaction on the target desktop.
+
 ## Frontend frame audit
 
 The performance harness is separate from the application bundle. It mounts the production virtual

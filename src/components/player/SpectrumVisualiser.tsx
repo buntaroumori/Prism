@@ -1,14 +1,15 @@
 import { useEffect, useRef, type JSX } from "react";
 
 import { acquireSpectrum, latestSpectrum, subscribeSpectrum } from "@/lib/spectrum";
+import { exponentialDecay } from "@/lib/frameTiming";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/uiStore";
 import type { SpectrumFrame } from "@/types/ipc";
 
 const BAND_COUNT = 31;
-/** How fast a bar catches up with its target each frame (0..1). */
+/** Bar smoothing at the 60 Hz reference rate. */
 const EASE = 0.22;
-/** How fast peak caps fall, per frame. */
+/** Peak fall at the 60 Hz reference rate. */
 const PEAK_FALL = 0.006;
 const FALLBACK_ACCENT = "#8ba6ff";
 const FALLBACK_HIGHLIGHT = "#f4f6ff";
@@ -64,6 +65,7 @@ export function SpectrumVisualiser({
     let height = 0;
     let frameId = 0;
     let disposed = false;
+    let previousFrame: number | null = null;
     let accent = FALLBACK_ACCENT;
     let highlight = FALLBACK_HIGHLIGHT;
 
@@ -147,12 +149,16 @@ export function SpectrumVisualiser({
       context.shadowBlur = 0;
     };
 
-    const tick = (): void => {
+    const tick = (time: number): void => {
+      const elapsed = Math.min(50, Math.max(0, time - (previousFrame ?? time)));
+      previousFrame = time;
+      const frames = elapsed / (1000 / 60);
+      const ease = 1 - exponentialDecay(1 - EASE, elapsed, 1000 / 60);
       for (let index = 0; index < BAND_COUNT; index += 1) {
-        const value = at(current, index) + (at(target, index) - at(current, index)) * EASE;
+        const value = at(current, index) + (at(target, index) - at(current, index)) * ease;
         current[index] = value;
         if (at(peaks, index) > value) {
-          peaks[index] = Math.max(value, at(peaks, index) - PEAK_FALL);
+          peaks[index] = Math.max(value, at(peaks, index) - PEAK_FALL * frames);
         }
       }
       draw();

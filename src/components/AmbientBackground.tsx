@@ -11,9 +11,7 @@ interface AmbientBackgroundProps {
   /**
    * `reduced` swaps the three blurred, drifting orbs for one static gradient.
    *
-   * The blobs are the most expensive thing in the product on a software
-   * compositor: three 50-rem surfaces with a 170 px blur, translated every
-   * frame. A single radial gradient over the same palette keeps the mood and
+   * The full ambient effect uses three animated gradient surfaces. A single radial gradient over the same palette keeps the mood and
    * costs one paint.
    */
   reduced?: boolean;
@@ -22,7 +20,7 @@ interface AmbientBackgroundProps {
 /**
  * Ambient canvas.
  *
- * Three blurred, palette-tinted orbs composited on the GPU. Nothing animates on
+ * Three palette-tinted radial gradients with slowly drifting transforms. Nothing animates on
  * the main thread: the drift is a CSS transform animation, the tint is three
  * custom properties, and the only per-track cost is a style write on the
  * container. That keeps the FASE 6 idle-CPU budget reachable with a full-screen
@@ -75,25 +73,25 @@ export function AmbientBackground({
       <div className="absolute inset-0 bg-oled-950" />
 
       <div
-        className="ambient-orb absolute -top-[26rem] left-[12%] h-[54rem] w-[54rem] rounded-full blur-[170px]"
+        className="ambient-orb absolute -top-[26rem] left-[12%] h-[54rem] w-[54rem] rounded-full"
         style={{
-          background: accent,
+          background: `radial-gradient(circle, ${accent} 0%, transparent 72%)`,
           opacity: Number(primary),
           animationDelay: "-2s",
         }}
       />
       <div
-        className="ambient-orb absolute top-[6%] -right-[20rem] h-[46rem] w-[46rem] rounded-full blur-[160px]"
+        className="ambient-orb absolute top-[6%] -right-[20rem] h-[46rem] w-[46rem] rounded-full"
         style={{
-          background: highlight,
+          background: `radial-gradient(circle, ${highlight} 0%, transparent 72%)`,
           opacity: Number(secondary),
           animationDelay: "-7s",
         }}
       />
       <div
-        className="ambient-orb absolute -bottom-[28rem] left-[26%] h-[50rem] w-[50rem] rounded-full blur-[180px]"
+        className="ambient-orb absolute -bottom-[28rem] left-[26%] h-[50rem] w-[50rem] rounded-full"
         style={{
-          background: alt,
+          background: `radial-gradient(circle, ${alt} 0%, transparent 72%)`,
           opacity: Number(tertiary),
           animationDelay: "-11s",
         }}
