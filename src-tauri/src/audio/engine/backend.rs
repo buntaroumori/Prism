@@ -305,23 +305,27 @@ pub fn enumerate_devices(mode: OutputMode) -> Result<Vec<OutputDevice>, AudioErr
     let mut last_error = None;
 
     for kind in candidates(mode, None) {
+        // PipeWire already provides the real playback nodes. ALSA's generic
+        // hint list may include capture-only and duplicate virtual PCMs.
+        #[cfg(target_os = "linux")]
+        if mode == OutputMode::Shared
+            && kind == BackendKind::CpalShared
+            && devices
+                .iter()
+                .any(|device: &OutputDevice| device.kind == BackendKind::PipeWire)
+        {
+            continue;
+        }
         match enumerate_kind(kind) {
             Ok(mut list) => devices.append(&mut list),
             Err(error) => last_error = Some(error),
         }
     }
 
-    // Deduplicate by id *and* by name: the same physical endpoint is visible
-    // through more than one host (WASAPI shared and the default host, PipeWire
-    // and ALSA), and a device picker that lists "Speakers" three times is a
-    // device picker nobody trusts. The first occurrence wins, and the candidate
-    // order puts the closest-to-hardware stack first.
+    // Different physical devices may have the same user-facing description.
+    // Their stable identifiers, not their labels, determine uniqueness.
     let mut seen_ids = std::collections::HashSet::new();
-    let mut seen_names = std::collections::HashSet::new();
-    devices.retain(|device| {
-        let name = device.name.to_lowercase();
-        seen_ids.insert(device.id.clone()) && seen_names.insert(name)
-    });
+    devices.retain(|device| seen_ids.insert(device.id.clone()));
 
     if devices.is_empty() {
         if let Some(error) = last_error {
@@ -731,7 +735,7 @@ mod platform {
     }
 
     pub(super) fn pipewire() -> Result<Vec<OutputDevice>, AudioError> {
-        pipewire_out::default_device().map(|device| device.into_iter().collect())
+        pipewire_out::enumerate()
     }
 
     pub(super) fn cpal(kind: BackendKind) -> Result<Vec<OutputDevice>, AudioError> {

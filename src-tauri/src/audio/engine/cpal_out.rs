@@ -141,7 +141,7 @@ fn find_device(
 ) -> Result<(cpal::Host, cpal::Device), AudioError> {
     let host = host_for(kind)?;
     if let Some(wanted) = wanted {
-        let name = wanted.rsplit_once(':').map_or(wanted, |(_, name)| name);
+        let name = wanted.split_once(':').map_or(wanted, |(_, name)| name);
         if let Ok(devices) = host.output_devices() {
             for device in devices {
                 if device
@@ -153,6 +153,9 @@ fn find_device(
                 }
             }
         }
+        return Err(AudioError::Device(format!(
+            "output device {name:?} is unavailable"
+        )));
     }
     let device = host.default_output_device().ok_or(AudioError::NoDevice)?;
     Ok((host, device))
@@ -176,75 +179,47 @@ pub fn live_format(kind: BackendKind, device: Option<&str>) -> Option<AudioForma
     })
 }
 
+/// Sort by channel fidelity first, then the requested sample container.
+fn config_rank(channels: u16, format: SampleFormat, desired: &AudioFormat) -> (u8, u16, u8, u8) {
+    (
+        u8::from(channels != desired.channels),
+        channels.abs_diff(desired.channels),
+        u8::from(format != desired.sample_format),
+        format_rank(format),
+    )
+}
+
 /// Best configuration the endpoint can give for `desired`.
 fn choose_config(
     device: &cpal::Device,
     desired: &AudioFormat,
 ) -> Result<(cpal::SupportedStreamConfig, SampleFormat), AudioError> {
-    let ranges: Vec<(SampleFormat, u32, u32, u16)> = device
+    let mut candidates: Vec<cpal::SupportedStreamConfigRange> = device
         .supported_output_configs()
         .map(|configs| {
             configs
-                .filter_map(|config| {
-                    Some((
-                        to_prism(config.sample_format())?,
-                        config.min_sample_rate().0,
-                        config.max_sample_rate().0,
-                        config.channels(),
-                    ))
+                .filter(|config| {
+                    to_prism(config.sample_format()).is_some()
+                        && config.min_sample_rate().0 <= desired.sample_rate
+                        && config.max_sample_rate().0 >= desired.sample_rate
                 })
                 .collect()
         })
         .unwrap_or_default();
 
-    // Exact match first: same rate, same container, same channel count.
-    //
-    // The channel count is not a detail. An endpoint that advertises 8 channels
-    // and is opened with 8 will happily accept a stereo stream, and every frame
-    // after the first is then interpreted as a different speaker — the single
-    // most effective way to make a player sound broken. Prefer the config that
-    // matches the source exactly and only widen when nothing else exists.
-    for range in &ranges {
-        if range.0 == desired.sample_format
-            && (range.1..=range.2).contains(&desired.sample_rate)
-            && range.3 == desired.channels
-            && let Ok(configs) = device.supported_output_configs()
-        {
-            for config in configs {
-                if to_prism(config.sample_format()) == Some(desired.sample_format) {
-                    if let Some(selected) =
-                        config.try_with_sample_rate(cpal::SampleRate(desired.sample_rate))
-                    {
-                        return Ok((selected, desired.sample_format));
-                    }
-                }
-            }
-        }
-    }
-
-    // Same rate, any container the endpoint carries, widest first.
-    let mut at_rate: Vec<(u8, cpal::SupportedStreamConfigRange)> = Vec::new();
-    if let Ok(configs) = device.supported_output_configs() {
-        for config in configs {
-            let Some(format) = to_prism(config.sample_format()) else {
-                continue;
-            };
-            if config.min_sample_rate().0 <= desired.sample_rate
-                && config.max_sample_rate().0 >= desired.sample_rate
-            {
-                at_rate.push((format_rank(format), config));
-            }
-        }
-    }
-    at_rate.sort_by_key(|(rank, _)| *rank);
-    if let Some((_, range)) = at_rate.first() {
-        if let Some(config) = range
-            .clone()
-            .try_with_sample_rate(cpal::SampleRate(desired.sample_rate))
-        {
-            let format = to_prism(config.sample_format()).unwrap_or(desired.sample_format);
-            return Ok((config, format));
-        }
+    // Channel count must be checked on the actual range returned, not on a
+    // different range that happened to be enumerated earlier. Prefer matching
+    // channels before bit depth so a stereo endpoint is never opened as mono
+    // merely because the driver lists its mono range first.
+    candidates.sort_by_key(|config| {
+        let format = to_prism(config.sample_format()).expect("filtered above");
+        config_rank(config.channels(), format, desired)
+    });
+    if let Some(range) = candidates.into_iter().next()
+        && let Some(config) = range.try_with_sample_rate(cpal::SampleRate(desired.sample_rate))
+    {
+        let format = to_prism(config.sample_format()).expect("filtered above");
+        return Ok((config, format));
     }
 
     // Nothing at that rate (shared mode locks the graph rate): use the default.
@@ -569,4 +544,26 @@ pub fn start(
         },
         stream: SendStream(stream),
     }))
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn stereo_is_preferred_to_mono_even_when_mono_matches_the_container() {
+        let desired = AudioFormat {
+            sample_rate: 44_100,
+            channels: 2,
+            sample_format: SampleFormat::S16,
+        };
+        assert!(
+            config_rank(2, SampleFormat::F32, &desired)
+                < config_rank(1, SampleFormat::S16, &desired)
+        );
+        assert!(
+            config_rank(2, SampleFormat::S16, &desired)
+                < config_rank(2, SampleFormat::F32, &desired)
+        );
+    }
 }

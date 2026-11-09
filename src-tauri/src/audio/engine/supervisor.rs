@@ -362,6 +362,7 @@ impl Engine {
             carry: Vec::new(),
             carry_boundary: None,
             carry_finished: false,
+            pending_renegotiation: false,
         };
 
         let worker = std::thread::Builder::new()
@@ -568,6 +569,7 @@ struct Supervisor {
     carry_boundary: Option<u64>,
     /// The queue ended inside [`Self::carry`].
     carry_finished: bool,
+    pending_renegotiation: bool,
 }
 
 impl Supervisor {
@@ -952,7 +954,7 @@ impl Supervisor {
 
     /// Fill the ring before the device clock starts.
     fn prime(&mut self) -> Result<(), AudioError> {
-        for _ in 0..8 {
+        for _ in 0..32 {
             if !self.fill_once()? {
                 break;
             }
@@ -1034,8 +1036,7 @@ impl Supervisor {
             self.carry.clear();
             self.carry_boundary = None;
             self.carry_finished = false;
-            self.index = (self.index + 1).min(self.queue.len().saturating_sub(1));
-            self.renegotiate()?;
+            self.pending_renegotiation = true;
             return Ok(false);
         }
 
@@ -1186,7 +1187,16 @@ impl Supervisor {
             ));
         }
 
-        for _ in 0..4 {
+        if self.pending_renegotiation {
+            if self.backlog() == 0 {
+                self.pending_renegotiation = false;
+                self.index = (self.index + 1).min(self.queue.len().saturating_sub(1));
+                self.renegotiate()?;
+            }
+            return Ok(());
+        }
+
+        for _ in 0..32 {
             if !self.fill_once()? {
                 break;
             }
@@ -1374,6 +1384,7 @@ impl Supervisor {
 
     /// Stop the sink and the decoder but keep the queue and the playhead.
     fn teardown_playback(&mut self) {
+        self.pending_renegotiation = false;
         self.carry.clear();
         self.carry_boundary = None;
         self.carry_finished = false;

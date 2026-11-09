@@ -6,6 +6,21 @@ Notable user-visible changes are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.2.4] — 2026-10-19
+
+### Fixed
+
+- List PipeWire playback sinks by name and route explicitly selected outputs without including capture nodes.
+- Clarified the fixed-rate policy and unavailable device format reporting.
+
+## [1.2.3] — 2026-10-19
+
+### Fixed
+
+- Corrected PipeWire buffer sizing and 24-bit PCM representation, and preserved queued audio at sample-rate transitions.
+- Prioritised matching channel counts on system output and corrected selection of device names containing colons.
+- Avoided a PipeWire stream shutdown stall during output changes.
+
 ## [1.2.2] — 2026-10-19
 
 ### Changed
@@ -237,7 +252,9 @@ Notable user-visible changes are recorded here. The format follows
 - Optional Lua and WebAssembly plugin runtimes with capability checks and resource limits.
 - Windows and Linux packaging configuration, dependency licence inventory and release checksums.
 
-[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.2.2...HEAD
+[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.2.4...HEAD
+[1.2.4]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.4
+[1.2.3]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.3
 [1.2.2]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.2
 [1.2.1]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.1
 [1.2.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.0

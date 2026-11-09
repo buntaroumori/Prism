@@ -9,9 +9,12 @@
 //! badge says "PipeWire" rather than "Bit-perfect". Use ALSA `hw:` or WASAPI
 //! exclusive for that.
 
+use std::cell::{Cell, RefCell};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use pipewire as pw;
 use pw::spa::param::ParamType;
@@ -28,7 +31,7 @@ use crate::audio::format::{AudioFormat as EngineFormat, SampleFormat, write_samp
 use crate::audio::ring::{RingStats, SampleConsumer};
 
 const NODE_ID: &str = "pipewire:default";
-const NODE_NAME: &str = "Prism Output";
+const NODE_NAME: &str = "PipeWire (system default output)";
 
 fn socket_path() -> Option<std::path::PathBuf> {
     let runtime = std::env::var_os("XDG_RUNTIME_DIR")?;
@@ -65,11 +68,98 @@ pub fn default_device() -> Result<Option<OutputDevice>, AudioError> {
     }))
 }
 
+/// List actual PipeWire sinks, excluding sources, monitors and other nodes.
+pub fn enumerate() -> Result<Vec<OutputDevice>, AudioError> {
+    let default = default_device()?.ok_or(AudioError::NoDevice)?;
+    pw::init();
+    let main_loop = pw::main_loop::MainLoop::new(None)
+        .map_err(|error| AudioError::Device(format!("cannot create PipeWire loop: {error}")))?;
+    let context = pw::context::Context::new(&main_loop)
+        .map_err(|error| AudioError::Device(format!("cannot create PipeWire context: {error}")))?;
+    let core = context
+        .connect(None)
+        .map_err(|error| AudioError::Device(format!("cannot connect to PipeWire: {error}")))?;
+    let registry = core
+        .get_registry()
+        .map_err(|error| AudioError::Device(format!("cannot list PipeWire devices: {error}")))?;
+    let nodes = Rc::new(RefCell::new(Vec::<(String, String)>::new()));
+    let collected = Rc::clone(&nodes);
+    let _registry_listener = registry
+        .add_listener_local()
+        .global(move |global| {
+            if global.type_ != pw::types::ObjectType::Node {
+                return;
+            }
+            let Some(props) = global.props.as_ref() else {
+                return;
+            };
+            if props.get("media.class") != Some("Audio/Sink") {
+                return;
+            }
+            let Some(name) = props.get("node.name").filter(|name| !name.is_empty()) else {
+                return;
+            };
+            let description = props
+                .get("node.description")
+                .or_else(|| props.get("node.nick"))
+                .unwrap_or(name);
+            collected
+                .borrow_mut()
+                .push((name.to_string(), description.to_string()));
+        })
+        .register();
+    let completed = Rc::new(Cell::new(false));
+    let done = Rc::clone(&completed);
+    let loop_done = main_loop.clone();
+    let pending = core
+        .sync(0)
+        .map_err(|error| AudioError::Device(format!("cannot query PipeWire devices: {error}")))?;
+    let _core_listener = core
+        .add_listener_local()
+        .done(move |id, seq| {
+            if id == pw::core::PW_ID_CORE && seq == pending {
+                done.set(true);
+                loop_done.quit();
+            }
+        })
+        .register();
+    let loop_timeout = main_loop.clone();
+    let timer = main_loop.loop_().add_timer(move |_| loop_timeout.quit());
+    timer
+        .update_timer(Some(Duration::from_secs(2)), None)
+        .into_result()
+        .map_err(|error| {
+            AudioError::Device(format!("cannot start PipeWire query timer: {error}"))
+        })?;
+    main_loop.run();
+    if !completed.get() {
+        return Err(AudioError::Device(
+            "timed out querying PipeWire outputs".into(),
+        ));
+    }
+    let mut entries = nodes.borrow().clone();
+    entries.sort_by(|a, b| {
+        a.1.to_lowercase()
+            .cmp(&b.1.to_lowercase())
+            .then(a.0.cmp(&b.0))
+    });
+    entries.dedup_by(|a, b| a.0 == b.0);
+    let mut devices = vec![default.clone()];
+    devices.extend(entries.into_iter().map(|(name, description)| {
+        let mut device = default.clone();
+        device.id = format!("pipewire:node:{name}");
+        device.name = format!("{description} (PipeWire: {name})");
+        device
+    }));
+    Ok(devices)
+}
+
 fn spa_format(format: SampleFormat) -> AudioFormat {
     match format {
         SampleFormat::S16 => AudioFormat::S16LE,
         SampleFormat::S24 => AudioFormat::S24LE,
-        SampleFormat::S24In32 | SampleFormat::S32 => AudioFormat::S32LE,
+        SampleFormat::S24In32 => AudioFormat::S24_32LE,
+        SampleFormat::S32 => AudioFormat::S32LE,
         SampleFormat::F32 => AudioFormat::F32LE,
         SampleFormat::F64 => AudioFormat::F64LE,
     }
@@ -86,15 +176,13 @@ pub fn negotiate(
             "no PipeWire session is running for this user".into(),
         ));
     }
-    let device = default_device()?.ok_or(AudioError::NoDevice)?;
-    if let Some(id) = device_id
-        && id != NODE_ID
-        && id != "pipewire"
-    {
-        return Err(AudioError::Device(format!(
-            "unknown PipeWire endpoint {id:?}"
-        )));
-    }
+    let device = match device_id {
+        None | Some(NODE_ID) | Some("pipewire") => default_device()?.ok_or(AudioError::NoDevice)?,
+        Some(id) => enumerate()?
+            .into_iter()
+            .find(|device| device.id == id)
+            .ok_or_else(|| AudioError::Device(format!("PipeWire output {id:?} is unavailable")))?,
+    };
 
     // PipeWire keeps 1024-frame quanta by default; asking for less than a
     // quantum just adds wake-ups without lowering latency.
@@ -104,7 +192,7 @@ pub fn negotiate(
         kind: BackendKind::PipeWire,
         format: *desired,
         period_frames: period,
-        buffer_frames: period * 4,
+        buffer_frames: period * 32,
         latency_frames: u64::from(period) * 2,
     })
 }
@@ -173,6 +261,17 @@ struct StreamState {
     bytes: Vec<u8>,
     refill: Arc<RefillSignal>,
     paused: Arc<AtomicBool>,
+    period_frames: usize,
+}
+
+/// Bound writes by both the server's requested frames and the mapped capacity.
+fn requested_frames(requested: u64, capacity: usize, fallback: usize) -> usize {
+    let frames = if requested == 0 {
+        fallback
+    } else {
+        usize::try_from(requested).unwrap_or(usize::MAX)
+    };
+    frames.min(capacity)
 }
 
 /// Open the node and start the main loop.
@@ -187,6 +286,11 @@ pub fn start(
 
     let format = negotiation.format;
     let period = negotiation.period_frames;
+    let target = negotiation
+        .device
+        .id
+        .strip_prefix("pipewire:node:")
+        .map(str::to_owned);
     let worker_refill = Arc::clone(&refill);
     // Gated until `OutputSink::start` so the ring is primed first.
     let paused = Arc::new(AtomicBool::new(true));
@@ -197,6 +301,7 @@ pub fn start(
             let result = run(
                 format,
                 period,
+                target,
                 consumer,
                 worker_refill,
                 paused,
@@ -243,6 +348,7 @@ pub fn start(
 fn run(
     format: EngineFormat,
     period: u32,
+    target: Option<String>,
     consumer: SampleConsumer,
     refill: Arc<RefillSignal>,
     paused: Arc<AtomicBool>,
@@ -259,7 +365,7 @@ fn run(
         .connect(None)
         .map_err(|error| AudioError::Device(format!("cannot connect to PipeWire: {error}")))?;
 
-    let properties = pw::properties::properties! {
+    let mut properties = pw::properties::properties! {
         *pw::keys::MEDIA_TYPE => "Audio",
         *pw::keys::MEDIA_CATEGORY => "Playback",
         *pw::keys::MEDIA_ROLE => "Music",
@@ -267,6 +373,11 @@ fn run(
         *pw::keys::NODE_DESCRIPTION => "Prism",
         *pw::keys::APP_NAME => "Prism",
     };
+    if let Some(target) = target {
+        properties.insert(*pw::keys::TARGET_OBJECT, target);
+        // A missing chosen device must not silently reroute to another output.
+        properties.insert("node.dont-fallback", "true");
+    }
     let stream = pw::stream::Stream::new(&core, "prism-output", properties).map_err(|error| {
         AudioError::Device(format!("cannot create the PipeWire stream: {error}"))
     })?;
@@ -298,11 +409,12 @@ fn run(
         consumer,
         format,
         // PipeWire may hand us a buffer larger than the quantum; keep room
-        // for eight periods so the RT callback never has to allocate.
-        scratch: vec![0.0f32; period as usize * 8 * usize::from(format.channels)],
-        bytes: Vec::with_capacity(period as usize * 8 * usize::from(format.channels) * 4),
+        // for up to 32 periods so the callback never has to allocate.
+        scratch: vec![0.0f32; period as usize * 32 * usize::from(format.channels)],
+        bytes: Vec::with_capacity(period as usize * 32 * usize::from(format.channels) * 4),
         refill: Arc::clone(&refill),
         paused: Arc::clone(&paused),
+        period_frames: period as usize,
     };
 
     let _listener = stream
@@ -320,6 +432,7 @@ fn run(
             let Some(mut buffer) = stream.dequeue_buffer() else {
                 return;
             };
+            let requested = buffer.requested();
             let Some(data) = buffer.datas_mut().first_mut() else {
                 return;
             };
@@ -331,14 +444,16 @@ fn run(
                 let Some(slice) = data.data() else {
                     return;
                 };
-                let room = slice.len() / frame_size;
-                slice.fill(0);
+                let room =
+                    requested_frames(requested, slice.len() / frame_size, state.period_frames);
+                slice[..room * frame_size].fill(0);
                 room * frame_size
             } else {
                 let Some(slice) = data.data() else {
                     return;
                 };
-                let room = slice.len() / frame_size;
+                let room =
+                    requested_frames(requested, slice.len() / frame_size, state.period_frames);
                 if room == 0 {
                     return;
                 }
@@ -346,7 +461,7 @@ fn run(
                 if wanted > state.scratch.len() {
                     // A buffer larger than the negotiated maximum: stay silent
                     // rather than allocating inside the RT callback.
-                    slice.fill(0);
+                    slice[..room * frame_size].fill(0);
                     room * frame_size
                 } else {
                     state.consumer.pop_or_silence(&mut state.scratch[..wanted]);
@@ -385,9 +500,7 @@ fn run(
         .connect(
             Direction::Output,
             None,
-            pw::stream::StreamFlags::AUTOCONNECT
-                | pw::stream::StreamFlags::MAP_BUFFERS
-                | pw::stream::StreamFlags::RT_PROCESS,
+            pw::stream::StreamFlags::AUTOCONNECT | pw::stream::StreamFlags::MAP_BUFFERS,
             &mut [&mut pod],
         )
         .map_err(|error| {
@@ -405,4 +518,24 @@ fn run(
     let _ = ready.send(Ok(()));
     main_loop.run();
     Ok(())
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    #[test]
+    fn pipewire_pcm_format_matches_the_sample_container() {
+        assert_eq!(spa_format(SampleFormat::S24In32), AudioFormat::S24_32LE);
+        assert_eq!(spa_format(SampleFormat::S24), AudioFormat::S24LE);
+        assert_eq!(spa_format(SampleFormat::S32), AudioFormat::S32LE);
+    }
+
+    #[test]
+    fn playback_uses_requested_frames_not_the_whole_allocation() {
+        assert_eq!(requested_frames(480, 4096, 512), 480);
+        assert_eq!(requested_frames(8000, 4096, 512), 4096);
+        assert_eq!(requested_frames(0, 4096, 512), 512);
+        assert_eq!(requested_frames(0, 128, 512), 128);
+    }
 }

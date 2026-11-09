@@ -188,6 +188,7 @@ function OutputSection(): JSX.Element {
   const deviceId = useOutputStore((state) => state.deviceId);
   const devices = useOutputStore((state) => state.devices);
   const deviceFormat = useOutputStore((state) => state.deviceFormat);
+  const devicesLoading = useOutputStore((state) => state.loading);
   const setDevice = useOutputStore((state) => state.setDevice);
   const setBufferFrames = useOutputStore((state) => state.setBufferFrames);
   const ratePolicy = useOutputStore((state) => state.ratePolicy);
@@ -209,7 +210,7 @@ function OutputSection(): JSX.Element {
     >
       <Row
         label="Output device"
-        hint="Speakers, headphones and other playback devices available on this computer."
+        hint="System default follows your desktop sound settings. Other entries are playback endpoints reported by the audio system."
       >
         <div className="flex min-w-0 items-center gap-2">
           <PopoverSelect
@@ -243,7 +244,11 @@ function OutputSection(): JSX.Element {
       >
         <div className="flex items-center gap-2">
           <span className="tabular rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-[11.5px] text-white/70">
-            {live === null ? "Reading…" : formatAudioFormat(live)}
+            {live === null
+              ? devicesLoading
+                ? "Reading…"
+                : "Not reported"
+              : formatAudioFormat(live)}
           </span>
           <span className="text-[10.5px] text-white/25">
             {live === null ? "" : `${String(live.channels)} ch`}
@@ -256,7 +261,7 @@ function OutputSection(): JSX.Element {
         hint={
           ratePolicy === "matchSource"
             ? "Each song plays at its own sample rate when your device allows it. Otherwise, Prism converts it automatically."
-            : "Your device keeps one sample rate and every song is converted to match it."
+            : "Prism uses the reported device rate when available; otherwise it keeps the first track’s rate and converts subsequent songs."
         }
       >
         <Segmented
