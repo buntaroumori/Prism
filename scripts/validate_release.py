@@ -51,6 +51,7 @@ TARGET_DIRECTORIES = {
     "nsis": "bundle/nsis",
     "appimage": "bundle/appimage",
     "deb": "bundle/deb",
+    "rpm": "bundle/rpm",
 }
 
 
@@ -267,7 +268,7 @@ def check_artefacts(report: Report, workflow: dict) -> None:
             "asserts every artefact exists",
         )
 
-    staged = sorted(set(re.findall(r"Prism_\$\{VERSION\}_[\w.]*\.(?:msi|exe|AppImage|deb)", bodies)))
+    staged = sorted(set(re.findall(r"Prism_\$\{VERSION\}_[\w.]*\.(?:msi|exe|AppImage|deb|rpm)", bodies)))
     published_globs = [
         pattern.rsplit("/", 1)[-1]
         for pattern in published

@@ -76,7 +76,11 @@ designed for local music libraries, precise format handling and a configurable l
 ## Download
 
 Windows and Linux packages are published on [GitHub Releases](https://github.com/buntaroumori/Prism/releases/latest).
-Each release includes a `SHA256SUMS.txt` file for verifying the downloaded artefacts.
+Linux releases include RPM packages for Fedora-based systems such as Nobara, as well as DEB and
+AppImage packages. Each release includes a `SHA256SUMS.txt` file for verifying the downloaded
+artefacts.
+
+Install a downloaded RPM on Nobara or Fedora with `sudo dnf install ./Prism_<version>_x86_64.rpm`.
 
 ## Build from source
 
@@ -95,6 +99,15 @@ sudo apt-get install -y \
   libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
   libasound2-dev libpipewire-0.3-dev libxdo-dev \
   libayatana-appindicator3-dev libclang-dev
+```
+
+On Nobara or Fedora, install the native build dependencies with:
+
+```bash
+sudo dnf group install "c-development"
+sudo dnf install webkit2gtk4.1-devel gtk3-devel openssl-devel \
+  librsvg2-devel alsa-lib-devel pipewire-devel libxdo-devel \
+  libappindicator-gtk3-devel clang-devel pkgconf-pkg-config curl wget file
 ```
 
 Windows builds require the MSVC Rust target, Microsoft C++ Build Tools and WebView2.
@@ -122,6 +135,8 @@ pnpm tauri build
 Tauri builds the frontend and the Rust release binary before creating the packages enabled in
 `src-tauri/tauri.conf.json`. Artefacts are written below `target/release/` and
 `target/release/bundle/`.
+
+To build only the RPM package on Nobara or Fedora, run `pnpm tauri build --bundles rpm`.
 
 The default build does not include the optional plugin runtimes or ASIO support. See
 [Plugin development](docs/PLUGINS.md) for the corresponding Cargo features.

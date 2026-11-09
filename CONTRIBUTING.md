@@ -115,5 +115,5 @@ practical.
 ## Continuous integration
 
 Pull requests run frontend, schema, licence, Rust, memory and performance jobs. Rust formatting,
-Clippy and tests run on Linux and Windows. Miri runs separately on a weekly schedule and on demand.
+The release workflow runs the quality gate on Linux and builds packages on Linux and Windows.
 Release workflows are described in [docs/RELEASE.md](docs/RELEASE.md).

@@ -6,6 +6,17 @@ Notable user-visible changes are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-10-19
+
+### Added
+
+- RPM packaging for Fedora-based systems, including Nobara Linux, alongside existing packages.
+
+### Changed
+
+- The release workflow publishes an RPM package. Standalone CI, Miri and Dependabot configuration
+  have been removed; release checks remain in the release workflow.
+
 ## [1.2.0] — 2026-10-26
 
 ### Added
@@ -217,7 +228,8 @@ Notable user-visible changes are recorded here. The format follows
 - Optional Lua and WebAssembly plugin runtimes with capability checks and resource limits.
 - Windows and Linux packaging configuration, dependency licence inventory and release checksums.
 
-[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.1
 [1.2.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.0
 [1.1.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.1.0
 [1.0.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.0.0

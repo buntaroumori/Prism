@@ -221,6 +221,10 @@ jobs:
           require "${DEB:-target/release/bundle/deb}"
           cp "$DEB" "artifacts/Prism_${VERSION}_amd64.deb"
 
+          RPM=$(find target/release/bundle/rpm -maxdepth 1 -name '*.rpm' -print -quit 2>/dev/null || true)
+          require "${RPM:-target/release/bundle/rpm}"
+          cp "$RPM" "artifacts/Prism_${VERSION}_x86_64.rpm"
+
           ls -lh artifacts
 
       - name: Upload bundles
@@ -283,6 +287,7 @@ jobs:
             artifacts/*.exe
             artifacts/*.AppImage
             artifacts/*.deb
+            artifacts/*.rpm
             artifacts/THIRD-PARTY-LICENSES.md
             artifacts/SHA256SUMS.txt
         env:

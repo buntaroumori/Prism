@@ -271,7 +271,7 @@ function backendFixture() {
   return {
     get_app_info: {
       name: "Prism",
-      version: "1.2.0",
+      version: "1.2.1",
       tauriVersion: "2.11.6",
       targetOs: "linux",
       targetArch: "x86_64",
