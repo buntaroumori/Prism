@@ -99,7 +99,7 @@ The configured package families are:
 | Platform     | Artefacts                                             |
 | :----------- | :---------------------------------------------------- |
 | Windows      | NSIS installer, MSI installer and portable executable |
-| Linux        | AppImage, DEB and RPM packages                              |
+| Linux        | AppImage, DEB and RPM packages                        |
 | All releases | `SHA256SUMS.txt` and `THIRD-PARTY-LICENSES.md`        |
 
 Build outputs are read from the Cargo workspace `target/release/` directory. Staging checks that

@@ -89,7 +89,15 @@
         ]
       },
       "rpm": {
-        "depends": ["glibc", "gtk3", "webkit2gtk4.1", "alsa-lib", "pipewire-libs", "openssl-libs", "librsvg2"]
+        "depends": [
+          "glibc",
+          "gtk3",
+          "webkit2gtk4.1",
+          "alsa-lib",
+          "pipewire-libs",
+          "openssl-libs",
+          "librsvg2"
+        ]
       },
       "appimage": {
         "bundleMediaFramework": false
