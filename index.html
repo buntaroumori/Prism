@@ -15,7 +15,7 @@
         var preference = "dark";
         try {
           var saved = JSON.parse(localStorage.getItem("prism.shell.preferences") || "null");
-          if (saved && saved.state && /^(light|dark|system)$/.test(saved.state.theme)) {
+          if (saved && saved.state && /^(light|dark|oled|system)$/.test(saved.state.theme)) {
             preference = saved.state.theme;
           }
         } catch (_) {}
@@ -27,10 +27,18 @@
         var root = document.documentElement;
         root.classList.toggle("light", light);
         root.classList.toggle("dark", !light);
+        root.classList.toggle("oled", preference === "oled");
         root.style.colorScheme = light ? "light" : "dark";
-        root.style.setProperty("--prism-boot-background", light ? "#f4f4f6" : "#08080a");
+        root.style.setProperty(
+          "--prism-boot-background",
+          light ? "#f4f4f6" : preference === "oled" ? "#000000" : "#08080a",
+        );
         var themeColor = document.querySelector('meta[name="theme-color"]');
-        if (themeColor) themeColor.setAttribute("content", light ? "#f4f4f6" : "#08080a");
+        if (themeColor)
+          themeColor.setAttribute(
+            "content",
+            light ? "#f4f4f6" : preference === "oled" ? "#000000" : "#08080a",
+          );
         var colorScheme = document.querySelector('meta[name="color-scheme"]');
         if (colorScheme) colorScheme.setAttribute("content", light ? "light" : "dark");
       })();

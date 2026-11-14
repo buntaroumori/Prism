@@ -40,12 +40,8 @@ export function PlaylistsView(): JSX.Element {
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="flex items-center gap-2 text-[26px] leading-none font-semibold tracking-[-0.03em] text-white">
-            <ListMusic className="h-5 w-5 text-white/25" aria-hidden="true" />
             Playlists
           </h1>
-          <p className="mt-1.5 text-[12.5px] text-white/40">
-            Your own selections, saved in your library.
-          </p>
         </div>
         <Button
           variant="primary"
@@ -92,7 +88,7 @@ export function PlaylistsView(): JSX.Element {
           </p>
         </div>
       ) : (
-        <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <div className="mt-7 grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-5 gap-y-7">
           {playlists.map((playlist) => (
             <button
               key={playlist.id}
@@ -104,16 +100,16 @@ export function PlaylistsView(): JSX.Element {
                 event.preventDefault();
                 openAt(event.clientX, event.clientY, { kind: "playlist", playlist });
               }}
-              className="group flex items-center gap-4 rounded-2xl border border-white/[0.07] bg-white/[0.025] p-3 text-left transition-colors hover:border-white/[0.14] hover:bg-white/[0.045]"
+              className="group min-w-0 text-left"
             >
               <CoverArt
                 path={playlist.coverPath}
                 url={playlist.coverUrl}
                 alt={playlist.name}
-                className="h-[76px] w-[76px] shrink-0"
-                rounded="rounded-xl"
+                className="aspect-square w-full"
+                rounded="rounded-lg"
               />
-              <span className="min-w-0 flex-1">
+              <span className="mt-2 block min-w-0">
                 <span className="block truncate text-[14px] font-medium text-white/90 group-hover:text-white">
                   {playlist.name}
                 </span>

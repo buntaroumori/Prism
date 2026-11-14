@@ -58,7 +58,7 @@ export function LyricsSheet({ onClose }: LyricsSheetProps): JSX.Element | null {
           </button>
         </header>
 
-        <div className="flex min-h-0 flex-1 items-center gap-2 border-b border-white/[0.045] px-5 py-2.5 text-white/35">
+        <div className="flex shrink-0 items-center gap-2 border-b border-white/[0.045] px-5 py-2.5 text-white/35">
           <Captions className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           <p className="truncate text-[10.5px]">{track.artist || "Unknown artist"}</p>
         </div>

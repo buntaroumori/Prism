@@ -574,6 +574,10 @@ struct Supervisor {
 
 impl Supervisor {
     fn run(mut self) {
+        // A sink can open successfully then fail asynchronously. Limit retries
+        // in a short window rather than reopening it indefinitely.
+        let mut recovery_attempts = 0_u8;
+        let mut last_failure: Option<Instant> = None;
         loop {
             let mut shutdown = false;
             loop {
@@ -618,7 +622,22 @@ impl Supervisor {
                 self.emit(EngineEvent::OutputError {
                     message: error.to_string(),
                 });
-                self.recover();
+                let now = Instant::now();
+                if last_failure
+                    .is_none_or(|previous| now.duration_since(previous) > Duration::from_secs(10))
+                {
+                    recovery_attempts = 0;
+                }
+                last_failure = Some(now);
+                recovery_attempts += 1;
+                if recovery_attempts > 2 {
+                    self.fail();
+                    self.emit(EngineEvent::OutputError {
+                        message: "The output device repeatedly failed. Select an available output and try again.".into(),
+                    });
+                } else {
+                    self.recover();
+                }
             }
 
             self.publish(false);
@@ -1225,6 +1244,18 @@ impl Supervisor {
             return;
         };
         if self.pushed.saturating_sub(self.backlog()) >= pending.at {
+            // The decoder may run ahead of what is audible. Advance the queue
+            // only when the new track reaches the output, not when decoded.
+            if let Some(relative) = self
+                .queue
+                .iter()
+                .skip(self.index.saturating_add(1))
+                .position(|entry| {
+                    entry.track_id == pending.request.track_id && entry.path == pending.request.path
+                })
+            {
+                self.index += relative + 1;
+            }
             self.playhead.anchor = pending.at;
             self.playhead.base = 0;
             self.playhead.format = Some(pending.format);

@@ -1,4 +1,13 @@
-import { ChevronRight, Loader2, Maximize2, Minimize2, Search, Settings, X } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Search,
+  Settings,
+  X,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -16,6 +25,7 @@ import { formatCount } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useLibraryStore } from "@/stores/libraryStore";
+import { useBrowseStore } from "@/stores/browseStore";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore, type ShellRoute } from "@/stores/uiStore";
 import { useWindowStore } from "@/stores/windowStore";
@@ -50,10 +60,15 @@ const ROUTE_LABELS: Record<ShellRoute, string> = {
 export function TopBar(): JSX.Element {
   const route = useUiStore((state) => state.route);
   const navigate = useUiStore((state) => state.navigate);
+  const back = useUiStore((state) => state.back);
+  const forward = useUiStore((state) => state.forward);
+  const canBack = useUiStore((state) => state.history.length > 0);
+  const canForward = useUiStore((state) => state.future.length > 0);
   const toggleSettings = useUiStore((state) => state.toggleSettings);
   const openAlbum = useUiStore((state) => state.openAlbum);
   const openArtist = useUiStore((state) => state.openArtist);
   const setQuery = useLibraryStore((state) => state.setQuery);
+  const setMode = useLibraryStore((state) => state.setMode);
   const scan = useLibraryStore((state) => state.scan);
   const progress = useLibraryStore((state) => state.progress);
   const playback = usePlaybackStore((state) => state.playTracks);
@@ -67,7 +82,20 @@ export function TopBar(): JSX.Element {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const previousRoute = useRef(route);
+  const searchSequence = useRef(0);
 
+  useEffect(() => {
+    const reset = (): void => {
+      searchSequence.current += 1;
+      setText("");
+      setResults(null);
+      setOpen(false);
+    };
+    window.addEventListener("prism:navigation-reset", reset);
+    return () => {
+      window.removeEventListener("prism:navigation-reset", reset);
+    };
+  }, []);
   useEffect(() => {
     if (previousRoute.current === "library" && route !== "library") {
       setText("");
@@ -141,10 +169,49 @@ export function TopBar(): JSX.Element {
 
   const submit = useCallback((): void => {
     const trimmed = text.trim();
-    setQuery(trimmed);
+    const sequence = ++searchSequence.current;
     setOpen(false);
-    navigate("library");
-  }, [navigate, setQuery, text]);
+    useBrowseStore.getState().clearFilters();
+    if (!trimmed) {
+      setMode("albums");
+      setQuery("");
+      navigate("library");
+      return;
+    }
+    void libraryApi
+      .globalSearch(trimmed, 12)
+      .then((matches) => {
+        if (searchSequence.current !== sequence || inputRef.current?.value.trim() !== trimmed)
+          return;
+        const needle = trimmed.toLocaleLowerCase();
+        const score = (value: string): number => {
+          const normalized = value.trim().toLocaleLowerCase();
+          return normalized === needle
+            ? 3
+            : normalized.startsWith(needle)
+              ? 2
+              : normalized.includes(needle)
+                ? 1
+                : 0;
+        };
+        const choices = [
+          { mode: "albums" as const, values: matches.albums.map((album) => album.title) },
+          { mode: "artists" as const, values: matches.artists.map((artist) => artist.name) },
+          { mode: "tracks" as const, values: matches.tracks.items.map((track) => track.title) },
+        ].filter((choice) => choice.values.length > 0);
+        choices.sort((a, b) => Math.max(...b.values.map(score)) - Math.max(...a.values.map(score)));
+        setMode(choices[0]?.mode ?? "albums");
+        setQuery(trimmed);
+        navigate("library");
+      })
+      .catch((cause: unknown) => {
+        if (searchSequence.current !== sequence || inputRef.current?.value.trim() !== trimmed)
+          return;
+        console.error("Search failed", cause);
+        setQuery(trimmed);
+        navigate("library");
+      });
+  }, [navigate, setMode, setQuery, text]);
 
   return (
     <header
@@ -170,15 +237,38 @@ export function TopBar(): JSX.Element {
       className="relative z-20 flex h-[62px] shrink-0 items-center gap-4 border-b border-white/[0.05] px-7"
     >
       <div className="flex w-[210px] min-w-0 shrink-0 items-center gap-2 text-[12.5px]">
-        <span className="text-white/30">Prism</span>
-        <ChevronRight className="h-3.5 w-3.5 text-white/15" aria-hidden="true" />
-        <span className="truncate font-medium tracking-tight text-white/80">{label}</span>
+        <button
+          type="button"
+          aria-label="Go back"
+          title="Back"
+          disabled={!canBack}
+          onClick={back}
+          className="grid h-8 w-8 place-items-center rounded-lg text-white/60 hover:bg-white/[0.06] disabled:opacity-25"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="Go forward"
+          title="Forward"
+          disabled={!canForward}
+          onClick={forward}
+          className="grid h-8 w-8 place-items-center rounded-lg text-white/60 hover:bg-white/[0.06] disabled:opacity-25"
+        >
+          <ArrowRight className="h-4 w-4" />
+        </button>
+        {route === "album" ||
+        route === "artist" ||
+        route === "playlist" ||
+        route === "collection" ? (
+          <span className="truncate font-medium tracking-tight text-white/60">{label}</span>
+        ) : null}
       </div>
 
       <div ref={boxRef} className="no-drag relative flex min-w-0 flex-1 justify-center">
         <div
           className={cn(
-            "flex h-9 w-full max-w-[520px] items-center rounded-full border bg-white/[0.035] px-3.5 transition-colors",
+            "flex h-9 w-full max-w-[520px] items-center rounded-lg border bg-white/[0.035] px-3.5 transition-colors",
             open && text.trim().length >= 2
               ? "border-accent/40 bg-white/[0.05]"
               : "border-white/[0.08] hover:border-white/[0.14]",
@@ -215,7 +305,7 @@ export function TopBar(): JSX.Element {
                 setResults(null);
                 inputRef.current?.focus();
               }}
-              className="grid h-5 w-5 place-items-center rounded-full text-white/30 hover:bg-white/[0.08] hover:text-white/80"
+              className="grid h-5 w-5 place-items-center rounded-lg text-white/30 hover:bg-white/[0.08] hover:text-white/80"
             >
               <X className="h-3 w-3" aria-hidden="true" />
             </button>
@@ -317,7 +407,7 @@ export function TopBar(): JSX.Element {
           onClick={() => {
             void toggleFullscreen();
           }}
-          className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/35 transition-colors hover:bg-white/[0.06] hover:text-white"
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-white/35 transition-colors hover:bg-white/[0.06] hover:text-white"
         >
           {fullscreen ? (
             <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -333,8 +423,8 @@ export function TopBar(): JSX.Element {
           onClick={toggleSettings}
           className={
             route === "settings"
-              ? "grid h-8 w-8 place-items-center rounded-full bg-accent/[0.12] text-accent"
-              : "grid h-8 w-8 place-items-center rounded-full text-white/35 transition-colors hover:bg-white/[0.06] hover:text-white"
+              ? "grid h-8 w-8 place-items-center rounded-lg bg-accent/[0.12] text-accent"
+              : "grid h-8 w-8 place-items-center rounded-lg text-white/35 transition-colors hover:bg-white/[0.06] hover:text-white"
           }
         >
           <Settings className="h-4 w-4" aria-hidden="true" />

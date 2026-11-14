@@ -1,8 +1,8 @@
-import { ArrowLeft, Play, TriangleAlert } from "lucide-react";
+import { Play, TriangleAlert } from "lucide-react";
 import { useEffect, useState, type JSX } from "react";
 
 import { AlbumCard } from "@/components/library/AlbumCard";
-import { CoverArt } from "@/components/ui/CoverArt";
+import { ArtistArt } from "@/components/library/ArtistArt";
 import { Button } from "@/components/ui/Button";
 import { formatCount, formatLibraryDuration } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
@@ -18,7 +18,6 @@ import type { ArtistDetail } from "@/types/ipc";
  * the whole application, so a change to it is a change everywhere.
  */
 export function ArtistView({ artistId }: { artistId: string }): JSX.Element {
-  const back = useUiStore((state) => state.back);
   const coverSize = useUiStore((state) => state.coverSize);
   const openAlbum = useUiStore((state) => state.openAlbum);
   const playTracks = usePlaybackStore((state) => state.playTracks);
@@ -92,19 +91,10 @@ export function ArtistView({ artistId }: { artistId: string }): JSX.Element {
 
   return (
     <div className="mx-auto w-full max-w-[1560px] px-8 pt-6 pb-12">
-      <button
-        type="button"
-        onClick={back}
-        className="mb-5 flex items-center gap-1.5 text-[11.5px] text-white/40 transition-colors hover:text-white"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-        Back
-      </button>
-
       <header className="flex flex-col gap-6 sm:flex-row sm:items-end">
-        <CoverArt
-          path={artist.coverPath}
-          alt={artist.name}
+        <ArtistArt
+          artist={artist}
+          showCredit
           className="h-[180px] w-[180px] shrink-0 shadow-[0_30px_80px_-40px_rgb(0_0_0/1)]"
           rounded="rounded-full"
         />

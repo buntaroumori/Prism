@@ -39,5 +39,15 @@ export function formatReleaseDate(releaseDate: string | null, year: number | nul
   }
   const iso = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?/.exec(value);
   if (iso?.[1] === undefined) return value;
-  return [iso[1], iso[2], iso[3]].filter((part) => part !== undefined).join("-");
+  if (iso[2] === undefined) return iso[1];
+  const month = Number(iso[2]);
+  const day = iso[3] === undefined ? null : Number(iso[3]);
+  if (month < 1 || month > 12 || (day !== null && (day < 1 || day > 31))) return value;
+  const date = new Date(Date.UTC(Number(iso[1]), month - 1, day ?? 1));
+  return new Intl.DateTimeFormat("en-GB", {
+    year: "numeric",
+    month: "short",
+    ...(day === null ? {} : { day: "numeric" }),
+    timeZone: "UTC",
+  }).format(date);
 }

@@ -66,7 +66,7 @@ export type Density = "comfortable" | "compact";
 export type AccentSource = "artwork" | "fixed";
 
 /** Fixed colour scheme, or the operating system's current light/dark choice. */
-export type ThemePreference = "light" | "dark" | "system";
+export type ThemePreference = "light" | "dark" | "oled" | "system";
 
 /**
  * How much of the interface may cost the compositor.
@@ -88,6 +88,7 @@ interface UiState {
   paletteKey: string | null;
   /** In-memory return stack; intentionally never persisted. */
   history: NavigationEntry[];
+  future: NavigationEntry[];
   scrollRestore: ScrollRestoreRequest | null;
   navigationNonce: number;
   /** Full rail visibility, distinct from the existing narrow/expanded mode. */
@@ -130,6 +131,7 @@ interface UiState {
   toggleLyrics: () => void;
   setLyricsOpen: (open: boolean) => void;
   back: () => void;
+  forward: () => void;
 
   setMeasuredEffects: (effects: ResolvedEffects) => void;
   /** What the shell should actually render, given the preference and the probe. */
@@ -195,6 +197,7 @@ export const useUiStore = create<UiState>()(
       route: "home",
       params: { ...NO_PARAMS },
       history: [],
+      future: [],
       scrollRestore: null,
       navigationNonce: 0,
       paletteKey: null,
@@ -229,7 +232,6 @@ export const useUiStore = create<UiState>()(
       },
 
       navigate: (route, params) => {
-        clearLibraryTransientState(get().route, route);
         set((state) => go(state, route, routeParams(params)));
       },
 
@@ -291,15 +293,11 @@ export const useUiStore = create<UiState>()(
         const previous = state.history[state.history.length - 1];
         const nonce = state.navigationNonce + 1;
         if (previous !== undefined) {
-          clearLibraryTransientState(state.route, previous.route);
-          if (previous.route === "library") {
-            useLibraryStore.getState().setQuery("");
-            useBrowseStore.getState().clearFilters();
-          }
           set({
             route: previous.route,
             params: previous.params,
             history: state.history.slice(0, -1),
+            future: [currentEntry(state), ...state.future].slice(0, 50),
             navigationNonce: nonce,
             scrollRestore: { nonce, top: previous.scrollTop },
             lyricsOpen: previous.route === "now-playing" ? false : state.lyricsOpen,
@@ -319,13 +317,28 @@ export const useUiStore = create<UiState>()(
         };
         const route = fallback[state.route];
         if (route === undefined) return;
-        clearLibraryTransientState(state.route, route);
         set({
           route,
           params: { ...NO_PARAMS },
           navigationNonce: nonce,
           scrollRestore: { nonce, top: 0 },
           lyricsOpen: route === "now-playing" ? false : state.lyricsOpen,
+        });
+      },
+
+      forward: () => {
+        const state = get();
+        const next = state.future[0];
+        if (next === undefined) return;
+        const nonce = state.navigationNonce + 1;
+        set({
+          route: next.route,
+          params: next.params,
+          history: [...state.history, currentEntry(state)].slice(-50),
+          future: state.future.slice(1),
+          navigationNonce: nonce,
+          scrollRestore: { nonce, top: next.scrollTop },
+          lyricsOpen: next.route === "now-playing" ? false : state.lyricsOpen,
         });
       },
 
@@ -426,30 +439,23 @@ function go(state: UiState, route: ShellRoute, params: RouteParams): Partial<UiS
       lyricsOpen: route === "now-playing" ? false : state.lyricsOpen,
     };
   }
-  const scroller =
-    typeof document === "undefined"
-      ? null
-      : document.querySelector<HTMLElement>("[data-prism-scroll]");
-  const current: NavigationEntry = {
-    route: state.route,
-    params: state.params,
-    scrollTop: scroller?.scrollTop ?? 0,
-  };
+  const current = currentEntry(state);
   return {
     route,
     params,
     history: [...state.history, current].slice(-50),
+    future: [],
     scrollRestore: null,
     lyricsOpen: route === "now-playing" ? false : state.lyricsOpen,
   };
 }
 
-/** Leaving Library drops transient search/filter state, never the saved sort. */
-function clearLibraryTransientState(current: ShellRoute, next: ShellRoute): void {
-  if (current === "library" && next !== "library") {
-    useLibraryStore.getState().setQuery("");
-    useBrowseStore.getState().clearFilters();
-  }
+function currentEntry(state: UiState): NavigationEntry {
+  const scroller =
+    typeof document === "undefined"
+      ? null
+      : document.querySelector<HTMLElement>("[data-prism-scroll]");
+  return { route: state.route, params: state.params, scrollTop: scroller?.scrollTop ?? 0 };
 }
 
 function clamp(value: number, min: number, max: number): number {

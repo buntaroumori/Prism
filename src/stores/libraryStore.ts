@@ -15,6 +15,8 @@ interface LibraryStore {
   stats: LibraryStats | null;
   /** Global search text, owned by the top bar and consumed by every view. */
   query: string;
+  mode: "albums" | "artists" | "tracks";
+  setMode: (mode: "albums" | "artists" | "tracks") => void;
   roots: LibraryRoot[];
   recent: AlbumRow[];
   scan: ScanStatus | null;
@@ -49,6 +51,10 @@ interface LibraryStore {
 export const useLibraryStore = create<LibraryStore>()((set, get) => ({
   stats: null,
   query: "",
+  mode: "albums",
+  setMode: (mode) => {
+    set({ mode });
+  },
   roots: [],
   recent: [],
   scan: null,

@@ -42,7 +42,7 @@ export function Button({
       type={type}
       disabled={isDisabled}
       className={cn(
-        "inline-flex h-9 items-center justify-center gap-2 rounded-full px-4 text-[13px] font-medium tracking-tight transition-colors duration-150 select-none",
+        "inline-flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-[13px] font-medium tracking-tight transition-colors duration-150 select-none",
         "focus-visible:ring-2 focus-visible:ring-accent/70 focus-visible:ring-offset-2 focus-visible:ring-offset-oled-950 focus-visible:outline-none",
         "disabled:pointer-events-none disabled:opacity-45",
         VARIANT_CLASSES[variant],

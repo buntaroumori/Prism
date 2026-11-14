@@ -833,11 +833,11 @@ pub async fn artist(pool: &SqlitePool, id: &str) -> Result<Option<ArtistRow>, Pr
                 COALESCE(SUM(al.duration_ms), 0) AS total_duration_ms, \
                 (SELECT al2.cover_id FROM albums al2 \
                   WHERE al2.artist_id = a.id OR al2.album_artist_id = a.id \
-                  ORDER BY al2.year ASC NULLS LAST LIMIT 1) AS cover_id, \
+                  ORDER BY COALESCE(NULLIF(al2.release_date, ''), CASE WHEN al2.year IS NOT NULL THEN printf('%04d', al2.year) END) ASC NULLS LAST, al2.id ASC LIMIT 1) AS cover_id, \
                 (SELECT cc.local_path FROM albums al2 \
                    JOIN cover_cache cc ON cc.id = al2.cover_id \
                   WHERE al2.artist_id = a.id OR al2.album_artist_id = a.id \
-                  ORDER BY al2.year ASC NULLS LAST LIMIT 1) AS cover_path \
+                  ORDER BY COALESCE(NULLIF(al2.release_date, ''), CASE WHEN al2.year IS NOT NULL THEN printf('%04d', al2.year) END) ASC NULLS LAST, al2.id ASC LIMIT 1) AS cover_path \
          FROM artists a \
          LEFT JOIN albums al ON al.artist_id = a.id OR al.album_artist_id = a.id \
          WHERE a.id = ?1 \
@@ -966,7 +966,9 @@ pub async fn artists(
     let limit = limit.clamp(1, MAX_PAGE_SIZE);
     let offset = offset.min(5_000_000);
 
-    let mut count = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM artists WHERE 1 = 1");
+    let mut count = QueryBuilder::<Sqlite>::new(
+        "SELECT COUNT(*) FROM artists WHERE EXISTS (SELECT 1 FROM v_artist_summary s WHERE s.id = artists.id AND s.album_count > 0)",
+    );
     if let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) {
         count
             .push(" AND name LIKE ")
@@ -978,10 +980,10 @@ pub async fn artists(
     let mut builder = QueryBuilder::<Sqlite>::new(
         "SELECT ar.id, ar.name, ar.sort_name, s.album_count, s.track_count, s.total_duration_ms, \
                 (SELECT id FROM albums WHERE artist_id = ar.id OR album_artist_id = ar.id \
-                 ORDER BY year ASC LIMIT 1) AS cover_album_id, \
+                 ORDER BY COALESCE(NULLIF(release_date, ''), CASE WHEN year IS NOT NULL THEN printf('%04d', year) END) ASC NULLS LAST, id ASC LIMIT 1) AS cover_album_id, \
                 (SELECT cc.local_path FROM albums al JOIN cover_cache cc ON cc.id = al.cover_id \
-                 WHERE al.artist_id = ar.id OR al.album_artist_id = ar.id LIMIT 1) AS cover_path \
-         FROM artists AS ar JOIN v_artist_summary AS s ON s.id = ar.id WHERE 1 = 1",
+                 WHERE al.artist_id = ar.id OR al.album_artist_id = ar.id ORDER BY COALESCE(NULLIF(al.release_date, ''), CASE WHEN al.year IS NOT NULL THEN printf('%04d', al.year) END) ASC NULLS LAST, al.id ASC LIMIT 1) AS cover_path \
+         FROM artists AS ar JOIN v_artist_summary AS s ON s.id = ar.id WHERE s.album_count > 0",
     );
     if let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) {
         builder

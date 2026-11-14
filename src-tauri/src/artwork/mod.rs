@@ -34,7 +34,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{Row, SqlitePool};
 use tokio::sync::Mutex;
@@ -100,6 +100,16 @@ impl CoverAsset {
     }
 }
 
+/// Local portrait and its Wikimedia Commons attribution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistPortrait {
+    pub path: String,
+    pub source: String,
+    pub author: String,
+    pub license: String,
+}
+
 /// Artwork service: cache lookups, provider chain, image normalisation.
 #[derive(Debug, Clone)]
 pub struct ArtworkService {
@@ -107,6 +117,7 @@ pub struct ArtworkService {
     directory: PathBuf,
     http: reqwest::Client,
     musicbrainz_gate: Arc<Mutex<Instant>>,
+    wikimedia_gate: Arc<Mutex<Instant>>,
     inflight: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     /// When true, network providers are skipped entirely (offline mode and
     /// tests). Local providers keep working.
@@ -122,7 +133,7 @@ impl ArtworkService {
             .user_agent(concat!(
                 "Prism/",
                 env!("CARGO_PKG_VERSION"),
-                " (+https://github.com/prism-audio/prism)"
+                " (+https://github.com/buntaroumori/Prism)"
             ))
             .timeout(Duration::from_secs(12))
             .connect_timeout(Duration::from_secs(6))
@@ -133,6 +144,7 @@ impl ArtworkService {
             directory,
             http,
             musicbrainz_gate: Arc::new(Mutex::new(Instant::now() - MUSICBRAINZ_INTERVAL)),
+            wikimedia_gate: Arc::new(Mutex::new(Instant::now())),
             inflight: Arc::new(Mutex::new(HashMap::new())),
             offline: false,
         })
@@ -415,6 +427,241 @@ impl ArtworkService {
         })
     }
 
+    /// Resolve a portrait through Wikidata and Wikimedia Commons, caching it
+    /// locally. No matching portrait falls back to the album cover in the UI.
+    pub async fn artist_portrait(&self, name: &str) -> Option<ArtistPortrait> {
+        let key = format!("artist-{}", Self::key(name, "portrait-v1"));
+        let path = self.directory.join(format!("{key}.jpg"));
+        let credit_path = self.directory.join(format!("{key}.json"));
+        let cached = || -> Option<ArtistPortrait> {
+            if !path.is_file() {
+                return None;
+            }
+            serde_json::from_slice(&std::fs::read(&credit_path).ok()?).ok()
+        };
+        if let Some(portrait) = cached() {
+            return Some(portrait);
+        }
+        if self.offline {
+            return None;
+        }
+        let lock = {
+            let mut inflight = self.inflight.lock().await;
+            inflight
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _guard = lock.lock().await;
+        if let Some(portrait) = cached() {
+            return Some(portrait);
+        }
+        // Wikidata is the primary provider. MusicBrainz can be unavailable or
+        // rate-limited, so it must not gate all portraits in the library.
+        let search: serde_json::Value = self
+            .artist_json(
+                self.http.get("https://www.wikidata.org/w/api.php").query(&[
+                    ("action", "wbsearchentities"),
+                    ("search", name.trim()),
+                    ("language", "en"),
+                    ("type", "item"),
+                    ("limit", "20"),
+                    ("format", "json"),
+                ]),
+                "Wikidata search",
+            )
+            .await?;
+        let wikidata = select_artist_entity(&search, name)?;
+        let entity: serde_json::Value = self
+            .artist_json(
+                self.http.get("https://www.wikidata.org/w/api.php").query(&[
+                    ("action", "wbgetclaims"),
+                    ("entity", wikidata),
+                    ("property", "P18"),
+                    ("format", "json"),
+                ]),
+                "Wikidata image",
+            )
+            .await?;
+        let filename = entity
+            .get("claims")?
+            .get("P18")?
+            .as_array()?
+            .iter()
+            .filter(|claim| claim.get("rank").and_then(|rank| rank.as_str()) != Some("deprecated"))
+            .find_map(|claim| {
+                claim
+                    .get("mainsnak")?
+                    .get("datavalue")?
+                    .get("value")?
+                    .as_str()
+            })?;
+        let title = format!("File:{filename}");
+        let commons = self
+            .artist_json(
+                self.http
+                    .get("https://commons.wikimedia.org/w/api.php")
+                    .query(&[
+                        ("action", "query"),
+                        ("format", "json"),
+                        ("prop", "imageinfo"),
+                        ("iiprop", "url|extmetadata"),
+                        ("iiurlwidth", "500"),
+                        ("titles", title.as_str()),
+                    ]),
+                "Wikimedia Commons metadata",
+            )
+            .await?;
+        let info = commons
+            .get("query")?
+            .get("pages")?
+            .as_object()?
+            .values()
+            .find_map(|page| page.get("imageinfo")?.as_array()?.first())?;
+        let url = info.get("thumburl")?.as_str()?;
+        let source = info.get("descriptionurl")?.as_str()?;
+        let parsed = reqwest::Url::parse(url).ok()?;
+        let source_url = reqwest::Url::parse(source).ok()?;
+        if parsed.scheme() != "https"
+            || !matches!(
+                parsed.host_str(),
+                Some("upload.wikimedia.org" | "thumb.wikimedia.org")
+            )
+            || source_url.scheme() != "https"
+            || source_url.host_str() != Some("commons.wikimedia.org")
+        {
+            return None;
+        }
+        let metadata = info.get("extmetadata")?;
+        let author = metadata.get("Artist")?.get("value")?.as_str()?;
+        let license = metadata.get("LicenseShortName")?.get("value")?.as_str()?;
+        if author.trim().is_empty() || license.trim().is_empty() {
+            return None;
+        }
+        let bytes = match self.artist_download(url).await {
+            Some(bytes) => bytes,
+            None => {
+                tracing::warn!("artist portrait image download failed");
+                return None;
+            }
+        };
+        let service = self.clone();
+        let key_for_write = key.clone();
+        let (path, _, _, _) = match tokio::task::spawn_blocking(move || {
+            service.normalise_and_write(&key_for_write, &bytes)
+        })
+        .await
+        {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "artist portrait image cache failed");
+                return None;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "artist portrait image task failed");
+                return None;
+            }
+        };
+        let portrait = ArtistPortrait {
+            path: path.to_string_lossy().into_owned(),
+            source: source.to_string(),
+            author: author.to_string(),
+            license: license.to_string(),
+        };
+        write_atomic(&credit_path, &serde_json::to_vec(&portrait).ok()?).ok()?;
+        Some(portrait)
+    }
+
+    async fn artist_json(
+        &self,
+        request: reqwest::RequestBuilder,
+        stage: &str,
+    ) -> Option<serde_json::Value> {
+        let response = self.artist_request(request, stage).await?;
+        match response.json().await {
+            Ok(json) => Some(json),
+            Err(error) => {
+                tracing::warn!(%error, stage, "artist portrait response invalid");
+                None
+            }
+        }
+    }
+
+    /// Serialize Wikimedia traffic across every portrait and respect server
+    /// cooldowns globally, including image requests. A rate-limited request
+    /// stays pending and resumes automatically instead of poisoning the cache.
+    async fn artist_request(
+        &self,
+        request: reqwest::RequestBuilder,
+        stage: &str,
+    ) -> Option<reqwest::Response> {
+        let mut attempts: u32 = 0;
+        loop {
+            let mut next = self.wikimedia_gate.lock().await;
+            tokio::time::sleep_until(tokio::time::Instant::from_std(*next)).await;
+            let result = request.try_clone()?.send().await;
+            *next = Instant::now() + Duration::from_millis(1500);
+            match result {
+                Ok(response)
+                    if response.status().as_u16() == 429 || response.status().as_u16() == 503 =>
+                {
+                    let header = response
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok());
+                    let delay = wikimedia_retry_delay(header, attempts);
+                    *next = Instant::now()
+                        .checked_add(delay)
+                        .unwrap_or_else(|| Instant::now() + Duration::from_secs(3600));
+                    tracing::info!(
+                        stage,
+                        seconds = delay.as_secs(),
+                        "Wikimedia requested a pause; retrying automatically"
+                    );
+                    attempts = attempts.saturating_add(1);
+                    drop(next);
+                }
+                Ok(response) => {
+                    drop(next);
+                    match response.error_for_status() {
+                        Ok(response) => return Some(response),
+                        Err(error) => {
+                            tracing::warn!(%error, stage, "artist portrait lookup failed");
+                            return None;
+                        }
+                    }
+                }
+                Err(error) => {
+                    attempts = attempts.saturating_add(1);
+                    if attempts > 3 {
+                        tracing::warn!(%error, stage, "artist portrait lookup failed");
+                        return None;
+                    }
+                    let delay = Duration::from_secs(5 * u64::from(attempts));
+                    *next = Instant::now() + delay;
+                    drop(next);
+                }
+            }
+        }
+    }
+
+    async fn artist_download(&self, url: &str) -> Option<Vec<u8>> {
+        let response = self
+            .artist_request(self.http.get(url), "Wikimedia image")
+            .await?;
+        if response
+            .content_length()
+            .is_some_and(|size| size > 20 * 1024 * 1024)
+        {
+            return None;
+        }
+        let bytes = response.bytes().await.ok()?.to_vec();
+        if bytes.len() < 512 || bytes.len() > 20 * 1024 * 1024 {
+            return None;
+        }
+        Some(bytes)
+    }
+
     /// MusicBrainz release search → Cover Art Archive front image.
     async fn cover_art_archive(&self, artist: &str, album: &str) -> Option<ProviderImage> {
         {
@@ -658,6 +905,142 @@ impl ArtworkService {
     }
 }
 
+/// Parse Retry-After's delta-seconds or IMF-fixdate. Unknown values use a
+/// conservative exponential delay, never an immediate retry.
+fn wikimedia_retry_delay(value: Option<&str>, attempts: u32) -> Duration {
+    if let Some(value) = value {
+        if let Ok(seconds) = value.trim().parse::<u64>() {
+            return Duration::from_secs(seconds.max(1));
+        }
+        if let Some(seconds) = http_date_unix_seconds(value) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            return Duration::from_secs(seconds.saturating_sub(now).max(1));
+        }
+    }
+    Duration::from_secs(30_u64.saturating_mul(1_u64 << attempts.min(4)))
+}
+
+/// RFC 9110 IMF-fixdate (e.g. Sun, 06 Nov 1994 08:49:37 GMT).
+fn http_date_unix_seconds(value: &str) -> Option<u64> {
+    let fields: Vec<&str> = value.split_ascii_whitespace().collect();
+    if fields.len() != 6 || fields[5] != "GMT" {
+        return None;
+    }
+    let day: i64 = fields[1].parse().ok()?;
+    let month: i64 = match fields[2] {
+        "Jan" => 1,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
+        _ => return None,
+    };
+    let year: i64 = fields[3].parse().ok()?;
+    let clock: Vec<i64> = fields[4]
+        .split(':')
+        .map(str::parse)
+        .collect::<Result<_, _>>()
+        .ok()?;
+    if !(1970..=9999).contains(&year)
+        || !(1..=31).contains(&day)
+        || clock.len() != 3
+        || clock[0] > 23
+        || clock[1] > 59
+        || clock[2] > 59
+        || clock.iter().any(|v| *v < 0)
+    {
+        return None;
+    }
+    let y = year - i64::from(month <= 2);
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = month + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let days = era * 146097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719468;
+    u64::try_from(days * 86400 + clock[0] * 3600 + clock[1] * 60 + clock[2]).ok()
+}
+
+/// Pick the highest-ranked exact artist name, rejecting obvious homonyms such
+/// as albums, songs and films. Wikidata's ranking breaks ties between artists;
+/// names alone cannot guarantee identity for every catalogue.
+fn select_artist_entity<'a>(json: &'a serde_json::Value, name: &str) -> Option<&'a str> {
+    let wanted = name.trim().to_lowercase();
+    json.get("search")?.as_array()?.iter().find_map(|item| {
+        let label = item.get("label")?.as_str()?.trim().to_lowercase();
+        let matched = item
+            .get("match")
+            .and_then(|m| m.get("text"))
+            .and_then(|v| v.as_str())
+            .map(|v| v.trim().to_lowercase());
+        if label != wanted && matched.as_deref() != Some(wanted.as_str()) {
+            return None;
+        }
+        let description = item.get("description")?.as_str()?.to_lowercase();
+        let rejected = [
+            "album",
+            "discography",
+            "record label",
+            "fictional",
+            "character",
+            "television series",
+            "song by",
+            "single by",
+            "film by",
+        ];
+        if rejected.iter().any(|word| description.contains(word)) {
+            return None;
+        }
+        let musical = [
+            "band",
+            "singer",
+            "musician",
+            "musical group",
+            "music group",
+            "composer",
+            "songwriter",
+            "rapper",
+            "guitarist",
+            "pianist",
+            "vocalist",
+            "orchestra",
+            "conductor",
+            "drummer",
+            "bassist",
+            "trumpeter",
+            "saxophonist",
+            "violinist",
+            "producer",
+            "dj",
+            "performer",
+            "duo",
+            "quartet",
+            "ensemble",
+            "choir",
+            "harpist",
+            "instrumentalist",
+        ];
+        if !musical.iter().any(|word| description.contains(word)) {
+            return None;
+        }
+        let id = item.get("id")?.as_str()?;
+        if id.starts_with('Q') && id.len() > 1 && id[1..].bytes().all(|b| b.is_ascii_digit()) {
+            Some(id)
+        } else {
+            None
+        }
+    })
+}
+
 fn encode_jpeg(image: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, PrismError> {
     let mut encoded = Vec::with_capacity(64 * 1024);
     let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, quality);
@@ -689,6 +1072,41 @@ fn truncate(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wikimedia_retry_after_is_respected() {
+        assert_eq!(
+            wikimedia_retry_delay(Some("42"), 0),
+            Duration::from_secs(42)
+        );
+        assert_eq!(wikimedia_retry_delay(None, 0), Duration::from_secs(30));
+        assert_eq!(wikimedia_retry_delay(None, 2), Duration::from_secs(120));
+        assert_eq!(
+            http_date_unix_seconds("Sun, 06 Nov 1994 08:49:37 GMT"),
+            Some(784111777)
+        );
+        assert_eq!(http_date_unix_seconds("not a date"), None);
+    }
+
+    #[test]
+    fn artist_search_skips_albums_and_accepts_songwriters() {
+        let response = serde_json::json!({ "search": [
+            {"id":"Q10", "label":"Nina Simone", "description":"album by Nina Simone"},
+            {"id":"Q20", "label":"Nina Simone", "description":"American singer, songwriter and pianist"},
+            {"id":"Q30", "label":"Nina Simone", "description":"fictional musical character"}
+        ]});
+        assert_eq!(select_artist_entity(&response, "Nina Simone"), Some("Q20"));
+        assert_eq!(select_artist_entity(&response, "Someone Else"), None);
+    }
+
+    #[test]
+    fn artist_search_accepts_unicode_and_rejects_invalid_entity_ids() {
+        let response = serde_json::json!({ "search": [
+            {"id":"Qbad", "label":"Björk", "description":"Icelandic singer"},
+            {"id":"Q42455", "label":"Björk", "description":"Icelandic singer"}
+        ]});
+        assert_eq!(select_artist_entity(&response, "BJÖRK"), Some("Q42455"));
+    }
 
     #[test]
     fn keys_are_sha256_of_the_normalised_identity() {

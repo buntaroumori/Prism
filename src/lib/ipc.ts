@@ -260,6 +260,19 @@ export const libraryApi = {
     command("library_home", HomeRailsSchema, { limit: limit ?? null }),
   albumDetail: (id: string): Promise<AlbumDetail> =>
     command("library_album_detail", AlbumDetailSchema, { id }),
+  artistPortrait: (id: string) =>
+    command(
+      "library_artist_portrait",
+      z
+        .object({
+          path: z.string(),
+          source: z.string().url(),
+          author: z.string(),
+          license: z.string(),
+        })
+        .nullable(),
+      { id },
+    ),
   artistDetail: (id: string): Promise<ArtistDetail> =>
     command("library_artist_detail", ArtistDetailSchema, { id }),
   notePlay: (trackId: string, msPlayed?: number, completed?: boolean): Promise<boolean> =>

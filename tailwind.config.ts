@@ -32,8 +32,8 @@ export default {
           border: "rgb(var(--prism-ink) / 0.10)",
         },
         accent: {
-          DEFAULT: "#7c8cff",
-          soft: "#a7b2ff",
+          DEFAULT: "var(--prism-accent)",
+          soft: "var(--prism-accent-soft)",
           deep: "#4d5bdb",
         },
         spectrum: {

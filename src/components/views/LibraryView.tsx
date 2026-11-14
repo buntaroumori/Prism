@@ -5,12 +5,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Image as ImageIcon,
-  LayoutGrid,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX } from "react";
 
+import { VirtualCardGrid } from "@/components/library/VirtualCardGrid";
+import { loadAllPages } from "@/lib/loadAllPages";
 import { AlbumCard } from "@/components/library/AlbumCard";
+import { ArtistsBrowser, LibraryTabs, TracksBrowser } from "@/components/library/LibraryBrowse";
 import { PopoverSelect } from "@/components/ui/PopoverSelect";
 import { formatAlbumCount, formatCount } from "@/lib/format";
 import { libraryApi } from "@/lib/ipc";
@@ -20,7 +22,8 @@ import { usePlaybackStore, type LibraryContinuation } from "@/stores/playbackSto
 import { COVER_SIZE_MAX, COVER_SIZE_MIN, useUiStore } from "@/stores/uiStore";
 import type { AlbumCollection, AlbumRow, AlbumSort, Facets } from "@/types/ipc";
 
-const PAGE_SIZE = 120;
+// Keep the complete catalogue in memory when returning from a detail page.
+let cachedLibrary: { key: string; albums: AlbumRow[]; total: number } | null = null;
 
 const COLLECTION_TITLES: Record<AlbumCollection, { title: string; caption: string }> = {
   recentlyAdded: {
@@ -74,15 +77,26 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
   const setYear = useBrowseStore((state) => state.setYear);
 
   const curated = collection !== null || genre !== null;
+  const mode = useLibraryStore((state) => state.mode);
+  const setMode = useLibraryStore((state) => state.setMode);
   const [collectionSort, setCollectionSort] = useState<AlbumSort | null>(null);
-  const [albums, setAlbums] = useState<AlbumRow[]>([]);
-  const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const cacheKey = JSON.stringify([
+    query,
+    curated ? collectionSort : storedSort,
+    curated ? genre : storedGenre,
+    decade,
+    year,
+    collection,
+    stats?.trackCount ?? 0,
+  ]);
+  const initialCache = !curated && cachedLibrary?.key === cacheKey ? cachedLibrary : null;
+  const [albums, setAlbums] = useState<AlbumRow[]>(initialCache?.albums ?? []);
+  const [total, setTotal] = useState(initialCache?.total ?? 0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyAlbum, setBusyAlbum] = useState<string | null>(null);
   const [facets, setFacets] = useState<Facets | null>(null);
-  const sentinel = useRef<HTMLDivElement | null>(null);
+  const initialCacheKey = useRef(initialCache === null ? null : cacheKey);
 
   const sort = curated ? collectionSort : storedSort;
   const activeGenre = curated ? genre : storedGenre;
@@ -112,72 +126,45 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
   }, [curated]);
 
   useEffect(() => {
-    setAlbums([]);
-    setOffset(0);
-    setLoading(true);
-  }, [query, sort, activeGenre, yearFrom, yearTo, collection, libraryVersion]);
-
-  useEffect(() => {
+    if (initialCacheKey.current === cacheKey) {
+      initialCacheKey.current = null;
+      setLoading(false);
+      return;
+    }
     let active = true;
-    void libraryApi
-      .albums({
-        ...(query.length > 0 ? { text: query } : {}),
-        ...(activeGenre !== null ? { genre: activeGenre } : {}),
-        ...(yearFrom !== null ? { yearFrom } : {}),
-        ...(yearTo !== null ? { yearTo } : {}),
-        ...(collection !== null ? { collection } : {}),
-        ...(sort !== null ? { sort } : {}),
-        limit: PAGE_SIZE,
-        offset,
-      })
+    setAlbums([]);
+    setTotal(0);
+    setLoading(true);
+    const options = {
+      ...(query.length > 0 ? { text: query } : {}),
+      ...(activeGenre !== null ? { genre: activeGenre } : {}),
+      ...(yearFrom !== null ? { yearFrom } : {}),
+      ...(yearTo !== null ? { yearTo } : {}),
+      ...(collection !== null ? { collection } : {}),
+      ...(sort !== null ? { sort } : {}),
+    };
+    void loadAllPages(
+      (offset, limit) => libraryApi.albums({ ...options, offset, limit }),
+      () => active,
+    )
       .then((page) => {
-        if (!active) {
-          return;
-        }
+        if (!active || page === null) return;
         setTotal(page.total);
-        setAlbums((current) =>
-          offset === 0
-            ? page.items
-            : [
-                ...current,
-                ...page.items.filter((next) => !current.some((album) => album.id === next.id)),
-              ],
-        );
+        setAlbums(page.items);
         setError(null);
+        if (!curated) cachedLibrary = { key: cacheKey, albums: page.items, total: page.total };
       })
       .catch((cause: unknown) => {
-        if (active) {
+        if (active)
           setError(cause instanceof Error ? cause.message : "The albums could not be loaded");
-        }
       })
       .finally(() => {
-        if (active) {
-          setLoading(false);
-        }
+        if (active) setLoading(false);
       });
     return () => {
       active = false;
     };
-  }, [query, sort, activeGenre, yearFrom, yearTo, collection, offset, libraryVersion]);
-
-  useEffect(() => {
-    const node = sentinel.current;
-    if (node === null) {
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting) && !loading && albums.length < total) {
-          setOffset(albums.length);
-        }
-      },
-      { rootMargin: "600px" },
-    );
-    observer.observe(node);
-    return () => {
-      observer.disconnect();
-    };
-  }, [albums.length, loading, total]);
+  }, [query, sort, activeGenre, yearFrom, yearTo, collection, libraryVersion, cacheKey, curated]);
 
   const libraryContinuation = {
     ...(query.length > 0 ? { text: query } : {}),
@@ -203,11 +190,6 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
       setBusyAlbum(null);
     }
   };
-
-  const columns = useMemo(
-    () => `repeat(auto-fill, minmax(${String(coverSize)}px, 1fr))`,
-    [coverSize],
-  );
 
   const heading = curated
     ? genre !== null
@@ -235,6 +217,27 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
     }
   };
 
+  if (!curated && mode !== "albums") {
+    return (
+      <div className="mx-auto w-full max-w-[1560px] px-8 pt-7 pb-10">
+        <h1 className="mb-5 text-[26px] font-semibold text-white">Library</h1>
+        <LibraryTabs mode={mode} onChange={setMode} />
+        {mode === "artists" ? (
+          <ArtistsBrowser query={query} />
+        ) : (
+          <TracksBrowser
+            query={{
+              ...(query ? { text: query } : {}),
+              ...(activeGenre !== null ? { genre: activeGenre } : {}),
+              ...(yearFrom !== null ? { yearFrom } : {}),
+              ...(yearTo !== null ? { yearTo } : {}),
+            }}
+          />
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-[1560px] px-8 pt-7 pb-10">
       {curated ? (
@@ -251,7 +254,6 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
       <header className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <h1 className="flex items-center gap-2 text-[26px] leading-none font-semibold tracking-[-0.03em] text-white">
-            <LayoutGrid className="h-5 w-5 text-white/25" aria-hidden="true" strokeWidth={1.5} />
             {heading?.title ?? "Library"}
           </h1>
           <p className="mt-1.5 text-[12.5px] text-white/40">
@@ -269,7 +271,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center gap-2 rounded-full border border-white/[0.07] bg-white/[0.03] px-3 py-1.5">
+          <div className="flex items-center gap-2 rounded-lg border border-white/[0.07] bg-white/[0.03] px-3 py-1.5">
             <ImageIcon className="h-3.5 w-3.5 text-white/30" aria-hidden="true" />
             <input
               type="range"
@@ -281,7 +283,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
               onChange={(event) => {
                 setAppearance({ coverSize: Number(event.target.value) });
               }}
-              className="h-1 w-24 cursor-pointer appearance-none rounded-full bg-white/15 accent-white [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+              className="h-1 w-24 cursor-pointer appearance-none rounded-lg bg-white/15 accent-white [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-lg [&::-webkit-slider-thumb]:bg-white"
             />
             <span className="tabular w-8 text-right text-[10px] text-white/35">{coverSize}</span>
           </div>
@@ -292,7 +294,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
               onClick={() => {
                 setQuery("");
               }}
-              className="flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-[11px] text-white/50 hover:text-white"
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-[11px] text-white/50 hover:text-white"
             >
               <X className="h-3 w-3" aria-hidden="true" />
               Clear search
@@ -301,6 +303,11 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
         </div>
       </header>
 
+      {!curated ? (
+        <div className="mt-5">
+          <LibraryTabs mode={mode} onChange={setMode} />
+        </div>
+      ) : null}
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1.5" aria-label="Sort albums">
           <SortButton field="artist" label="Artist" sort={sort} onChange={changeSort} />
@@ -315,7 +322,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
                 type="button"
                 onClick={clearFilters}
                 title="Clear genre, decade and year filters"
-                className="flex h-8 items-center gap-1.5 rounded-full border border-white/10 px-3 text-[11px] text-white/50 transition-colors hover:bg-white/[0.05] hover:text-white"
+                className="flex h-8 items-center gap-1.5 rounded-lg border border-white/10 px-3 text-[11px] text-white/50 transition-colors hover:bg-white/[0.05] hover:text-white"
               >
                 <X className="h-3 w-3" aria-hidden="true" />
                 Clear filters
@@ -366,7 +373,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
       {activeDecade !== null ? (
         <div
           aria-label="Filter by year"
-          className="mt-3 flex flex-wrap items-center gap-1.5 rounded-2xl border border-white/[0.055] bg-white/[0.015] px-2 py-2"
+          className="mt-3 inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-lg border border-white/[0.055] bg-white/[0.015] px-2 py-2"
         >
           <button
             type="button"
@@ -377,7 +384,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
               const previous = decadeValues[decadeIndex - 1];
               if (previous !== undefined) setDecade(previous);
             }}
-            className="grid h-7 w-7 place-items-center rounded-full text-white/45 transition-colors hover:bg-white/[0.07] hover:text-white disabled:opacity-20 disabled:hover:bg-transparent"
+            className="grid h-7 w-7 place-items-center rounded-lg text-white/45 transition-colors hover:bg-white/[0.07] hover:text-white disabled:opacity-20 disabled:hover:bg-transparent"
           >
             <ChevronLeft className="h-4 w-4" aria-hidden="true" />
           </button>
@@ -393,8 +400,8 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
             }}
             className={
               activeYear === null
-                ? "h-7 rounded-full bg-accent/[0.14] px-2.5 text-[11px] font-medium text-accent"
-                : "h-7 rounded-full px-2.5 text-[11px] text-white/45 hover:bg-white/[0.06] hover:text-white"
+                ? "h-7 rounded-lg bg-accent/[0.14] px-2.5 text-[11px] font-medium text-accent"
+                : "h-7 rounded-lg px-2.5 text-[11px] text-white/45 hover:bg-white/[0.06] hover:text-white"
             }
           >
             All years
@@ -411,8 +418,8 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
                 }}
                 className={
                   activeYear === value
-                    ? "h-7 rounded-full bg-accent/[0.14] px-2.5 text-[11px] font-medium text-accent"
-                    : "h-7 rounded-full px-2.5 text-[11px] text-white/45 hover:bg-white/[0.06] hover:text-white"
+                    ? "h-7 rounded-lg bg-accent/[0.14] px-2.5 text-[11px] font-medium text-accent"
+                    : "h-7 rounded-lg px-2.5 text-[11px] text-white/45 hover:bg-white/[0.06] hover:text-white"
                 }
               >
                 {facet.value}
@@ -428,7 +435,7 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
               const next = decadeValues[decadeIndex + 1];
               if (next !== undefined) setDecade(next);
             }}
-            className="ml-auto grid h-7 w-7 place-items-center rounded-full text-white/45 transition-colors hover:bg-white/[0.07] hover:text-white disabled:opacity-20 disabled:hover:bg-transparent"
+            className="ml-auto grid h-7 w-7 place-items-center rounded-lg text-white/45 transition-colors hover:bg-white/[0.07] hover:text-white disabled:opacity-20 disabled:hover:bg-transparent"
           >
             <ChevronRight className="h-4 w-4" aria-hidden="true" />
           </button>
@@ -451,30 +458,30 @@ export function LibraryView({ collection = null, genre = null }: LibraryViewProp
           </p>
         </div>
       ) : (
-        <div
-          className="density-grid mt-5 grid gap-x-5"
-          style={{ gridTemplateColumns: columns }}
-          data-cover-size={coverSize}
-        >
-          {albums.map((album) => (
-            <AlbumCard
-              key={album.id}
-              album={album}
-              busy={busyAlbum === album.id}
-              onPlay={(target) => {
-                void playAlbum(target);
-              }}
-              continuation={libraryContinuation}
-            />
-          ))}
+        <div className="mt-5" data-cover-size={coverSize}>
+          <VirtualCardGrid
+            items={albums}
+            minimum={coverSize}
+            extraHeight={100}
+            render={(album, size) => (
+              <AlbumCard
+                key={album.id}
+                album={album}
+                size={size}
+                busy={busyAlbum === album.id}
+                onPlay={(target) => {
+                  void playAlbum(target);
+                }}
+                continuation={libraryContinuation}
+              />
+            )}
+          />
         </div>
       )}
 
-      <div ref={sentinel} aria-hidden="true" className="h-8" />
-
       {loading ? (
         <div className="mt-2 flex items-center gap-2 text-[11px] text-white/30">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white/40" />
+          <span className="h-1.5 w-1.5 animate-pulse rounded-lg bg-white/40" />
           Reading your music…
         </div>
       ) : null}
@@ -521,8 +528,8 @@ function SortButton({
       }}
       className={
         selected
-          ? "flex h-8 items-center gap-1.5 rounded-full border border-white/[0.12] bg-white/[0.09] px-3 text-[11.5px] text-white"
-          : "flex h-8 items-center gap-1.5 rounded-full border border-white/[0.07] bg-white/[0.025] px-3 text-[11.5px] text-white/45 hover:bg-white/[0.05] hover:text-white/80"
+          ? "flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.12] bg-white/[0.09] px-3 text-[11.5px] text-white"
+          : "flex h-8 items-center gap-1.5 rounded-lg border border-white/[0.07] bg-white/[0.025] px-3 text-[11.5px] text-white/45 hover:bg-white/[0.05] hover:text-white/80"
       }
     >
       {label}

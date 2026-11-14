@@ -1,4 +1,4 @@
-import { ArrowLeft, ImagePlus, Pencil, Play, TriangleAlert } from "lucide-react";
+import { ImagePlus, Pencil, Play, Shuffle, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useState, type JSX } from "react";
 
 import { TrackTable } from "@/components/library/TrackTable";
@@ -10,12 +10,10 @@ import { playlistApi } from "@/lib/ipc";
 import { pickPlaylistCover } from "@/lib/playlistCover";
 import { usePlaybackStore } from "@/stores/playbackStore";
 import { usePlaylistStore } from "@/stores/playlistStore";
-import { useUiStore } from "@/stores/uiStore";
 import type { PlaylistDetail } from "@/types/ipc";
 
 /** One playlist in its explicit order. */
 export function PlaylistView({ playlistId }: { playlistId: string }): JSX.Element {
-  const back = useUiStore((state) => state.back);
   const playTracks = usePlaybackStore((state) => state.playTracks);
   const setCustomCover = usePlaylistStore((state) => state.setCustomCover);
   const [coverBusy, setCoverBusy] = useState(false);
@@ -80,23 +78,28 @@ export function PlaylistView({ playlistId }: { playlistId: string }): JSX.Elemen
 
   return (
     <div className="mx-auto w-full max-w-[1400px] px-8 pt-6 pb-12">
-      <button
-        type="button"
-        onClick={back}
-        className="mb-5 flex items-center gap-1.5 text-[11.5px] text-white/40 hover:text-white"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-        Back
-      </button>
-
       <header className="flex flex-col gap-5 sm:flex-row sm:items-end">
-        <CoverArt
-          path={playlist.coverPath}
-          url={playlist.coverUrl}
-          alt={playlist.name}
-          className="h-[164px] w-[164px] shrink-0"
-          rounded="rounded-2xl"
-        />
+        <div className="group relative shrink-0">
+          <CoverArt
+            path={playlist.coverPath}
+            url={playlist.coverUrl}
+            alt={playlist.name}
+            className="h-[164px] w-[164px] shrink-0"
+            rounded="rounded-lg"
+          />
+          <button
+            type="button"
+            aria-label="Change cover"
+            title="Change cover"
+            disabled={coverBusy}
+            onClick={() => {
+              void chooseCover();
+            }}
+            className="absolute right-2 bottom-2 rounded-lg bg-oled-950/85 p-2 text-white opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+          >
+            <ImagePlus className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
         <div className="min-w-0">
           <p className="text-[10px] font-semibold tracking-[0.2em] text-white/30 uppercase">
             Playlist
@@ -143,13 +146,13 @@ export function PlaylistView({ playlistId }: { playlistId: string }): JSX.Elemen
             </Button>
             <Button
               variant="secondary"
-              icon={ImagePlus}
-              loading={coverBusy}
+              icon={Shuffle}
+              disabled={tracks.length === 0}
               onClick={() => {
-                void chooseCover();
+                void playTracks(tracks, 0, { shuffle: true });
               }}
             >
-              Change cover
+              Shuffle
             </Button>
           </div>
           {coverError !== null ? (

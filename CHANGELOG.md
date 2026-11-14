@@ -6,6 +6,20 @@ Notable user-visible changes are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-10-19
+
+### Added
+
+- Library views for albums, artists and tracks, with virtualised album and artist grids.
+- Artist portraits from Wikidata and Wikimedia Commons, with attribution, local caching and album-cover fallback.
+- A Dark OLED appearance option.
+
+### Changed
+
+- Refined library navigation, sorting, search, filters and scroll-position restoration.
+- Updated the queue, now-playing and lyrics interfaces.
+- Improved cover loading during development and limited recovery attempts after output errors.
+
 ## [1.2.4] — 2026-10-19
 
 ### Fixed
@@ -252,7 +266,8 @@ Notable user-visible changes are recorded here. The format follows
 - Optional Lua and WebAssembly plugin runtimes with capability checks and resource limits.
 - Windows and Linux packaging configuration, dependency licence inventory and release checksums.
 
-[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.2.4...HEAD
+[Unreleased]: https://github.com/buntaroumori/Prism/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/buntaroumori/Prism/releases/tag/v1.3.0
 [1.2.4]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.4
 [1.2.3]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.3
 [1.2.2]: https://github.com/buntaroumori/Prism/releases/tag/v1.2.2

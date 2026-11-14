@@ -1,10 +1,10 @@
-import { Activity } from "lucide-react";
-import type { JSX } from "react";
+import { useState, type JSX } from "react";
 
 import { SpectrumModule } from "@/components/nowplaying/SpectrumModule";
 import { LyricsPanel } from "@/components/player/LyricsPanel";
 import { useLyrics } from "@/hooks/useLyrics";
 import { cn } from "@/lib/utils";
+import { usePlaybackStore } from "@/stores/playbackStore";
 import { useUiStore } from "@/stores/uiStore";
 import type { PlayerStatus } from "@/types/ipc";
 
@@ -13,63 +13,76 @@ interface NowPlayingDeckProps {
   trackId: string | null;
 }
 
-/**
- * Symmetric secondary region for Now Playing.
- *
- * Lyrics own the region when they exist. The spectrum is opt-in alongside
- * them, and becomes the sole panel automatically when resolution produced no
- * lyric document. Both children are bounded; only the lyric sheet scrolls.
- */
+type DeckTab = "lyrics" | "queue" | "spectrum";
+
 export function NowPlayingDeck({ status, trackId }: NowPlayingDeckProps): JSX.Element {
   const lyrics = useLyrics(trackId);
   const showSpectrum = useUiStore((state) => state.showSpectrum);
-  const setAppearance = useUiStore((state) => state.setAppearance);
-  const hasLyrics =
-    lyrics.document !== null &&
-    (lyrics.document.lines.length > 0 || lyrics.document.plainText.trim().length > 0);
-  // Preserve genuine loading/error states instead of flashing the spectrum on
-  // every track change or disguising a read failure as an empty result.
-  const showLyrics = hasLyrics || lyrics.loading || lyrics.error !== null;
-  const spectrumVisible = !showLyrics || showSpectrum;
+  const queue = usePlaybackStore((state) => state.queue);
+  const index = usePlaybackStore((state) => state.index);
+  const jumpTo = usePlaybackStore((state) => state.jumpTo);
+  const [tab, setTab] = useState<DeckTab>(showSpectrum ? "spectrum" : "lyrics");
 
   return (
-    <section aria-label="Lyrics and spectrum" className="flex h-full min-h-0 flex-col">
-      {showLyrics ? (
-        <div className="mb-2 flex h-7 shrink-0 items-center justify-end">
+    <section aria-label="Now Playing details" className="flex h-full min-h-0 flex-col">
+      <div
+        role="tablist"
+        aria-label="Now Playing details"
+        className="mb-3 flex shrink-0 gap-1 border-b border-white/[0.08]"
+      >
+        {(["lyrics", "queue", "spectrum"] as const).map((item) => (
           <button
+            key={item}
             type="button"
-            aria-pressed={showSpectrum}
+            role="tab"
+            aria-selected={tab === item}
             onClick={() => {
-              setAppearance({ showSpectrum: !showSpectrum });
+              setTab(item);
             }}
             className={cn(
-              "flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[10.5px] transition-colors",
-              showSpectrum
-                ? "border-accent/30 bg-accent/[0.10] text-accent"
-                : "border-white/[0.07] text-white/35 hover:bg-white/[0.05] hover:text-white/70",
+              "border-b-2 px-3 py-2 text-[12px] capitalize",
+              tab === item
+                ? "border-accent text-white"
+                : "border-transparent text-white/40 hover:text-white/75",
             )}
           >
-            <Activity className="h-3.5 w-3.5" aria-hidden="true" />
-            Spectrum
+            {item}
           </button>
-        </div>
-      ) : null}
-
-      <div
-        className={cn(
-          "grid min-h-0 flex-1 gap-4",
-          showLyrics && spectrumVisible && "grid-rows-[minmax(0,1fr)_190px]",
-        )}
-      >
-        {showLyrics ? (
-          <div className="min-h-0">
-            <LyricsPanel lyrics={lyrics} />
-          </div>
+        ))}
+      </div>
+      <div role="tabpanel" className="min-h-0 flex-1">
+        {tab === "lyrics" ? <LyricsPanel lyrics={lyrics} /> : null}
+        {tab === "spectrum" ? (
+          <SpectrumModule sampleRate={status?.sourceFormat?.sampleRate ?? null} />
         ) : null}
-        {spectrumVisible ? (
-          <div className="min-h-0">
-            <SpectrumModule sampleRate={status?.sourceFormat?.sampleRate ?? null} />
-          </div>
+        {tab === "queue" ? (
+          <ol className="h-full overflow-y-auto">
+            {queue.slice(index).map((entry, relativePosition) => {
+              const position = index + relativePosition;
+              return (
+                <li key={entry.queueId}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void jumpTo(position);
+                    }}
+                    className={cn(
+                      "flex w-full gap-3 rounded-lg px-3 py-2 text-left hover:bg-white/[0.04]",
+                      position === index ? "text-accent" : "text-white/75",
+                    )}
+                  >
+                    <span className="w-6 shrink-0 text-right text-[11px] text-white/30 tabular-nums">
+                      {position + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-[12px]">{entry.title}</span>
+                    <span className="max-w-[40%] truncate text-[11px] text-white/35">
+                      {entry.artist}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ol>
         ) : null}
       </div>
     </section>

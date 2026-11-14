@@ -201,7 +201,6 @@ export function HomeView(): JSX.Element {
         >
           <Rail
             title={rail.title}
-            caption={rail.caption}
             action={
               <button
                 type="button"

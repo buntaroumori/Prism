@@ -42,12 +42,9 @@ import type { DiscordStatus, LibraryRoot } from "@/types/ipc";
  */
 export function SettingsView(): JSX.Element {
   return (
-    <div className="mx-auto w-full max-w-[980px] space-y-10 px-8 pt-8 pb-14">
+    <div className="mx-auto w-full max-w-[980px] space-y-5 px-8 pt-8 pb-14">
       <header>
         <h1 className="text-[27px] font-semibold tracking-[-0.03em] text-white">Settings</h1>
-        <p className="mt-1 text-[13px] text-white/40">
-          Your choices are saved and applied to this installation.
-        </p>
       </header>
 
       <ThemeSection />
@@ -70,6 +67,7 @@ export function SettingsView(): JSX.Element {
 const THEME_OPTIONS = [
   { value: "light", label: "Light", caption: "Fixed light", icon: Sun },
   { value: "dark", label: "Dark", caption: "Fixed dark", icon: Moon },
+  { value: "oled", label: "Dark OLED", caption: "Pure black", icon: Moon },
   { value: "system", label: "System", caption: "Light / dark", icon: Monitor },
 ] as const;
 
@@ -82,7 +80,7 @@ function ThemeSection(): JSX.Element {
       title="Theme"
       description="Choose a fixed appearance or follow the operating system. Your choice is applied immediately and remembered."
     >
-      <div role="radiogroup" aria-label="Theme" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div role="radiogroup" aria-label="Theme" className="grid grid-cols-1 gap-3 sm:grid-cols-4">
         {THEME_OPTIONS.map((option) => {
           const selected = theme === option.value;
           const Icon = option.icon;
@@ -132,7 +130,7 @@ function HomePreview({ theme }: { theme: ThemePreference }): JSX.Element {
       </div>
     );
   }
-  return <MiniHome dark={theme === "dark"} />;
+  return <MiniHome dark={theme === "dark" || theme === "oled"} />;
 }
 
 /** Symbolic Home silhouette: rail, search, shelf labels and album covers. */
@@ -278,6 +276,25 @@ function OutputSection(): JSX.Element {
         />
       </Row>
 
+      {status?.track !== null && status?.track !== undefined ? (
+        <div
+          className="border-t border-white/[0.07] pt-3 text-[11px] text-white/45"
+          aria-label="Signal path"
+        >
+          <span className="text-white/65">Signal path: </span>
+          {status.sourceFormat === null ? "Source unknown" : formatAudioFormat(status.sourceFormat)}
+          {" → "}
+          {status.outputFormat === null
+            ? "Output format unknown"
+            : formatAudioFormat(status.outputFormat)}
+          {" → "}
+          {status.deviceName ?? status.backend ?? "Output unknown"}
+          {status.deviceFormat === null
+            ? ""
+            : ` · device ${formatAudioFormat(status.deviceFormat)}`}
+        </div>
+      ) : null}
+
       <Row label="Buffer" hint={bufferHint(bufferFrames, latencyMs)}>
         <Segmented
           label="Buffer size"
@@ -292,14 +309,6 @@ function OutputSection(): JSX.Element {
           }))}
         />
       </Row>
-
-      <p className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-3.5 py-2.5 text-[11px] leading-relaxed text-white/35">
-        {bufferFrames <= 128
-          ? "The shortest response time, best for a computer with a stable audio connection. If you hear interruptions, choose a larger buffer."
-          : bufferFrames <= 512
-            ? "A balance between responsive controls and uninterrupted playback. This is the best choice for most systems."
-            : "The most resilient option for slow drives or network folders. Controls may take a moment longer to respond."}
-      </p>
     </Section>
   );
 }
@@ -1129,7 +1138,6 @@ function Toggle({
 
 function Section({
   title,
-  description,
   children,
 }: {
   title: string;
@@ -1139,8 +1147,7 @@ function Section({
   return (
     <section className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-5">
       <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-white">{title}</h2>
-      <p className="mt-1 mb-4 max-w-2xl text-[12px] leading-relaxed text-white/35">{description}</p>
-      <div className="space-y-3.5">{children}</div>
+      <div className="mt-4 space-y-3.5">{children}</div>
     </section>
   );
 }

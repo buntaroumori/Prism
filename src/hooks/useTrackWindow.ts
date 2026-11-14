@@ -100,16 +100,19 @@ export function useTrackWindow(
 
       void fetcher(queryRef.current, PAGE_SIZE, pageIndex * PAGE_SIZE)
         .then((page) => {
+          if (cacheRef.current !== target) return;
           target.pages.set(pageIndex, page.items);
           setTotals({ key: requestKey, value: page.total });
           evict(target, target.center);
           forceRender();
         })
         .catch((cause: unknown) => {
+          if (cacheRef.current !== target) return;
           setFailures({ key: requestKey, error: toUiError(cause) });
         })
         .finally(() => {
           target.inflight.delete(pageIndex);
+          if (cacheRef.current !== target) return;
           setBusy({ key: requestKey, value: target.inflight.size > 0 });
         });
     },

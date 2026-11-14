@@ -31,6 +31,7 @@ export function TrackTable({
   const [selected, setSelected] = useState<string | null>(null);
   const openAt = useContextMenuStore((state) => state.openAt);
   const openAlbum = useUiStore((state) => state.openAlbum);
+  const openArtist = useUiStore((state) => state.openArtist);
   const currentId = usePlaybackStore((state) => state.status?.track?.trackId ?? null);
   const playing = usePlaybackStore((state) => state.status?.state === "playing");
 
@@ -75,7 +76,7 @@ export function TrackTable({
               Disc {disc}
             </h2>
           ) : null}
-          <ol className="divide-y divide-white/[0.045]">
+          <ol className={playlistId === undefined ? "max-w-[920px]" : ""}>
             {rows.map(({ track, index }) => {
               const current = currentId === track.id;
               return (
@@ -107,37 +108,39 @@ export function TrackTable({
                     track.missing && "opacity-45",
                   )}
                 >
-                  <span className="grid h-7 w-7 shrink-0 place-items-center text-[11px] text-white/30">
-                    {current ? (
-                      <AudioLines
-                        className={cn("h-3.5 w-3.5 text-accent", playing && "animate-pulse")}
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      String(
-                        playlistId === undefined ? (track.trackNo ?? index + 1) : index + 1,
-                      ).padStart(2, "0")
-                    )}
-                  </span>
-
-                  {playlistId !== undefined ? <PlaylistTrackCover track={track} /> : null}
-
                   <button
                     type="button"
                     aria-label={`Play ${track.title}`}
                     title={`Play ${track.title}`}
                     onClick={(event) => {
                       event.stopPropagation();
-                      if (event.detail === 1) onPlay(index);
+                      onPlay(index);
                     }}
                     onDoubleClick={(event) => {
-                      // The first click starts playback; the second is consumed.
                       event.stopPropagation();
                     }}
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-white/25 transition-colors hover:bg-accent/10 hover:text-accent focus-visible:outline-2 focus-visible:outline-accent"
+                    className="relative grid h-7 w-7 shrink-0 place-items-center text-[11px] text-white/35 tabular-nums focus-visible:outline-2 focus-visible:outline-accent"
                   >
-                    <Play className="h-3.5 w-3.5 fill-current" aria-hidden="true" />
+                    {current ? (
+                      <AudioLines
+                        className={cn("h-3.5 w-3.5 text-accent", playing && "animate-pulse")}
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <>
+                        <span className="group-hover:hidden">
+                          {String(
+                            playlistId === undefined ? (track.trackNo ?? index + 1) : index + 1,
+                          ).padStart(2, "0")}
+                        </span>
+                        <Play
+                          className="hidden h-3.5 w-3.5 fill-current group-hover:block"
+                          aria-hidden="true"
+                        />
+                      </>
+                    )}
                   </button>
+                  {playlistId !== undefined ? <PlaylistTrackCover track={track} /> : null}
 
                   <div className="min-w-0 flex-1">
                     <p
@@ -148,11 +151,33 @@ export function TrackTable({
                     >
                       {track.title}
                     </p>
-                    {track.artist !== "" && track.artist !== track.albumArtist ? (
+                    {playlistId === undefined &&
+                    track.artist !== "" &&
+                    track.artist !== track.albumArtist ? (
                       <p className="truncate text-[11px] text-white/35">{track.artist}</p>
                     ) : null}
                   </div>
 
+                  {playlistId !== undefined ? (
+                    <div className="w-[clamp(90px,15vw,190px)] min-w-0 shrink-0 text-[11.5px] text-white/45">
+                      {track.artistId === null ? (
+                        <span className="block truncate">{track.artist || "Unknown artist"}</span>
+                      ) : (
+                        <button
+                          type="button"
+                          data-playlist-artist
+                          title={track.artist}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (track.artistId !== null) openArtist(track.artistId);
+                          }}
+                          className="block max-w-full truncate text-left hover:text-white/70 hover:underline"
+                        >
+                          {track.artist || "Unknown artist"}
+                        </button>
+                      )}
+                    </div>
+                  ) : null}
                   {playlistId !== undefined ? (
                     <div className="w-[clamp(120px,20vw,260px)] min-w-0 shrink-0 text-[11.5px] text-white/35">
                       {track.albumId === null ? (

@@ -39,7 +39,7 @@ export function Segmented<T extends string>({
       role="radiogroup"
       aria-label={label}
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border border-white/[0.08] bg-white/[0.04] p-1",
+        "inline-flex items-center gap-1 rounded-lg border border-white/[0.08] bg-white/[0.04] p-1",
         className,
       )}
     >
@@ -58,7 +58,7 @@ export function Segmented<T extends string>({
               }
             }}
             className={cn(
-              "relative h-7 rounded-full px-3 text-[11.5px] font-medium tracking-tight transition-colors duration-150",
+              "relative h-7 rounded-lg px-3 text-[11.5px] font-medium tracking-tight transition-colors duration-150",
               "focus-visible:ring-2 focus-visible:ring-accent/60 focus-visible:outline-none",
               selected ? "text-white" : "text-white/45 hover:text-white/75",
             )}
@@ -67,7 +67,7 @@ export function Segmented<T extends string>({
               <motion.span
                 layoutId={layoutId}
                 transition={{ type: "spring", stiffness: 520, damping: 38, mass: 0.6 }}
-                className="absolute inset-0 rounded-full bg-white/[0.12] ring-1 ring-white/[0.08] ring-inset"
+                className="absolute inset-0 rounded-lg bg-white/[0.12] ring-1 ring-white/[0.08] ring-inset"
               />
             ) : null}
             <span className="relative">{option.label}</span>

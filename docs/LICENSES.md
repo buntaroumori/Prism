@@ -11,7 +11,7 @@ licence has to coexist with. It is generated from `Cargo.lock` and `pnpm-lock.ya
 | Set | Packages | Enforced |
 | :-- | -------: | :------- |
 | Rust, linked into the binary | 647 | by this audit |
-| Rust, build-only | 39 | runs on the build machine, never linked |
+| Rust, build-only | 38 | runs on the build machine, never linked |
 | npm, bundled into the frontend | 20 | by this audit |
 
 Of the 667 shipped packages, **648** are permissive, **19** carry a notice obligation and **0** require a decision. No GPL, AGPL, SSPL or CDDL package appears anywhere in the graph.
@@ -765,11 +765,11 @@ instead of bundling private copies.
 Reachable only through `[build-dependencies]`: they execute on the build machine and are not
 linked into the artefact. Listed for completeness, not enforced.
 
-- **Apache-2.0** (8): annotate-snippets, autocfg, cargo_toml, cexpr, clang-sys, rustc-hash, tauri-build, tauri-plugin
-- **Apache-2.0 WITH LLVM-exception** (1): target-lexicon
-- **BSD-3-Clause** (2): bindgen, bindgen
+- **Apache-2.0** (6): autocfg, cargo_toml, cexpr, clang-sys, tauri-build, tauri-plugin
+- **Apache-2.0 WITH LLVM-exception** (2): target-lexicon, target-lexicon
+- **BSD-3-Clause** (1): bindgen
 - **ISC** (1): libloading
-- **MIT** (27): cc, cfg-expr, cfg_aliases, embed-resource, find-msvc-tools, itertools, itertools, jobserver, lazycell, phf_codegen, pkg-config, rustc_version, shlex, shlex, string_cache_codegen, system-deps, tauri-winres, toml, toml_datetime, unicode-width, vcpkg, version-compare, version_check, vswhom, vswhom-sys, winreg, yansi-term
+- **MIT** (28): annotate-snippets, anstyle, cc, cfg-expr, cfg-expr, cfg_aliases, embed-resource, find-msvc-tools, itertools, jobserver, phf_codegen, pkg-config, rustc_version, shlex, shlex, string_cache_codegen, system-deps, system-deps, tauri-winres, toml, toml_datetime, unicode-width, vcpkg, version-compare, version_check, vswhom, vswhom-sys, winreg
 
 ## Reproducing this document
 

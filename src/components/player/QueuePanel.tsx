@@ -1,5 +1,5 @@
 import { Reorder, useDragControls } from "framer-motion";
-import { ArrowLeft, GripVertical, ListMusic, Play } from "lucide-react";
+import { GripVertical, ListMusic, Play } from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -99,15 +99,6 @@ export function QueuePanel({ onClose }: QueuePanelProps): JSX.Element {
 
   return (
     <div data-queue-page className="mx-auto w-full max-w-[1280px] px-8 pt-6 pb-12">
-      <button
-        type="button"
-        onClick={onClose}
-        className="mb-5 flex items-center gap-1.5 text-[11.5px] text-white/40 transition-colors hover:text-white"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-        Back
-      </button>
-
       <header className="flex flex-wrap items-end justify-between gap-4 border-b border-white/[0.06] pb-5">
         <div>
           <h1 className="flex items-center gap-2.5 text-[26px] leading-none font-semibold tracking-[-0.03em] text-white">

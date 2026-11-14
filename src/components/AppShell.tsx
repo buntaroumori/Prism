@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { Info, TriangleAlert, X } from "lucide-react";
 
 import { AmbientBackground } from "@/components/AmbientBackground";
+import { warmArtistPortraits } from "@/lib/artistPortraits";
 import { ContextMenuHost } from "@/components/ContextMenuHost";
 import { LyricsSheet } from "@/components/player/LyricsSheet";
 import { PlayerBar } from "@/components/player/PlayerBar";
@@ -45,6 +46,11 @@ export function AppShell(): JSX.Element {
   // Measures its own frame pacing and, on a compositor that cannot keep up,
   // sheds the layers that need a real GPU. See `useFrameBudget`.
   useFrameBudget();
+  const artistCount = useLibraryStore((state) => state.stats?.artistCount ?? 0);
+  useEffect(() => {
+    if (artistCount === 0) return;
+    return warmArtistPortraits();
+  }, [artistCount]);
   const loadOverview = useLibraryStore((state) => state.loadOverview);
   const loadPlaylists = usePlaylistStore((state) => state.load);
   const applyStoredOutput = useOutputStore((state) => state.applyStored);
@@ -62,18 +68,23 @@ export function AppShell(): JSX.Element {
   useEffect(() => {
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = (): void => {
-      const resolved = theme === "system" ? (media.matches ? "dark" : "light") : theme;
+      const resolved =
+        theme === "system" ? (media.matches ? "dark" : "light") : theme === "oled" ? "dark" : theme;
       const root = document.documentElement;
       root.classList.toggle("light", resolved === "light");
       root.classList.toggle("dark", resolved === "dark");
+      root.classList.toggle("oled", theme === "oled");
       root.style.colorScheme = resolved;
       root.style.setProperty(
         "--prism-boot-background",
-        resolved === "light" ? "#f4f4f6" : "#08080a",
+        resolved === "light" ? "#f4f4f6" : theme === "oled" ? "#000000" : "#08080a",
       );
       document
         .querySelector('meta[name="theme-color"]')
-        ?.setAttribute("content", resolved === "light" ? "#f4f4f6" : "#08080a");
+        ?.setAttribute(
+          "content",
+          resolved === "light" ? "#f4f4f6" : theme === "oled" ? "#000000" : "#08080a",
+        );
       document
         .querySelector('meta[name="color-scheme"]')
         ?.setAttribute("content", resolved === "light" ? "light" : "dark");
@@ -137,6 +148,11 @@ export function AppShell(): JSX.Element {
     let restored = false;
     const restore = (): void => {
       if (restored) return;
+      const expected = `${route}:${params.albumId ?? ""}:${params.artistId ?? ""}:${params.collection ?? ""}:${params.genre ?? ""}:${params.playlistId ?? ""}`;
+      const active = Array.from(scroller.querySelectorAll<HTMLElement>("[data-page-key]")).find(
+        (page) => page.dataset["pageKey"] === expected && page.getClientRects().length > 0,
+      );
+      if (active === undefined) return;
       const top = Math.max(0, scrollRestore.top);
       const hasRoom = scroller.scrollHeight - scroller.clientHeight >= top - 1;
       if (!hasRoom) return;
@@ -153,7 +169,12 @@ export function AppShell(): JSX.Element {
     };
 
     const observer = new MutationObserver(restore);
-    observer.observe(scroller, { childList: true, subtree: true });
+    observer.observe(scroller, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["style"],
+    });
     restore();
     const frame = window.requestAnimationFrame(restore);
     window.addEventListener("resize", restore);
@@ -163,7 +184,7 @@ export function AppShell(): JSX.Element {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("resize", restore);
     };
-  }, [scrollRestore]);
+  }, [scrollRestore, route, params]);
 
   const tokens = paletteTokens(palette, {
     accentSource,
@@ -173,6 +194,7 @@ export function AppShell(): JSX.Element {
     corners,
     density,
     light: resolvedTheme === "light",
+    oled: theme === "oled",
   });
 
   return (
@@ -188,7 +210,7 @@ export function AppShell(): JSX.Element {
     >
       <AmbientBackground
         palette={palette}
-        intensity={intensity}
+        intensity={theme === "oled" ? "off" : intensity}
         colourBleed={tintStrength / 100}
         reduced={resolvedEffects === "reduced"}
       />
@@ -303,9 +325,7 @@ export function AppShell(): JSX.Element {
           </AnimatePresence>
         </div>
 
-        <div className={route === "now-playing" ? "hidden" : "contents"}>
-          <PlayerBar />
-        </div>
+        <PlayerBar />
       </div>
 
       <ContextMenuHost />
@@ -333,35 +353,46 @@ function PageTransition({
   const key = `${route}:${params.albumId ?? ""}:${params.artistId ?? ""}:${params.collection ?? ""}:${params.genre ?? ""}:${params.playlistId ?? ""}`;
 
   return (
-    <AnimatePresence mode="wait" initial={false}>
-      <motion.div
-        key={key}
-        initial={reduce === true || restoring ? false : { opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        exit={{ opacity: 0, y: 0, transition: { duration: 0 } }}
-        transition={{ duration: restoring ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
-        className={route === "now-playing" ? "min-h-0 w-full flex-1" : "min-h-full w-full"}
+    <>
+      <div
+        data-page-key="library:::::"
+        style={{ display: route === "library" ? undefined : "none" }}
+        className="min-h-full w-full"
       >
-        {route === "home" ? <HomeView /> : null}
-        {route === "library" ? <LibraryView /> : null}
-        {route === "collection" ? (
-          <LibraryView collection={params.collection} genre={params.genre} />
+        <LibraryView />
+      </div>
+      <AnimatePresence mode="wait" initial={false}>
+        {route !== "library" ? (
+          <motion.div
+            key={key}
+            data-page-key={key}
+            initial={reduce === true || restoring ? false : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 0, transition: { duration: 0 } }}
+            transition={{ duration: restoring ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+            className={route === "now-playing" ? "min-h-0 w-full flex-1" : "min-h-full w-full"}
+          >
+            {route === "home" ? <HomeView /> : null}
+            {route === "collection" ? (
+              <LibraryView collection={params.collection} genre={params.genre} />
+            ) : null}
+            {route === "playlists" ? <PlaylistsView /> : null}
+            {route === "playlist" && params.playlistId !== null ? (
+              <PlaylistView playlistId={params.playlistId} />
+            ) : null}
+            {route === "album" && params.albumId !== null ? (
+              <AlbumView albumId={params.albumId} />
+            ) : null}
+            {route === "artist" && params.artistId !== null ? (
+              <ArtistView artistId={params.artistId} />
+            ) : null}
+            {route === "now-playing" ? <NowPlayingView /> : null}
+            {route === "queue" ? <QueueView /> : null}
+            {route === "settings" ? <SettingsView /> : null}
+          </motion.div>
         ) : null}
-        {route === "playlists" ? <PlaylistsView /> : null}
-        {route === "playlist" && params.playlistId !== null ? (
-          <PlaylistView playlistId={params.playlistId} />
-        ) : null}
-        {route === "album" && params.albumId !== null ? (
-          <AlbumView albumId={params.albumId} />
-        ) : null}
-        {route === "artist" && params.artistId !== null ? (
-          <ArtistView artistId={params.artistId} />
-        ) : null}
-        {route === "now-playing" ? <NowPlayingView /> : null}
-        {route === "queue" ? <QueueView /> : null}
-        {route === "settings" ? <SettingsView /> : null}
-      </motion.div>
-    </AnimatePresence>
+      </AnimatePresence>
+    </>
   );
 }
 
@@ -383,6 +414,7 @@ function paletteTokens(
     corners: "sharp" | "soft" | "round";
     density: "comfortable" | "compact";
     light: boolean;
+    oled: boolean;
   },
 ): CSSProperties {
   const tokens: Record<string, string> = {
@@ -409,9 +441,13 @@ function paletteTokens(
     return tokens;
   }
 
-  const neutralSurface = appearance.light ? "#ffffff" : "#12131c";
-  const neutralBackground = appearance.light ? "#f4f4f6" : "#08080a";
-  const strength = appearance.light ? appearance.tintStrength * 0.22 : appearance.tintStrength;
+  const neutralSurface = appearance.light ? "#ffffff" : appearance.oled ? "#000000" : "#12131c";
+  const neutralBackground = appearance.light ? "#f4f4f6" : appearance.oled ? "#000000" : "#08080a";
+  const strength = appearance.oled
+    ? 0
+    : appearance.light
+      ? appearance.tintStrength * 0.22
+      : appearance.tintStrength;
   const surfaceColour = appearance.light ? palette.highlight : palette.surface;
   const backgroundColour = appearance.light ? palette.accent : palette.background;
 

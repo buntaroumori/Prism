@@ -2,7 +2,6 @@ import { AudioWaveform } from "lucide-react";
 import type { JSX } from "react";
 
 import { ArtworkModule } from "@/components/nowplaying/ArtworkModule";
-import { NowPlayingControls } from "@/components/nowplaying/NowPlayingControls";
 import { NowPlayingDeck } from "@/components/nowplaying/NowPlayingDeck";
 import { QualityBadge } from "@/components/player/QualityBadge";
 import { EMPTY_STATUS, usePlaybackStore } from "@/stores/playbackStore";
@@ -59,7 +58,7 @@ export function NowPlayingView(): JSX.Element {
   return (
     <div
       data-now-playing
-      className="mx-auto grid h-full min-h-0 w-full max-w-[1500px] grid-cols-2 grid-rows-[auto_minmax(0,1fr)_auto] gap-x-8 overflow-hidden px-8 py-6"
+      className="mx-auto grid h-full min-h-0 w-full max-w-[1500px] grid-cols-2 grid-rows-[auto_minmax(0,1fr)] gap-x-8 overflow-hidden px-8 py-6"
     >
       <header className="col-start-1 row-start-1 min-w-0 pb-4">
         <div className="flex h-6 items-center gap-2">
@@ -159,9 +158,7 @@ export function NowPlayingView(): JSX.Element {
         />
       </div>
 
-      <NowPlayingControls className="col-start-1 row-start-3 mt-4" />
-
-      <div data-now-playing-secondary className="col-start-2 row-start-2 row-end-4 h-full min-h-0">
+      <div data-now-playing-secondary className="col-start-2 row-start-2 row-end-3 h-full min-h-0">
         <NowPlayingDeck status={status} trackId={trackId} />
       </div>
     </div>

@@ -47,13 +47,8 @@ export function ArtworkModule({ trackId, album, artist, title }: ArtworkModulePr
   return (
     <div
       data-now-playing-artwork
-      className="relative mx-auto aspect-square h-full max-h-full w-auto max-w-full self-center"
+      className="relative mx-auto aspect-square h-full max-h-[440px] w-auto max-w-full self-center"
     >
-      <div
-        aria-hidden="true"
-        className="absolute inset-6 rounded-full opacity-50 blur-[90px]"
-        style={{ background: "var(--prism-accent)" }}
-      />
       <AnimatePresence mode="popLayout" initial={false}>
         <motion.div
           key={asset?.key ?? "no-cover"}
@@ -66,8 +61,8 @@ export function ArtworkModule({ trackId, album, artist, title }: ArtworkModulePr
           <CoverArt
             path={asset?.localPath ?? null}
             alt={album.length > 0 ? album : title}
-            className="h-full w-full rounded-[26px] shadow-[0_50px_120px_-60px_rgb(0_0_0/0.95)]"
-            rounded="rounded-[26px]"
+            className="h-full w-full rounded-lg shadow-[0_16px_36px_-20px_rgb(0_0_0/0.8)]"
+            rounded="rounded-lg"
             fallbackClassName="h-16 w-16"
           />
         </motion.div>

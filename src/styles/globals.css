@@ -38,6 +38,18 @@
     --prism-reduced-surface: 10 10 12;
   }
 
+  :root.oled {
+    --prism-surface: #000000;
+    --prism-background: #000000;
+    --prism-surface-950: 0 0 0;
+    --prism-surface-900: 0 0 0;
+    --prism-surface-850: 0 0 0;
+    --prism-surface-800: 0 0 0;
+    --prism-surface-750: 0 0 0;
+    --prism-surface-700: 0 0 0;
+    --prism-reduced-surface: 0 0 0;
+  }
+
   :root.light {
     color-scheme: light;
     --prism-surface: #ffffff;
@@ -108,7 +120,7 @@
   }
 
   :focus-visible {
-    outline: 2px solid rgb(var(--prism-accent) / 0.8);
+    outline: 2px solid var(--prism-accent);
     outline-offset: 2px;
   }
 

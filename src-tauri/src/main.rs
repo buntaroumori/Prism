@@ -17,5 +17,14 @@ fn main() {
         // threads or initializes GTK/WebKit.
         unsafe { std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1") };
     }
+    // The AppImage bundles WebKitGTK and can encounter incompatible DMA-BUF
+    // drivers. Keep native packages unchanged and respect a user override.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("APPIMAGE").is_some()
+        && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+    {
+        // SAFETY: GTK/WebKit and application threads have not started yet.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    }
     prism_lib::run();
 }

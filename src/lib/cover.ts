@@ -16,6 +16,9 @@ export function coverSrc(localPath: string | null): string | null {
     return null;
   }
   try {
+    if (import.meta.env.DEV && hasBackend() && localPath.startsWith("/")) {
+      return `/__prism_artwork?path=${encodeURIComponent(localPath)}`;
+    }
     return convertFileSrc(localPath);
   } catch {
     return null;

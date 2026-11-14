@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use tauri::{Emitter, State};
 
-use crate::artwork::{CoverAsset, CoverHint};
+use crate::artwork::{ArtistPortrait, CoverAsset, CoverHint};
 use crate::db::catalog::CatalogWriter;
 use crate::db::catalog::{path_key, stable_id};
 use crate::db::search::{
@@ -640,6 +640,21 @@ pub async fn library_artists(
         offset.unwrap_or(0),
     )
     .await
+}
+
+/// Resolve an artist portrait, falling back to the album cover in the UI.
+#[tauri::command]
+pub async fn library_artist_portrait(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Option<ArtistPortrait>, PrismError> {
+    let row = sqlx::query("SELECT name FROM artists WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(state.pool())
+        .await?
+        .ok_or_else(|| PrismError::invalid("unknown artist"))?;
+    let name: String = row.try_get("name")?;
+    Ok(state.artwork().artist_portrait(&name).await)
 }
 
 /// Genres, formats and decades present in the library.

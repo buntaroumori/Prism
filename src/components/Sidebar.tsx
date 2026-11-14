@@ -5,6 +5,8 @@ import { Compass, Disc3, LibraryBig, ListMusic, PanelLeftClose, PanelLeftOpen } 
 import { AppLogo } from "@/components/AppLogo";
 import { CoverArt } from "@/components/ui/CoverArt";
 import { cn } from "@/lib/utils";
+import { useBrowseStore } from "@/stores/browseStore";
+import { useLibraryStore } from "@/stores/libraryStore";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
 import { useDockStore, type DockItem } from "@/stores/dockStore";
 import { useUiStore, type ShellRoute } from "@/stores/uiStore";
@@ -41,7 +43,12 @@ export function Sidebar(): JSX.Element {
         key={item.id}
         type="button"
         onClick={() => {
+          useBrowseStore.getState().clearFilters();
+          useLibraryStore.getState().setQuery("");
+          window.dispatchEvent(new Event("prism:navigation-reset"));
           setRoute(item.id);
+          const scroller = document.querySelector<HTMLElement>("[data-prism-scroll]");
+          if (scroller !== null) scroller.scrollTop = 0;
         }}
         aria-current={isActive ? "page" : undefined}
         aria-label={item.label}
@@ -64,7 +71,7 @@ export function Sidebar(): JSX.Element {
         />
         {!collapsed ? <span className="truncate">{item.label}</span> : null}
         {isActive && collapsed ? (
-          <span aria-hidden="true" className="accent-bg absolute left-0 h-5 w-[2px] rounded-full" />
+          <span aria-hidden="true" className="accent-bg absolute left-0 h-5 w-[2px] rounded-lg" />
         ) : null}
       </button>
     );
@@ -86,9 +93,6 @@ export function Sidebar(): JSX.Element {
           <div className="min-w-0">
             <p className="truncate text-[13px] leading-4 font-semibold tracking-tight text-white">
               Prism
-            </p>
-            <p className="truncate text-[9px] leading-3 font-medium tracking-[0.22em] text-white/30 uppercase">
-              Your music
             </p>
           </div>
         ) : null}

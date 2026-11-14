@@ -2,8 +2,7 @@ import type { JSX } from "react";
 import { Play } from "lucide-react";
 
 import { CoverArt } from "@/components/ui/CoverArt";
-import { formatCount } from "@/lib/format";
-import { sourceLabel } from "@/lib/sourceLabel";
+import { formatSampleRate } from "@/lib/sourceLabel";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/uiStore";
 import { useContextMenuStore } from "@/stores/contextMenuStore";
@@ -39,11 +38,6 @@ export function AlbumCard({
   const openAlbum = useUiStore((state) => state.openAlbum);
   const openArtist = useUiStore((state) => state.openArtist);
   const openAt = useContextMenuStore((state) => state.openAt);
-  const source = sourceLabel({
-    format: album.format,
-    sampleRate: album.maxSampleRate,
-    bitDepth: album.maxBitDepth,
-  });
 
   return (
     <div
@@ -58,7 +52,7 @@ export function AlbumCard({
             : { continuation: { currentAlbumId: album.id, ...continuation } }),
         });
       }}
-      className={cn("group relative shrink-0", size === undefined && "w-[172px]")}
+      className={cn("group/album relative shrink-0", size === undefined && "w-[172px]")}
       style={size === undefined ? undefined : { width: `${String(size)}px` }}
     >
       <div className="relative">
@@ -75,8 +69,12 @@ export function AlbumCard({
             thumbnailPath={album.coverThumbnailPath}
             url={album.coverUrl}
             alt={album.title}
-            className="aspect-square w-full shadow-[0_18px_40px_-24px_rgb(0_0_0/0.9)] transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:-translate-y-0.5 group-hover:scale-[1.015]"
-            rounded="rounded-[18px]"
+            className="aspect-square w-full shadow-[0_18px_40px_-24px_rgb(0_0_0/0.9)]"
+            rounded="rounded-lg"
+          />
+          <span
+            aria-hidden="true"
+            className="pointer-events-none invisible absolute inset-0 rounded-lg ring-2 ring-white/70 ring-inset group-focus-within/album:visible group-hover/album:visible"
           />
         </button>
 
@@ -89,11 +87,11 @@ export function AlbumCard({
           disabled={busy || album.availableTracks === 0}
           className={cn(
             "absolute right-2.5 bottom-2.5 grid h-10 w-10 place-items-center rounded-full bg-white text-oled-950",
-            "shadow-[0_10px_30px_-10px_rgb(0_0_0/0.8)] transition-all duration-200",
-            "translate-y-1 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 focus-visible:translate-y-0 focus-visible:opacity-100",
-            "hover:scale-[1.05] active:scale-[0.96] disabled:pointer-events-none disabled:opacity-40",
+            "shadow-[0_10px_30px_-10px_rgb(0_0_0/0.8)]",
+            "invisible group-focus-within/album:visible group-hover/album:visible focus-visible:visible",
+            "disabled:pointer-events-none disabled:opacity-40",
             "focus-visible:ring-2 focus-visible:ring-white focus-visible:outline-none",
-            busy && "translate-y-0 opacity-100",
+            busy && "visible",
           )}
         >
           <Play className="ml-0.5 h-4 w-4" aria-hidden="true" fill="currentColor" strokeWidth={1} />
@@ -126,20 +124,13 @@ export function AlbumCard({
         >
           {album.albumArtist.length > 0 ? album.albumArtist : "Unknown artist"}
         </button>
-        <p
-          className="truncate text-[10px] text-white/25"
-          title={`${String(album.trackCount)} tracks`}
-        >
-          {album.year !== null ? `${String(album.year)} · ` : ""}
-          <span
-            className={cn(
-              source.tone === "hi-res" && "text-spectrum-violet/75",
-              source.tone === "cd" && "text-positive/75",
-            )}
-          >
-            {source.label}
-          </span>
-          {album.trackCount > 0 ? ` · ${formatCount(album.trackCount)} tracks` : ""}
+        <p className="truncate font-mono text-[10px] text-white/30 tabular-nums">
+          {album.releaseDate?.match(/^\d{4}/)?.[0] ?? album.year ?? ""}
+          {album.releaseDate !== null || album.year !== null ? " · " : ""}
+          {album.maxBitDepth !== null ? `${String(album.maxBitDepth)}/` : ""}
+          {album.maxSampleRate !== null
+            ? `${formatSampleRate(album.maxSampleRate).toLowerCase()}Hz`
+            : (album.format ?? "Audio").toUpperCase()}
         </p>
       </div>
     </div>

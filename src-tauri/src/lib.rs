@@ -369,6 +369,7 @@ fn run_application() -> Result<(), Box<dyn std::error::Error>> {
             commands::library::library_search,
             commands::library::library_albums,
             commands::library::library_artists,
+            commands::library::library_artist_portrait,
             commands::library::library_facets,
             commands::library::library_global_search,
             commands::library::library_home,

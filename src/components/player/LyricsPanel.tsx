@@ -31,6 +31,7 @@ export function LyricsPanel({
 }): JSX.Element {
   const status = usePlaybackStore((state) => state.status);
   const tick = usePlaybackStore((state) => state.tick);
+  const seekMs = usePlaybackStore((state) => state.seekMs);
   const track = status?.track ?? null;
   const trackId = track?.trackId ?? null;
   const internalLyrics = useLyrics(lyrics === undefined ? trackId : null);
@@ -42,7 +43,7 @@ export function LyricsPanel({
   const index = useMemo(() => activeLineIndex(lines, position), [lines, position]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const lineRefs = useRef(new Map<number, HTMLParagraphElement>());
+  const lineRefs = useRef(new Map<number, HTMLButtonElement>());
   const lastScrolled = useRef(-1);
   const resumeTimer = useRef<number | null>(null);
 
@@ -155,26 +156,15 @@ export function LyricsPanel({
 
   return (
     <Frame className={className}>
-      <div className="flex shrink-0 items-center justify-between px-1 pb-2">
-        <p className="text-[10px] font-medium tracking-[0.16em] text-white/25 uppercase">
-          {document.synced ? "Synced" : "Plain"} · {document.provider}
-          {document.language !== null ? ` · ${document.language}` : ""}
-        </p>
-        <button
-          type="button"
-          onClick={refresh}
-          aria-label="Refresh lyrics"
-          className="grid h-6 w-6 place-items-center rounded-full text-white/25 transition-colors hover:bg-white/[0.06] hover:text-white/70"
-        >
-          <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
-        </button>
-      </div>
-
       <div
         ref={containerRef}
         onWheel={suspendFollow}
         onTouchMove={suspendFollow}
-        className="relative min-h-0 flex-1 scrollbar-thin overflow-y-auto pr-2 pb-16"
+        className="relative min-h-0 flex-1 scrollbar-thin overflow-y-auto px-2 pt-12 pb-24"
+        style={{
+          maskImage:
+            "linear-gradient(to bottom, transparent, black 28px, black calc(100% - 40px), transparent)",
+        }}
       >
         {document.offsetMs !== 0 ? (
           <p className="mb-2 text-[10px] text-white/20">
@@ -186,7 +176,11 @@ export function LyricsPanel({
           const isActive = lineIndex === index;
           const isPast = lineIndex < index;
           return (
-            <p
+            <button
+              type="button"
+              onClick={() => {
+                void seekMs(line.timeMs);
+              }}
               key={`${String(line.timeMs)}-${String(lineIndex)}`}
               aria-current={isActive ? "true" : undefined}
               ref={(element) => {
@@ -197,7 +191,7 @@ export function LyricsPanel({
                 }
               }}
               className={cn(
-                "py-1.5 text-[19px] leading-snug font-medium tracking-[-0.01em] transition-[color,opacity,transform] duration-200 ease-out",
+                "block w-full py-1.5 text-left text-[19px] leading-snug font-medium tracking-[-0.01em] transition-colors duration-200 ease-out",
                 isActive
                   ? "text-white"
                   : isPast
@@ -214,7 +208,7 @@ export function LyricsPanel({
               }
             >
               {line.text.length > 0 ? line.text : "\u00a0"}
-            </p>
+            </button>
           );
         })}
       </div>
@@ -233,10 +227,7 @@ function Frame({
     <div
       role="region"
       aria-label="Lyrics"
-      className={cn(
-        "relative flex h-full flex-col overflow-hidden rounded-3xl border border-white/[0.06] bg-white/[0.02] backdrop-blur-xl",
-        className,
-      )}
+      className={cn("relative flex h-full flex-col overflow-hidden", className)}
     >
       {children}
     </div>
